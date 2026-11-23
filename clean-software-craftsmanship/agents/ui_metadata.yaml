@@ -1,0 +1,3 @@
+interface:
+  display_name: "Clean Software Craftsmanship"
+  short_description: "Review, refactor, test, and architect maintainable software"

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bharatquant"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "argon2-cffi>=25.1,<26",
+    "fastapi>=0.115,<1",
+    "jsonschema>=4.26,<5",
+    "referencing>=0.37,<1",
+    "tzdata",
+    "uvicorn>=0.34,<1",
+]
+
+[project.scripts]
+bq = "bq.cli:main"
+
+[dependency-groups]
+dev = [
+    "hatchling==1.33.0",
+    "httpx",
+    "mypy",
+    "pytest",
+    "ruff",
+    "types-jsonschema>=4.26,<5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/src/bq"]
+artifacts = ["backend/src/bq/static/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["bq"]
+
+[tool.mypy]
+strict = true
+files = ["backend/src", "tests"]
