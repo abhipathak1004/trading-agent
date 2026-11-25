@@ -80,7 +80,7 @@ export default function ResearchPanel({ csrfToken }: { csrfToken: string }) {
   return (
     <section className="data-panel research-panel" aria-labelledby="research-title">
       <header className="panel-header">
-        <h2 id="research-title">Research agent · News</h2>
+        <h2 id="research-title">News feed</h2>
         <button
           type="button"
           className="auth-button auth-button--compact"
@@ -93,7 +93,7 @@ export default function ResearchPanel({ csrfToken }: { csrfToken: string }) {
 
       <p className="panel-note">
         Deterministic ingest from the configured feed. No model calls; full
-        articles are never fetched. Long-term memories only.
+        articles are never fetched. These are the stories the agent can search.
       </p>
 
       {run.state === "done" && (

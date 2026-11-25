@@ -12,6 +12,21 @@ BharatQuant has no declared redistribution license. Before distributing an
 application bundle, include the full license texts and copyright notices
 required by each dependency and review the complete transitive dependency set.
 
+## Vendored source (non-package)
+
+The following is source code copied into this repository rather than pulled
+in as a dependency. It is retained under its original license with
+attribution in the file header.
+
+| Component | Source | License | Location |
+| --- | --- | --- | --- |
+| dirty-JSON parser | [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) `helpers/dirty_json.py` | MIT (Copyright (c) 2025 Agent Zero, s.r.o) | `backend/src/bq/dirty_json.py` |
+
+Other Agent Zero LLM helpers were **adapted, not copied**: their structure
+informed `bq/llm_result.py`, `bq/llm_extract.py`, `bq/llm_retry.py` and
+`bq/llm_tokens.py`, which are original implementations written to this
+project's conventions (see ADR-012).
+
 ## Python packages
 
 All packages below were resolved from `https://pypi.org/simple`. Transitive
@@ -26,42 +41,63 @@ dependencies are included because they are part of the lock.
 | Transitive | [argon2-cffi-bindings](https://pypi.org/project/argon2-cffi-bindings/26.2.0/) | 26.2.0 | MIT |
 | Transitive | [ast-serialize](https://pypi.org/project/ast-serialize/0.13.1/) | 0.13.1 | MIT |
 | Transitive | [attrs](https://pypi.org/project/attrs/26.1.0/) | 26.1.0 | MIT |
+| Transitive | [autobahn](https://pypi.org/project/autobahn/19.11.2/) | 19.11.2 | MIT |
+| Transitive | [Automat](https://pypi.org/project/automat/25.4.16/) | 25.4.16 | MIT |
 | Transitive | [certifi](https://pypi.org/project/certifi/2026.11.20/) | 2026.11.20 | MPL-2.0 |
 | Transitive | [cffi](https://pypi.org/project/cffi/2.1.1/) | 2.1.1 | MIT-0 |
+| Transitive | [charset-normalizer](https://pypi.org/project/charset-normalizer/3.5.3/) | 3.5.3 | MIT |
 | Transitive | [click](https://pypi.org/project/click/8.5.1/) | 8.5.1 | BSD-3-Clause |
 | Transitive | [colorama](https://pypi.org/project/colorama/0.4.6/) | 0.4.6 | BSD-3-Clause (bundled license) |
+| Transitive | [constantly](https://pypi.org/project/constantly/23.10.4/) | 23.10.4 | MIT |
+| Transitive | [cryptography](https://pypi.org/project/cryptography/50.0.2/) | 50.0.2 | Apache-2.0 OR BSD-3-Clause |
 | Runtime | [fastapi](https://pypi.org/project/fastapi/0.165.0/) | 0.165.0 | MIT |
 | Transitive | [h11](https://pypi.org/project/h11/0.16.0/) | 0.16.0 | MIT |
 | Build and development | [hatchling](https://pypi.org/project/hatchling/1.33.0/) | 1.33.0 | MIT |
 | Transitive | [httpcore](https://pypi.org/project/httpcore/1.0.9/) | 1.0.9 | BSD-3-Clause |
 | Runtime | [httpx](https://pypi.org/project/httpx/0.28.1/) | 0.28.1 | BSD-3-Clause |
+| Transitive | [hyperlink](https://pypi.org/project/hyperlink/21.0.0/) | 21.0.0 | MIT |
 | Transitive | [idna](https://pypi.org/project/idna/3.20/) | 3.20 | BSD-3-Clause |
+| Transitive | [incremental](https://pypi.org/project/incremental/24.11.0/) | 24.11.0 | MIT |
 | Transitive | [iniconfig](https://pypi.org/project/iniconfig/2.3.1/) | 2.3.1 | MIT |
 | Runtime | [jsonschema](https://pypi.org/project/jsonschema/4.26.0/) | 4.26.0 | MIT |
 | Transitive | [jsonschema-specifications](https://pypi.org/project/jsonschema-specifications/2025.9.1/) | 2025.9.1 | MIT |
+| Runtime | [kiteconnect](https://pypi.org/project/kiteconnect/5.2.2/) | 5.2.2 | MIT |
 | Transitive | [librt](https://pypi.org/project/librt/0.17.0/) | 0.17.0 | MIT |
 | Development | [mypy](https://pypi.org/project/mypy/2.4.1/) | 2.4.1 | MIT |
 | Transitive | [mypy-extensions](https://pypi.org/project/mypy-extensions/1.2.0/) | 1.2.0 | MIT |
+| Runtime | [numpy](https://pypi.org/project/numpy/2.5.5/) | 2.5.5 | BSD-3-Clause |
 | Transitive | [opentelemetry-api](https://pypi.org/project/opentelemetry-api/1.45.2/) | 1.45.2 | Apache-2.0 |
 | Transitive | [packaging](https://pypi.org/project/packaging/26.3/) | 26.3 | Apache-2.0 OR BSD-2-Clause |
+| Runtime | [pandas](https://pypi.org/project/pandas/3.1.1/) | 3.1.1 | BSD-3-Clause |
+| Development | [pandas-stubs](https://pypi.org/project/pandas-stubs/3.1.0.261029/) | 3.1.0.261029 | BSD-3-Clause |
 | Transitive | [pathspec](https://pypi.org/project/pathspec/1.1.1/) | 1.1.1 | MPL-2.0 (bundled license) |
 | Transitive | [pluggy](https://pypi.org/project/pluggy/1.7.0/) | 1.7.0 | MIT |
 | Runtime | [pydantic](https://pypi.org/project/pydantic/2.14.4/) | 2.14.4 | MIT |
 | Transitive | [pydantic-core](https://pypi.org/project/pydantic-core/2.50.5/) | 2.50.5 | MIT |
 | Transitive | [pycparser](https://pypi.org/project/pycparser/3.12/) | 3.12 | BSD-3-Clause |
 | Transitive | [Pygments](https://pypi.org/project/pygments/2.21.0/) | 2.21.0 | BSD-2-Clause |
+| Transitive | [pyOpenSSL](https://pypi.org/project/pyopenssl/26.4.0/) | 26.4.0 | Apache-2.0 |
+| Transitive | [pywin32](https://pypi.org/project/pywin32/312/) | 312 | PSF-2.0 (Windows only) |
 | Development | [pytest](https://pypi.org/project/pytest/9.2.0/) | 9.2.0 | MIT |
+| Transitive | [python-dateutil](https://pypi.org/project/python-dateutil/4.0.0/) | 4.0.0 | Apache-2.0 OR BSD-3-Clause |
 | Runtime | [referencing](https://pypi.org/project/referencing/0.37.0/) | 0.37.0 | MIT |
+| Transitive | [requests](https://pypi.org/project/requests/2.34.2/) | 2.34.2 | Apache-2.0 |
 | Transitive | [rpds-py](https://pypi.org/project/rpds-py/2026.9.1/) | 2026.9.1 | MIT |
 | Development | [ruff](https://pypi.org/project/ruff/0.17.6/) | 0.17.6 | MIT |
+| Transitive | [service-identity](https://pypi.org/project/service-identity/26.1.0/) | 26.1.0 | MIT |
+| Transitive | [six](https://pypi.org/project/six/1.17.0/) | 1.17.0 | MIT |
 | Runtime | [starlette](https://pypi.org/project/starlette/1.10.0/) | 1.10.0 | BSD-3-Clause |
 | Transitive | [tomlkit](https://pypi.org/project/tomlkit/0.15.2/) | 0.15.2 | MIT |
 | Transitive | [trove-classifiers](https://pypi.org/project/trove-classifiers/2026.9.21.13/) | 2026.9.21.13 | Apache-2.0 (bundled license) |
+| Transitive | [Twisted](https://pypi.org/project/twisted/26.10.0/) | 26.10.0 | MIT |
+| Transitive | [txaio](https://pypi.org/project/txaio/26.6.1/) | 26.6.1 | MIT |
 | Development | [types-jsonschema](https://pypi.org/project/types-jsonschema/4.26.0.20261006/) | 4.26.0.20261006 | Apache-2.0 |
 | Transitive | [typing-extensions](https://pypi.org/project/typing-extensions/4.16.0/) | 4.16.0 | PSF-2.0 |
 | Transitive | [typing-inspection](https://pypi.org/project/typing-inspection/0.4.5/) | 0.4.5 | MIT |
 | Runtime | [tzdata](https://pypi.org/project/tzdata/2026.6/) | 2026.6 | Apache-2.0 |
+| Transitive | [urllib3](https://pypi.org/project/urllib3/2.8.0/) | 2.8.0 | MIT |
 | Runtime | [uvicorn](https://pypi.org/project/uvicorn/0.54.0/) | 0.54.0 | BSD-3-Clause |
+| Transitive | [zope-interface](https://pypi.org/project/zope-interface/8.7/) | 8.7 | ZPL-2.1 |
 
 ## Node packages
 
@@ -184,3 +220,22 @@ These are build-time workflow dependencies, pinned to release commits:
 - [MIT-0](https://spdx.org/licenses/MIT-0.html)
 - [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html)
 - [PSF-2.0](https://spdx.org/licenses/PSF-2.0.html)
+- [ZPL-2.1](https://spdx.org/licenses/ZPL-2.1.html)
+
+## Notes on the Kite Connect dependency tree
+
+`kiteconnect` is used **read-only** for quotes and candles (ADR-013). Its
+declared dependencies pull in a WebSocket ticker stack — `twisted`, `autobahn`,
+`automat`, `constantly`, `hyperlink`, `incremental`, `txaio`,
+`zope.interface` — plus `cryptography`, `pyOpenSSL` and `service-identity` for
+TLS. BharatQuant does not use `KiteTicker`; these packages arrive only because
+the vendor client requires them unconditionally.
+
+Two points a distributor must not overlook, because neither is a permissive
+license:
+
+- **`zope.interface` is ZPL-2.1**, not MIT. Plan §4.1's PERSONAL licence mode
+  permits it. Under `DISTRIBUTE` mode the licence report must flag it.
+- **`certifi` remains MPL-2.0** (already present transitively).
+
+This is an inventory, not legal advice; see the header note above.

@@ -7,6 +7,149 @@ Start here when resuming work. This file lives in the workspace and does not dep
 Updated 25 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
 
+**Latest slice — the research agent is live and playable in the UI.**
+A real LLM drives a bounded tool loop end to end; the Research tab is now an
+interactive console that shows every tool call.
+
+- `bq/research_agent.py` — `ResearchAgent` wires `bq.tools` +
+  `bq.agent_runtime` + `bq.llm_service`. It renders the running conversation
+  into one prompt with a strict JSON tool-call contract, calls the configured
+  provider, and runs until `response` or the turn limit. Returns a step trace
+  and real token totals across all calls.
+- `bq/tools/market.py` — `stock_quote` (latest close/change from Yahoo),
+  `stock_download` (persist PIT bars), and `web_fetch` (HTTPS page to bounded,
+  script/style-stripped text). All bounded and transport-injectable.
+- `bq/agent_runtime.py` — the loop now records `AgentStep`s (turn, tool, args,
+  previewed output) so the UI can show the trace; tool-call parsing uses the
+  vendored dirty-JSON recovery.
+- API: `GET /api/v1/agent/status`, `POST /api/v1/agent/run` (agent run with
+  step trace), and `/api/v1/tools/research` now reflects the full research
+  toolset. All owner-only, `no-store`, CSRF + origin checked.
+- UI: new `AgentConsole.tsx` on the Research tab — chat thread, suggestions,
+  tool list, per-answer step trace, token/meta line, and a clear "configure a
+  model" state when no key is set. `newsContract`/`agentContract` parse and
+  bound every response.
+
+Live verification on this Mac with the owner's Gemini key
+(`gemini-3.5-flash-lite`): "Quote RELIANCE.NS" → the model called
+`stock_quote`, read real Yahoo data, and answered "close INR 1351.00, down
+-1.92%"; "summarise long-term news" → called `news_memory` and produced a
+grounded 2-bullet summary. A transient Gemini 503 was surfaced as a clean
+typed error and a retry succeeded — retry logic behaved correctly.
+
+Verification: **402 backend tests** pass (12 new: research-agent loop with a
+fake model, market/web tools with mocked transports), 23 frontend tests pass,
+ruff clean, mypy clean on new modules, frontend builds.
+
+
+**Latest slice — LLM-calling layer hardened with Agent Zero helpers (MIT).**
+Real model calls now go through a richer, retrying stack. Self-contained
+helpers were adapted from Agent Zero; the LiteLLM transport and LangChain
+`call_llm` were **not** ported because they bind to dependencies we don't use
+(ADR-012).
+
+- `bq/llm_result.py` — `LLMResult`/`LLMUsage`/`FunctionCall`; handles both
+  Gemini and OpenAI usage shapes; `truncated` flags a cut-off answer.
+- `bq/llm_extract.py` — separates `<think>`/`<reasoning>` from visible text,
+  normalises OpenAI + Gemini tool calls, maps finish reasons.
+- `bq/llm_retry.py` — transient-vs-permanent classification for `httpx`,
+  capped exponential backoff, and a sliding-window `RateLimiter`.
+- `bq/llm_tokens.py` — dependency-free token estimation/trimming (no
+  `tiktoken`; documented approximation for budgeting only).
+- `bq/dirty_json.py` — **vendored verbatim** from Agent Zero (MIT), used only
+  via `parse_tool_call(recover=True)`; strict parsing stays the default.
+- `bq/llm_client.py` — both clients now return `LLMResult` and retry
+  transient failures; `llm_service` returns `CompletionOutcome` exposing
+  text, reasoning, finish reason and tokens. The API/CLI surface reasoning
+  and a `truncated` flag.
+
+Live check on this host: Gemini and DeepSeek endpoints answered; bogus keys
+produced clean typed errors (HTTP 400 / 401, no retry, no secret leak).
+
+Verification: **390 backend tests** pass (16 new in `tests/test_llm_ported.py`),
+18 frontend tests, ruff clean, mypy clean on the new modules, runtime-dependency
+guard still passes (no new runtime deps). Attribution in each file header,
+`THIRD_PARTY_NOTICES.md`, and ADR-012.
+
+
+**Latest slice — live LLM calls + live stock data (provider gate opened).**
+The "no provider connected / providers disabled" dead end is removed. An
+owner who configures a provider, model name and key in Settings now gets a
+real route.
+
+- `bq/llm_client.py` — `GeminiClient` (Generative Language REST) and
+  `DeepSeekClient` (OpenAI-compatible; also serves `OPENAI`/`CUSTOM`). HTTPS
+  only, bounded response size, hard timeout, injectable transport so tests
+  never hit the network. Errors are typed and never echo secrets.
+- `bq/llm_service.py` — `candidate_for(config)` builds an eligible
+  `ModelCandidate` from the configured provider/model/key; `LLMService.complete`
+  runs the existing routing gate (satisfied from config, not bypassed) then
+  calls the provider. Raises `LLMNotConfigured` when key/model are missing.
+- `LLMGateway` now derives candidates from Settings when none are passed, so
+  `prepare()` routes to the configured model instead of always failing.
+- `bq/data/yahoo.py` — live EOD bars from Yahoo Finance
+  (`query1.finance.yahoo.com`), verified live. Drops null/incomplete rows,
+  stores `EOD_BAR` records `UNASSESSED` with an idempotent import key.
+- Interfaces: `POST /api/v1/llm/complete`, `POST /api/v1/data/download`, and
+  `bq llm ask "..."`, `bq data download RELIANCE.NS --range 5d`.
+- Status surfaces updated: `/api/v1/data/status.live_provider` and
+  `/api/v1/llm/usage.provider_connected` now reflect configuration instead of
+  hardcoded "not_configured"/false.
+
+Live verification on this host (network reachable): Yahoo chart download of
+`RELIANCE.NS` stored 4 real EOD bars; the LLM path fails cleanly with
+"No model name is configured." when unset. The ``llm ask`` path is exercised
+end-to-end with an injected fake client (no real key on this machine).
+
+Honesty notes: Yahoo is not an authoritative exchange feed; bars are stored
+`UNASSESSED` and must not back a readiness gate yet. The owner-supplied key is
+treated as "terms reviewed / capability verified" by assertion, not vendor
+certification. Trading stays paper-only; nothing here places orders.
+
+Verification: **374 backend tests** pass (9 LLM + 7 Yahoo new), 18 frontend
+tests pass, ruff clean, mypy clean on the new modules, frontend builds.
+
+
+**Latest slice — agent tool layer (adapted from Agent Zero).** The news
+research agent now exposes a reusable **tool layer** under `bq/tools/`.
+Structure is adapted from Agent Zero (a `Tool` base returning a message plus a
+`break_loop` flag, tool *policy* separate from discovery, a `response`
+terminator, an `unknown` fallback); the code is original and reimplemented to
+BharatQuant conventions — **no files were copied**, per the plan's rule against
+importing external source or prompts.
+
+- `bq/tools/base.py` — `Tool`/`ToolSpec`/`ToolArgument`/`ToolResult`,
+  bounded argument + result validation, and `render_tools_prompt`.
+- `bq/tools/registry.py` — explicit `ToolRegistry` (no import-by-path, so a
+  misconfigured directory cannot execute code) plus `AgentToolPolicy` and
+  `ToolRunner`. A `read_only` profile refuses every `mutating` tool; `blocked`
+  names refine it. This is the mechanism the plan needs so research agents
+  cannot place orders.
+- `bq/tools/parsing.py` — a **strict** tool-call extractor (whole response,
+  one fenced ```json block, or the first balanced `{...}`). Values are never
+  repaired; malformed calls fail with a typed error. Deliberately stricter
+  than Agent Zero's forgiving extractor.
+- `bq/tools/control.py` — `response` (ends the loop) and `unknown`
+  (returns the available tool names).
+- `bq/tools/news.py` — `news_search`, `news_memory`, `news_digest` (read-only)
+  and `news_ingest` (mutating). `news_memory` records `hit_count` for later
+  frecency pruning.
+- `bq/agent_runtime.py` — a deterministic loop over an injected `ModelTurn`.
+  **It calls no provider.** History is bounded (40 entries) with a rolling
+  summary folded deterministically, no summarising model call — the Agent Zero
+  history idea without the LLM. Exhausted turns or a `break_loop` both end it.
+- `NewsResearchAgent.tools()`, `.tool_registry()`, `.runner(read_only=...)`
+  expose the toolset; the research agent allows mutation, a read-only profile
+  hides `news_ingest`.
+- Interfaces: `GET /api/v1/tools/research` (catalog),
+  `POST /api/v1/tools/research/run` (owner-only, CSRF + origin), and
+  `bq tools list` / `bq tools run NAME --args '{"query":"nifty"}'`.
+
+Verification: **358 backend tests** pass (25 new in `tests/test_tools.py`),
+ruff clean on changed files, mypy clean on the new modules (the 16 pre-existing
+errors elsewhere are untouched), and the runtime-dependency guard still passes.
+
+
 **Latest slice — Research tab + editable Settings.** The UI now has a
 **Research** tab and a writable **Settings** page.
 

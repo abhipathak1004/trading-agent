@@ -17,6 +17,7 @@ from bq.model_routing import (
     RoutingError,
     select_model,
 )
+from bq.settings import SettingsStore
 from bq.task_registry import TaskDefinition
 
 
@@ -43,10 +44,27 @@ class LLMGateway:
         self,
         path: Path,
         *,
-        candidates: tuple[ModelCandidate, ...] = (),
+        candidates: tuple[ModelCandidate, ...] | None = None,
     ) -> None:
         self.path = path
-        self.candidates = candidates
+        self._explicit_candidates = candidates
+
+    def _candidates(self) -> tuple[ModelCandidate, ...]:
+        """Explicit candidates win; otherwise derive one from Settings.
+
+        Removing the "no provider connected" gate means an owner who configured a
+        provider, model and key gets a real route. The routing gate still runs —
+        we satisfy it from configuration instead of skipping it.
+        """
+        if self._explicit_candidates is not None:
+            return self._explicit_candidates
+        from bq.llm_client import LLMNotConfigured
+        from bq.llm_service import candidate_for
+
+        try:
+            return (candidate_for(SettingsStore(self.path).load()),)
+        except LLMNotConfigured:
+            return ()
 
     def prepare(
         self,
@@ -66,7 +84,7 @@ class LLMGateway:
             selected = select_model(
                 task.policy,
                 data_classes=data_classes,
-                candidates=self.candidates,
+                candidates=self._candidates(),
             )
         except RouteUnavailable as exc:
             raise ProviderDisabled(str(exc)) from exc

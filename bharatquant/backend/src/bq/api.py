@@ -15,6 +15,11 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 
+from bq.analysis.debate import Debate
+from bq.analysis.pipeline import AnalysisPipeline, PipelineError
+from bq.analysis.risk_team import RiskAnalyst
+from bq.analysis.run_settings import AnalysisRunError, AnalysisRunStore
+from bq.analysis.wiring import build_analysis_router
 from bq.auth import (
     SESSION_SECONDS,
     InvalidCredentials,
@@ -36,17 +41,24 @@ from bq.data.freshness import (
     inspect_snapshot_freshness,
 )
 from bq.data.records import DataRecordStore, MissingDataRecord, QualityStatus
+from bq.data.symbols import SymbolError
+from bq.data.symbols import resolve as resolve_symbol
+from bq.data.vendors import DataDomain
+from bq.data.yahoo import YahooDataClient, YahooError
 from bq.infra.jobs import JobRunStore
 from bq.infra.model_attempts import ModelAttemptStore, TokenUsage
 from bq.infra.scheduler import SchedulerLoop, SchedulerRunner
 from bq.infra.schedules import ScheduleStore
 from bq.infra.task_registry import TaskRegistry
+from bq.llm_client import LLMClientError, LLMNotConfigured
+from bq.llm_service import LLMService
 from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
 from bq.paper_accounts import (
     PaperAccountStatus,
     PaperAccountStore,
 )
+from bq.research_agent import ResearchAgent
 from bq.schedules import (
     DailySchedule,
     IntervalSchedule,
@@ -63,6 +75,7 @@ from bq.settings import (
     SettingsError,
     SettingsStore,
 )
+from bq.tools.base import ToolBlocked, ToolError, ToolSpec
 
 WEB_ROOT = Path(__file__).with_name("static")
 COOKIE_NAME = "bq_session"
@@ -98,7 +111,7 @@ class DataStatus(BaseModel):
     import_count: int
     imported_record_count: int
     import_quality: Literal["unassessed"]
-    live_provider: Literal["not_configured"]
+    live_provider: str
     recent_imports: list[ImportStatus]
 
 
@@ -157,7 +170,7 @@ class ModelUsageStatus(BaseModel):
 class UsageStatus(BaseModel):
     total_groups: int
     groups: list[ModelUsageStatus]
-    provider_connected: Literal[False]
+    provider_connected: bool
 
 
 class PaperAccountStatusResponse(BaseModel):
@@ -247,6 +260,155 @@ class NewsIngestResult(BaseModel):
     stored: int
     duplicates: int
     long_term_memories: int
+
+
+class ToolSpecStatus(BaseModel):
+    name: str
+    summary: str
+    mutating: bool
+    arguments: list[str]
+
+
+class ToolCatalog(BaseModel):
+    agent_id: str
+    read_only: bool
+    tools: list[ToolSpecStatus]
+
+
+class ToolRunRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64, strict=True)
+    arguments: dict[str, object] = Field(default_factory=dict)
+
+
+class ToolRunResponse(BaseModel):
+    tool: str
+    message: str
+    break_loop: bool
+
+
+class AgentStepStatus(BaseModel):
+    turn: int
+    kind: str
+    tool: str
+    arguments: dict[str, object]
+    output: str
+
+
+class AgentRunRequest(BaseModel):
+    task: str = Field(min_length=1, max_length=4_000, strict=True)
+    max_turns: int = Field(default=10, ge=1, le=12, strict=True)
+
+
+class AgentRunResponse(BaseModel):
+    task: str
+    final_text: str
+    turns: int
+    stopped: bool
+    tool_calls: list[str]
+    steps: list[AgentStepStatus]
+    provider: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+
+
+class AgentStatus(BaseModel):
+    agent_id: str
+    configured: bool
+    provider: str
+    model: str
+    tools: list[ToolSpecStatus]
+
+
+class AnalysisRunRequest(BaseModel):
+    """A request to analyse one symbol.
+
+    Bounds are deliberately tight: this is a single-owner loopback app, and an
+    unbounded symbol or timeframe would let a typo turn into a broker storm.
+    """
+
+    symbol: str = Field(min_length=1, max_length=32, strict=True)
+    timeframe: Literal["intraday", "swing"] = "swing"
+    equity_paise: int = Field(gt=0, le=10**13, strict=True)
+    available_cash_paise: int = Field(ge=0, le=10**13, strict=True)
+    risk_basis_points: int = Field(default=100, ge=0, le=10_000, strict=True)
+
+
+class AnalysisProvenance(BaseModel):
+    vendor_daily: str
+    vendor_quotes: str
+    is_realtime: bool
+    data_freshness: str
+
+
+class AnalysisRunResponse(BaseModel):
+    run_id: str
+    symbol: str
+    timeframe: str
+    mode: str
+    as_of: str
+    data_provenance: AnalysisProvenance
+    report: dict[str, object]
+    plan: dict[str, object] | None
+    verdict: dict[str, object] | None
+    risk: dict[str, object] | None
+    vetoes: list[str]
+    notes: list[str]
+    skipped_nodes: list[str]
+
+
+class AnalysisRunSummary(BaseModel):
+    run_id: str
+    symbol: str
+    timeframe: str
+    as_of: str
+    mode: str
+    signal: str
+    data_freshness: str
+    is_realtime: bool
+    composite: float | None
+
+
+class AnalysisRunList(BaseModel):
+    runs: list[AnalysisRunSummary]
+
+
+class VendorChainStatus(BaseModel):
+    domain: str
+    vendors: list[str]
+
+
+class VendorsResponse(BaseModel):
+    kite_enabled: bool
+    chains: list[VendorChainStatus]
+
+
+class LLMCompleteRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=32_000, strict=True)
+    system: str = Field(default="", max_length=8_000, strict=True)
+
+
+class LLMCompleteResponse(BaseModel):
+    provider: str
+    model: str
+    text: str
+    reasoning: str
+    finish_reason: str
+    truncated: bool
+    input_tokens: int | None
+    output_tokens: int | None
+
+
+class DataDownloadRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=24, strict=True)
+    range: str = Field(default="1mo", max_length=8, strict=True)
+    interval: str = Field(default="1d", max_length=8, strict=True)
+
+
+class DataDownloadResponse(BaseModel):
+    import_id: str
+    symbol: str
+    record_count: int
 
 
 class ApiKeyStatus(BaseModel):
@@ -357,6 +519,15 @@ def _app_config_status(config: AppConfig) -> AppConfigStatus:
     )
 
 
+def _tool_spec_status(spec: ToolSpec) -> ToolSpecStatus:
+    return ToolSpecStatus(
+        name=spec.name,
+        summary=spec.summary,
+        mutating=spec.mutating,
+        arguments=[argument.name for argument in spec.arguments],
+    )
+
+
 @runtime_checkable
 class StreamingResponseLike(Protocol):
     body_iterator: AsyncIterable[str | bytes | memoryview]
@@ -410,6 +581,9 @@ def create_app(
                 "/api/v1/schedules/",
                 "/api/v1/settings/",
                 "/api/v1/paper/",
+                "/api/v1/tools/",
+                "/api/v1/agent/",
+                "/api/v1/analysis/",
             )
         ):
             response.headers["Cache-Control"] = "no-store"
@@ -486,7 +660,11 @@ def create_app(
                 import_count=summary.import_count,
                 imported_record_count=summary.record_count,
                 import_quality="unassessed",
-                live_provider="not_configured",
+                live_provider=(
+                    settings.load().provider.value.lower()
+                    if settings.load().api_keys_configured
+                    else "not_configured"
+                ),
                 recent_imports=[
                     ImportStatus(
                         import_id=item.import_id,
@@ -621,7 +799,7 @@ def create_app(
                     )
                     for item in summaries[:20]
                 ],
-                provider_connected=False,
+                provider_connected=settings.load().api_keys_configured,
             )
 
         @app.get("/api/v1/paper/accounts/{account_id}")
@@ -853,6 +1031,321 @@ def create_app(
                 stored=report.stored,
                 duplicates=report.duplicates,
                 long_term_memories=report.long_term_memories,
+            )
+
+        @app.get("/api/v1/tools/research")
+        def research_tools(request: Request) -> ToolCatalog:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            agent = ResearchAgent(database_path, feed_url=settings.load().news_feed_url)
+            runner = agent.runner()
+            return ToolCatalog(
+                agent_id="research",
+                read_only=not runner.policy.allows_mutation,
+                tools=[_tool_spec_status(spec) for spec in runner.permitted_specs()],
+            )
+
+        @app.get("/api/v1/agent/status")
+        def agent_status(request: Request) -> AgentStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            config = settings.load()
+            agent = ResearchAgent(database_path, feed_url=config.news_feed_url)
+            return AgentStatus(
+                agent_id="research",
+                configured=config.model_route_configured,
+                provider=config.provider.value,
+                model=config.model_name,
+                tools=[
+                    _tool_spec_status(spec) for spec in agent.runner().permitted_specs()
+                ],
+            )
+
+        @app.post("/api/v1/agent/run")
+        def agent_run(request: Request, body: AgentRunRequest) -> AgentRunResponse:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            config = settings.load()
+            agent = ResearchAgent(database_path, feed_url=config.news_feed_url)
+            try:
+                run = agent.run(body.task, max_turns=body.max_turns)
+            except LLMNotConfigured as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except LLMClientError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except NewsError as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"News feed unavailable: {exc}"
+                ) from exc
+            return AgentRunResponse(
+                task=run.task,
+                final_text=run.final_text,
+                turns=run.turns,
+                stopped=run.stopped,
+                tool_calls=list(run.tool_calls),
+                steps=[
+                    AgentStepStatus(
+                        turn=step.turn,
+                        kind=step.kind,
+                        tool=step.tool,
+                        arguments=dict(step.arguments),
+                        output=step.output,
+                    )
+                    for step in run.steps
+                ],
+                provider=run.provider,
+                model=run.model,
+                input_tokens=run.input_tokens,
+                output_tokens=run.output_tokens,
+            )
+
+        @app.post("/api/v1/tools/research/run")
+        def research_tool_run(
+            request: Request, body: ToolRunRequest
+        ) -> ToolRunResponse:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            config = settings.load()
+            agent = ResearchAgent(database_path, feed_url=config.news_feed_url)
+            runner = agent.runner()
+            try:
+                result = runner.run(body.name, body.arguments)
+            except ToolBlocked as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except ToolError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except NewsError as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"News feed unavailable: {exc}"
+                ) from exc
+            return ToolRunResponse(
+                tool=str(result["tool"]),
+                message=str(result["message"]),
+                break_loop=bool(result["break_loop"]),
+            )
+
+        @app.post("/api/v1/llm/complete")
+        def llm_complete(
+            request: Request, body: LLMCompleteRequest
+        ) -> LLMCompleteResponse:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            service = LLMService(settings)
+            try:
+                result = service.complete(prompt=body.prompt, system=body.system)
+            except LLMNotConfigured as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except LLMClientError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return LLMCompleteResponse(
+                provider=result.provider.value,
+                model=result.model,
+                text=result.text,
+                reasoning=result.reasoning,
+                finish_reason=result.finish_reason,
+                truncated=result.result.truncated,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+            )
+
+        # -- analysis ---------------------------------------------------
+        #
+        # Owner-only, `no-store` (the middleware above covers the prefix), and
+        # CSRF + origin checked on the POST. A run is a real model spend, so the
+        # body is validated before anything is called.
+
+        @app.get("/api/v1/analysis/vendors")
+        def analysis_vendors(request: Request) -> VendorsResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            config = settings.load()
+            router = build_analysis_router(database_path, config)
+            return VendorsResponse(
+                kite_enabled=config.kite_enabled,
+                chains=[
+                    VendorChainStatus(
+                        domain=domain.value,
+                        vendors=[vendor.name for vendor in router.chain(domain)],
+                    )
+                    for domain in DataDomain
+                ],
+            )
+
+        @app.post("/api/v1/analysis/run")
+        def analysis_run(
+            request: Request, body: AnalysisRunRequest
+        ) -> AnalysisRunResponse:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+            config = settings.load()
+            try:
+                symbol = resolve_symbol(body.symbol)
+            except SymbolError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            if not symbol.tradeable:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Indices can be analysed as context but not traded.",
+                )
+
+            router = build_analysis_router(database_path, config)
+            service = LLMService(settings) if config.model_route_configured else None
+            pipeline = AnalysisPipeline(
+                router,
+                debate=Debate(service) if service is not None else None,
+                risk_analyst=RiskAnalyst(service) if service is not None else None,
+            )
+            try:
+                result = pipeline.run(
+                    symbol=symbol,
+                    timeframe=body.timeframe,
+                    equity_paise=body.equity_paise,
+                    available_cash_paise=body.available_cash_paise,
+                    risk_basis_points=body.risk_basis_points,
+                )
+            except PipelineError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+            payload = result.to_dict()
+            store = AnalysisRunStore(database_path)
+            stored = store.record(
+                symbol=result.symbol,
+                timeframe=result.timeframe,
+                as_of=result.as_of,
+                started_at=result.as_of,
+                vendor_quotes=result.vendor_quotes,
+                vendor_daily=result.vendor_daily,
+                is_realtime=result.is_realtime,
+                data_freshness=(
+                    "realtime_kite" if result.is_realtime else "delayed_yfinance"
+                ),
+                bar_count=result.report.bar_count,
+                facts=result.report.facts(),
+                composite=result.report.composite,
+                debate_attempted=result.bull is not None or result.bear is not None,
+                debate_rounds=result.debate_rounds,
+                mode=result.mode,
+                provider=config.provider.value,
+                model=config.model_name,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                signal=("HOLD" if result.plan is None else result.plan.signal.value),
+                plan=None if result.plan is None else result.plan.to_dict(),
+                vetoes=result.vetoes,
+                detail=payload,
+            )
+            return AnalysisRunResponse(
+                run_id=stored.run_id,
+                symbol=result.symbol,
+                timeframe=result.timeframe,
+                mode=result.mode,
+                as_of=result.as_of.isoformat(),
+                data_provenance=AnalysisProvenance(
+                    vendor_daily=result.vendor_daily,
+                    vendor_quotes=result.vendor_quotes,
+                    is_realtime=result.is_realtime,
+                    data_freshness=(
+                        "realtime_kite" if result.is_realtime else "delayed_yfinance"
+                    ),
+                ),
+                report=payload["report"],  # type: ignore[arg-type]
+                plan=None if result.plan is None else result.plan.to_dict(),
+                verdict=None if result.verdict is None else result.verdict.to_dict(),
+                risk=None if result.risk is None else result.risk.to_dict(),
+                vetoes=list(result.vetoes),
+                notes=list(result.notes),
+                skipped_nodes=list(result.skipped_nodes),
+            )
+
+        @app.get("/api/v1/analysis/runs")
+        def analysis_runs(
+            request: Request, limit: int = 20, symbol: str | None = None
+        ) -> AnalysisRunList:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            if not 1 <= limit <= 100:
+                raise HTTPException(status_code=422, detail="Limit must be 1-100.")
+            store = AnalysisRunStore(database_path)
+            runs = store.recent(limit, symbol=symbol)
+            return AnalysisRunList(
+                runs=[
+                    AnalysisRunSummary(
+                        run_id=run.run_id,
+                        symbol=run.symbol,
+                        timeframe=run.timeframe,
+                        as_of=run.as_of.isoformat(),
+                        mode=run.mode,
+                        signal=run.signal,
+                        data_freshness=run.data_freshness,
+                        is_realtime=run.is_realtime,
+                        composite=run.composite,
+                    )
+                    for run in runs
+                ]
+            )
+
+        @app.get("/api/v1/analysis/runs/{run_id}")
+        def analysis_run_detail(request: Request, run_id: str) -> dict[str, object]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                return AnalysisRunStore(database_path).get(run_id).to_dict()
+            except AnalysisRunError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        @app.post("/api/v1/data/download")
+        def data_download(
+            request: Request, body: DataDownloadRequest
+        ) -> DataDownloadResponse:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            client = YahooDataClient(database_path)
+            try:
+                result = client.download(
+                    body.symbol, range_=body.range, interval=body.interval
+                )
+            except YahooError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return DataDownloadResponse(
+                import_id=result.import_id,
+                symbol=result.symbol,
+                record_count=result.record_count,
             )
 
         @app.get("/api/v1/auth/session")

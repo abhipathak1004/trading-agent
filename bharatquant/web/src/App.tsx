@@ -8,6 +8,7 @@ import ScheduleStatus from "./ScheduleStatus";
 import UsageStatus from "./UsageStatus";
 import PaperAccountStatus from "./PaperAccountStatus";
 import ResearchPanel from "./ResearchPanel";
+import AgentConsole from "./AgentConsole";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
 
@@ -510,24 +511,28 @@ export default function App() {
                 <p className="eyebrow">RESEARCH</p>
                 <h1 id="research-page-title">Research</h1>
                 <p className="intro">
-                  The news research agent: deterministic ingest, deduplication and
-                  long-term memory. No model calls.
+                  An LLM research agent that calls tools — news, live quotes, the
+                  web — and shows every step it takes.
                 </p>
               </div>
-              <span className="status-badge status-badge--provisional">FOUNDATION</span>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
             </header>
 
             <section className="mode-banner" aria-label="Research scope">
               <span aria-hidden="true">i</span>
               <div>
-                <strong>Deterministic and cost-bounded</strong>
+                <strong>Model-driven, tool-bounded</strong>
                 <p>
-                  Ingest stores compact feed metadata only — never full articles —
-                  and performs no model calls. Feed URL and retention are set in
-                  Settings.
+                  The agent can read news, quote and download market data, and fetch
+                  pages. It cannot trade. Quotes are unassessed and nothing here is
+                  investment advice.
                 </p>
               </div>
             </section>
+
+            <div className="dashboard-grid dashboard-grid--research">
+              <AgentConsole csrfToken={session.csrfToken} />
+            </div>
 
             <div className="dashboard-grid dashboard-grid--research">
               <ResearchPanel csrfToken={session.csrfToken} />

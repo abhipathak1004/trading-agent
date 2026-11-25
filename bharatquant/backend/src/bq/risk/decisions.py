@@ -104,7 +104,7 @@ class RiskDecisionStore:
             connection.execute("BEGIN IMMEDIATE")
             with connection:
                 existing = connection.execute(
-                    "SELECT decision_hash FROM risk_decisions " "WHERE decision_id = ?",
+                    "SELECT decision_hash FROM risk_decisions WHERE decision_id = ?",
                     (decision_id,),
                 ).fetchone()
                 if existing is not None:

@@ -29,7 +29,9 @@ def _declared() -> tuple[set[str], set[str]]:
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text("utf-8"))
     runtime = {
         # "argon2-cffi" -> "argon2", "types-jsonschema" -> "types_jsonschema"
-        name.split("[", 1)[0].split(">=", 1)[0].split("==", 1)[0]
+        name.split("[", 1)[0]
+        .split(">=", 1)[0]
+        .split("==", 1)[0]
         .strip()
         .lower()
         .replace("-", "_")
@@ -124,5 +126,8 @@ def test_cli_startup_imports_only_runtime_dependencies() -> None:
     assert not offenders, (
         "Modules reachable from `bq.cli` import packages that are not runtime "
         "dependencies. A production install would fail to start.\n"
-        + "\n".join(f"  {where} -> undeclared {dist}" for where, dist in sorted(offenders.items()))
+        + "\n".join(
+            f"  {where} -> undeclared {dist}"
+            for where, dist in sorted(offenders.items())
+        )
     )

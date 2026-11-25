@@ -39,6 +39,7 @@ KEY_PROVIDER = "provider"
 KEY_MODEL_NAME = "model_name"
 KEY_NEWS_FEED_URL = "news_feed_url"
 KEY_NEWS_MEMORY_TTL_DAYS = "news_memory_ttl_days"
+KEY_KITE_ENABLED = "kite_enabled"
 
 
 class SettingsError(ValueError):
@@ -70,6 +71,7 @@ class AppConfig:
     news_memory_ttl_days: int
     api_keys: tuple[ApiKeyStatus, ...]
     updated_at: datetime | None
+    kite_enabled: bool = False
 
     @property
     def model_route_configured(self) -> bool:
@@ -208,6 +210,8 @@ class SettingsStore:
         updated = None
         if latest is not None and latest[0] is not None:
             updated = _parse_timestamp(str(latest[0]))
+        # Absent means off: a fresh install must not attempt broker calls.
+        kite_enabled = str(rows.get(KEY_KITE_ENABLED, "false")).lower() == "true"
         return AppConfig(
             provider=provider,
             model_name=str(rows.get(KEY_MODEL_NAME, "")),
@@ -222,6 +226,7 @@ class SettingsStore:
                 for row in sorted(key_rows, key=lambda item: str(item[0]))
             ),
             updated_at=updated,
+            kite_enabled=kite_enabled,
         )
 
     def api_key(self, provider: Provider | str) -> str | None:

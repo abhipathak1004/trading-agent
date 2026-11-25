@@ -29,7 +29,10 @@ def fetch_feed(
             timeout=timeout,
             follow_redirects=True,
             transport=transport,
-            headers={"User-Agent": _USER_AGENT, "Accept": "application/rss+xml, application/xml;q=0.9"},
+            headers={
+                "User-Agent": _USER_AGENT,
+                "Accept": "application/rss+xml, application/xml;q=0.9",
+            },
         ) as client:
             with client.stream("GET", url) as response:
                 response.raise_for_status()

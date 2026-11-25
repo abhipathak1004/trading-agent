@@ -362,8 +362,7 @@ class PaperTradingStore:
                     )
                 now = _utc(self.clock.now())
                 connection.execute(
-                    "UPDATE paper_orders SET status = 'CANCELLED' "
-                    "WHERE order_id = ?",
+                    "UPDATE paper_orders SET status = 'CANCELLED' WHERE order_id = ?",
                     (order_id,),
                 )
                 append_event(

@@ -85,7 +85,7 @@ function parseGroup(value: unknown): UsageGroup {
 function parseSummary(value: unknown): UsageSummary {
   if (
     !isRecord(value) ||
-    value.provider_connected !== false ||
+    typeof value.provider_connected !== "boolean" ||
     !isCount(value.total_groups) ||
     !Array.isArray(value.groups) ||
     value.groups.length > 20 ||

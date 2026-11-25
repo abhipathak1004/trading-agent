@@ -318,8 +318,7 @@ class JobRunStore:
         _validate_identifier(occurrence_key, "occurrence key")
         with closing(self._connect()) as connection:
             row = connection.execute(
-                "SELECT run_id FROM job_runs "
-                "WHERE job_id = ? AND occurrence_key = ?",
+                "SELECT run_id FROM job_runs WHERE job_id = ? AND occurrence_key = ?",
                 (job_id, occurrence_key),
             ).fetchone()
             if row is None:

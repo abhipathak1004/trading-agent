@@ -164,3 +164,169 @@ development environment where dev extras are already present.
 locked production dependency set and the dependency notices. A test that only
 runs in the development environment cannot detect this class of packaging
 failure; the install check must be performed explicitly.
+
+## ADR-011: Agent tooling adapted from Agent Zero, reimplemented not copied
+
+**Status:** Accepted.
+
+**Context:** We are about to build several agents (news, market research,
+fundamentals). Agent Zero (`agent0ai/agent-zero`) is a mature reference for a
+tool-based agent loop: a `Tool` base that returns a message plus a `break_loop`
+flag, tool policy kept separate from tool discovery, a `response` terminator, an
+`unknown` fallback, and a compressible conversation history. Reading it is
+useful; copying it is not. The project plan says to prefer vetted dependencies
+and original code/prompts, and not to copy external source or prompts.
+
+**Decision:** Reuse the *structure* only, reimplemented in original code:
+
+- A `Tool` base returning `(message, break_loop)` and a declared argument
+  surface, with bounded validation (`bq/tools/base.py`).
+- Explicit `ToolRegistry` registration plus `AgentToolPolicy`/`ToolRunner`,
+  so mutation can be denied per agent profile (`bq/tools/registry.py`). This is
+  what lets a research agent hold `news_ingest` while a read-only analyst
+  profile cannot.
+- A strict tool-call parser (`bq/tools/parsing.py`) — stricter than upstream,
+  which repairs malformed calls. We fail loudly instead.
+- A deterministic loop with bounded history and a rolling summary
+  (`bq/agent_runtime.py`) that calls no provider.
+
+We deliberately do **not** take: import-tool-classes-by-filesystem-path (an
+execution surface), the streaming/extension hook system, LiteLLM coupling, the
+plugin marketplace, the WebSocket/UI chat layer, or the vector-DB memory. Those
+solve Agent Zero's product problems, not ours.
+
+**Consequences:** Agents get a uniform, safe tool surface and a policy boundary
+we control. If we later want MCP tools or sub-agents, they plug into the same
+`ToolRegistry` without changing the loop. The cost is that we own the
+implementations and must test them ourselves (done in `tests/test_tools.py`);
+there is no upstream to pull fixes from, which is acceptable because the
+surface is small and fully covered.
+
+## ADR-012: LLM-calling helpers adapted from Agent Zero (MIT)
+
+**Status:** Accepted.
+
+**Context:** We now make real model calls. Agent Zero has a mature LLM layer.
+Its `helpers/litellm_transport.py` (2,297 lines) is bound to LiteLLM and the
+OpenAI Responses API, and `helpers/call_llm.py` to LangChain — neither
+dependency is one we use, so neither is portable. The question was what can be
+reused *legitimately and usefully* without dragging in that stack.
+
+**Decision:** Reuse the self-contained, transport-independent pieces, and keep
+the vendored file faithful.
+
+- **Adapted (original reimplementation, structure informed by upstream):**
+  - `bq/llm_result.py` — `LLMResult`/`LLMUsage`/`FunctionCall` plus
+    `parse_usage` for both wire shapes. Upstream's OpenAI-Responses state
+    (response ids, input/output items) is omitted because we don't use it.
+  - `bq/llm_extract.py` — `split_thinking` (separate `<think>`/`<reasoning>`
+    blocks from visible text) and tool-call normalisation for OpenAI and Gemini
+    shapes, plus finish-reason mapping.
+  - `bq/llm_retry.py` — transient-vs-permanent error classification for
+    `httpx` errors, capped exponential backoff, and a sliding-window
+    `RateLimiter` (ported from upstream's `rate_limiter.py`).
+  - `bq/llm_tokens.py` — token estimation and trimming. Upstream uses
+    `tiktoken`; we use a documented chars-per-token estimate and **do not**
+    add the multi-megabyte tokenizer, because this is for budgeting and
+    trimming, never for billed usage.
+- **Vendored verbatim:** `bq/dirty_json.py` from `helpers/dirty_json.py` (MIT).
+  It is a mature recursive-descent parser for near-miss JSON; rewriting it only
+  adds bugs. It is excluded from ruff/mypy so it stays a faithful copy, and is
+  used **only** via `parse_tool_call(recover=True)` — strict parsing remains the
+  default so a malformed tool call cannot silently become a different call.
+- **Not ported:** LiteLLM transport, Responses-API state machine, LangChain
+  `call_llm`, provider YAML registry, model preset system, `tiktoken`. Each is
+  tied to a dependency or product surface we don't have.
+
+**Consequences:** We get robust reasoning/tool-call parsing and retry/rate-limit
+behaviour without a new runtime dependency (the guard test still passes). The
+cost is that we own these modules and must maintain them; they are covered by
+`tests/test_llm_ported.py`. Attribution is recorded in each file header and in
+`THIRD_PARTY_NOTICES.md`. If we later adopt LiteLLM, the transport could be
+revisited, but the current direct-`httpx` clients are simpler and auditable.
+
+## ADR-013: Kite Connect is a read-only market-data vendor
+
+**Status:** Accepted. Supersedes no earlier record; this ADR **reaffirms
+ADR-001** and draws the boundary that a proposed change wanted to cross.
+
+**Context:** A request to port TradingAgents' multi-agent analysis would also
+have added a Zerodha Kite Connect **execution** layer: sandbox order routing, a
+live-approval mode and a `LIVE_AUTO` mode. ADR-001 says this application "will
+not connect to a live broker or place real orders … Never add broker credentials
+or live execution as an implicit extension", and plan §2.2 lists live order
+placement as a non-goal. Adding an executor would therefore have overridden an
+accepted decision silently.
+
+Kite is nevertheless a genuinely better **market data** source than Yahoo for
+Indian equities: it is the broker's own API, it serves real-time quotes and
+intraday candles, and it publishes an instrument master that maps
+`exchange:tradingsymbol` to a stable numeric token.
+
+**Decision:** Kite Connect is a **read-only data vendor**.
+
+- Allowed calls are limited to `kite.quote`, `kite.ohlc`,
+  `kite.historical_data` and `kite.instruments`.
+- `bq/data/vendors/kite_vendor.py` must contain no `place_order`,
+  `modify_order`, `cancel_order` or autoslice call. A test asserts the module
+  exposes no order-placing method, so a future edit cannot quietly add one.
+- Kite is disabled by default (`kite_enabled = false`). With it disabled the
+  vendor router has no Kite vendor and reads fall through to Yahoo; there is no
+  failure path and no warning noise.
+- Kite credentials live in their own `broker_credentials` table, separate from
+  `provider_api_keys`, because Kite is not an LLM provider and must not appear
+  in the provider list. They follow the existing masked-secret handling: never
+  returned in plaintext, only a masked hint, with an audit event on change.
+- An expired Kite daily access token raises `VendorUnavailableError`, so
+  read-only analysis degrades to Yahoo rather than failing.
+
+**Consequence — TradingAgents reuse stays R3.** Because there is no execution
+layer to port into, and because plan §4.3.1 already scopes TradingAgents as
+"prompts and design reference", the migration is a **reimplementation**, not a
+vendoring: the analyst/debate/judge/risk-team structure, the per-domain vendor
+chain with typed failures, and the look-ahead test discipline are studied and
+rewritten in original code, exactly as ADR-011 and ADR-012 did for Agent Zero.
+`docs/migration-tradingagents.md` records the component map.
+
+**Consequences:** A useful real-time Indian data source is available without
+weakening the paper-only guarantee. A future live-execution phase must supersede
+ADR-001 explicitly and complete plan §25's SEBI, static-IP and external-source
+gates first; it cannot arrive as a quiet extension of this vendor.
+
+## ADR-014: Deterministic indicators in pandas and numpy
+
+**Status:** Accepted.
+
+**Context:** The technical analyst needs RSI, MACD, Bollinger Bands, EMA/SMA,
+ATR, VWAP, ADX, drawdowns and swing-structure support/resistance over a few
+hundred to a few thousand bars. The commissioning prompt required these be
+computed deterministically in code rather than by a model, which this project
+already requires in principle (plan §3, principle 11). The repository until now
+had **no** numeric stack: no pandas, numpy, polars or TA-Lib, and
+`tests/test_runtime_dependencies.py` fails the build if a module reachable from
+`bq.cli` imports an undeclared package.
+
+**Decision:** Add **pandas** and **numpy** as declared runtime dependencies and
+implement the indicators as pure functions in `bq/compute/indicators.py`.
+
+- Champagne problem considered and rejected: hand-rolling Wilder smoothing and
+  rolling-window statistics in stdlib Python is more code to get subtly wrong
+  (RSI seeding, ATR gap handling, MACD warm-up) than it saves.
+- Polars was not chosen: plan §6.1 prefers it for large-frame compute, but this
+  workload is a few thousand rows and pandas keeps the ported conventions
+  readable.
+- TA-Lib was not chosen: it needs a C toolchain on the target Mac, and plan §4.2
+  schedules it as a later dev-extra cross-check rather than a runtime need.
+- Prices remain `float64` inside indicator code, because that is what pandas
+  produces. The single conversion point back to `CurrencyPaise` — used for
+  sizing and the trade plan — is explicit and tested, so exact-paise accounting
+  downstream is unaffected.
+- Both packages are added to `THIRD_PARTY_NOTICES.md` (BSD-3-Clause each) and the
+  dependency guard must pass before any indicator code lands.
+
+**Consequences:** The numeric stack becomes part of the runtime install (pandas
+pulls in `python-dateutil`, `pytz` and `tzdata`), which is the real cost
+accepted here. `ADR-010`'s discipline still applies: the guard test decides
+whether a declaration is correct, and the notices file must stay in step. If the
+numeric workload later grows into frame-scale analytics, plan §6.1's Polars path
+remains open without changing the indicator module's public functions.

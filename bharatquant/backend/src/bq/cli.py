@@ -13,6 +13,10 @@ from urllib.parse import urlsplit
 
 import uvicorn
 
+from bq.analysis.debate import Debate
+from bq.analysis.pipeline import AnalysisPipeline
+from bq.analysis.risk_team import RiskAnalyst
+from bq.analysis.wiring import build_analysis_router
 from bq.api import WEB_ROOT, create_app
 from bq.auth import OwnerAlreadyConfigured, OwnerAuth
 from bq.core import SystemClock
@@ -37,8 +41,12 @@ from bq.data.freshness import (
 )
 from bq.data.instruments import compare_symbol_sources
 from bq.data.records import DataRecordStore, MissingDataImport, MissingDataRecord
+from bq.data.symbols import resolve as resolve_symbol
+from bq.data.vendors import DataDomain
+from bq.data.yahoo import YahooDataClient
 from bq.infra.database import DatabaseError, check_database, migrate
 from bq.infra.model_attempts import ModelAttemptStore
+from bq.llm_service import LLMService
 from bq.news import NewsError
 from bq.news_agent import NewsResearchAgent
 from bq.settings import SettingsStore
@@ -99,6 +107,11 @@ def main(argv: list[str] | None = None) -> int:
         dest="llm_action", required=True
     )
     llm_actions.add_parser("usage", help="Show local attempt usage summaries as JSON.")
+    llm_ask = llm_actions.add_parser(
+        "ask", help="Send one prompt to the configured model and print the reply."
+    )
+    llm_ask.add_argument("prompt")
+    llm_ask.add_argument("--system", default="")
     news_actions = actions.add_parser("news").add_subparsers(
         dest="news_action", required=True
     )
@@ -120,9 +133,47 @@ def main(argv: list[str] | None = None) -> int:
     settings_actions.add_parser(
         "show", help="Print the configured model, feed and API key status as JSON."
     )
+    tools_actions = actions.add_parser("tools").add_subparsers(
+        dest="tools_action", required=True
+    )
+    tools_actions.add_parser(
+        "list", help="List the news research agent's tools as JSON."
+    )
+    tools_run = tools_actions.add_parser(
+        "run", help="Run one news research agent tool as JSON."
+    )
+    tools_run.add_argument("name")
+    tools_run.add_argument(
+        "--args",
+        default="{}",
+        help="JSON object of tool arguments (default: {}).",
+    )
+    analyze_action = actions.add_parser(
+        "analyze", help="Analyse one symbol and print the structured run as JSON."
+    )
+    analyze_action.add_argument("symbol")
+    analyze_action.add_argument(
+        "--timeframe", default="swing", choices=["swing", "intraday"]
+    )
+    analyze_action.add_argument(
+        "--equity-paise", type=int, required=True, help="Account equity in paise."
+    )
+    analyze_action.add_argument(
+        "--cash-paise", type=int, required=True, help="Available cash in paise."
+    )
+    analyze_action.add_argument("--risk-bps", type=int, default=100)
     data_actions = actions.add_parser("data").add_subparsers(
         dest="data_action", required=True
     )
+    data_actions.add_parser(
+        "vendors", help="Print the resolved market-data vendor chains as JSON."
+    )
+    download_action = data_actions.add_parser(
+        "download", help="Download live EOD bars from Yahoo Finance."
+    )
+    download_action.add_argument("symbol")
+    download_action.add_argument("--range", default="1mo")
+    download_action.add_argument("--interval", default="1d")
     csv_action = data_actions.add_parser(
         "import-eod-csv", help="Import owner-authorized EOD data from a local CSV."
     )
@@ -348,6 +399,37 @@ def main(argv: list[str] | None = None) -> int:
                         sort_keys=True,
                     )
                 )
+            elif args.action == "data" and args.data_action == "download":
+                result = YahooDataClient(path).download(
+                    args.symbol, range_=args.range, interval=args.interval
+                )
+                print(
+                    json.dumps(
+                        {
+                            "import_id": result.import_id,
+                            "symbol": result.symbol,
+                            "record_count": result.record_count,
+                        },
+                        sort_keys=True,
+                    )
+                )
+            elif args.action == "data" and args.data_action == "vendors":
+                config = SettingsStore(path).load()
+                router = build_analysis_router(path, config)
+                print(
+                    json.dumps(
+                        {
+                            "kite_enabled": config.kite_enabled,
+                            "chains": {
+                                domain.value: [
+                                    vendor.name for vendor in router.chain(domain)
+                                ]
+                                for domain in DataDomain
+                            },
+                        },
+                        sort_keys=True,
+                    )
+                )
             elif args.action == "data":
                 as_of = datetime.fromisoformat(args.as_of.replace("Z", "+00:00"))
                 store = DataRecordStore(path)
@@ -399,6 +481,25 @@ def main(argv: list[str] | None = None) -> int:
                     json.dumps(
                         asdict(report),
                         default=lambda value: value.isoformat(),
+                        sort_keys=True,
+                    )
+                )
+            elif args.action == "llm" and args.llm_action == "ask":
+                result = LLMService(SettingsStore(path)).complete(
+                    prompt=args.prompt, system=args.system
+                )
+                print(
+                    json.dumps(
+                        {
+                            "provider": result.provider.value,
+                            "model": result.model,
+                            "text": result.text,
+                            "reasoning": result.reasoning,
+                            "finish_reason": result.finish_reason,
+                            "truncated": result.result.truncated,
+                            "input_tokens": result.input_tokens,
+                            "output_tokens": result.output_tokens,
+                        },
                         sort_keys=True,
                     )
                 )
@@ -466,6 +567,58 @@ def main(argv: list[str] | None = None) -> int:
                         sort_keys=True,
                     )
                 )
+            elif args.action == "tools" and args.tools_action == "list":
+                runner = NewsResearchAgent(path).runner()
+                print(
+                    json.dumps(
+                        {
+                            "agent_id": "news-research",
+                            "read_only": not runner.policy.allows_mutation,
+                            "tools": [
+                                {
+                                    "name": spec.name,
+                                    "summary": spec.summary,
+                                    "mutating": spec.mutating,
+                                    "arguments": [a.name for a in spec.arguments],
+                                }
+                                for spec in runner.permitted_specs()
+                            ],
+                        },
+                        sort_keys=True,
+                    )
+                )
+            elif args.action == "tools" and args.tools_action == "run":
+                try:
+                    tool_args = json.loads(args.args)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("--args must be a JSON object.") from exc
+                if not isinstance(tool_args, dict):
+                    raise ValueError("--args must be a JSON object.")
+                config = SettingsStore(path).load()
+                agent = NewsResearchAgent(path, feed_url=config.news_feed_url)
+                result = agent.runner().run(args.name, tool_args)
+                print(json.dumps(result, sort_keys=True, default=str))
+            elif args.action == "analyze":
+                config = SettingsStore(path).load()
+                router = build_analysis_router(path, config)
+                service = (
+                    LLMService(SettingsStore(path))
+                    if config.model_route_configured
+                    else None
+                )
+                pipeline = AnalysisPipeline(
+                    router,
+                    debate=Debate(service) if service is not None else None,
+                    risk_analyst=RiskAnalyst(service) if service is not None else None,
+                )
+                analysis = pipeline.run(
+                    symbol=resolve_symbol(args.symbol),
+                    timeframe=args.timeframe,
+                    equity_paise=args.equity_paise,
+                    available_cash_paise=args.cash_paise,
+                    risk_basis_points=args.risk_bps,
+                )
+                print(json.dumps(analysis.to_dict(), sort_keys=True, default=str))
             else:
                 if not (WEB_ROOT / "index.html").is_file():
                     raise ValueError(

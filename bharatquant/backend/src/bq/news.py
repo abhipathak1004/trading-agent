@@ -70,61 +70,182 @@ _CATEGORY_RULES: tuple[tuple[NewsCategory, tuple[str, ...]], ...] = (
     (
         NewsCategory.GEOPOLITICAL,
         (
-            "war", "wars", "sanction", "sanctions", "tariff", "tariffs",
-            "geopolitical", "geopolitics", "border", "treaty", "election",
-            "elections", "coup", "conflict", "ceasefire", "nato", "opec",
-            "embargo", "missile", "missiles", "invasion", "diplomatic",
+            "war",
+            "wars",
+            "sanction",
+            "sanctions",
+            "tariff",
+            "tariffs",
+            "geopolitical",
+            "geopolitics",
+            "border",
+            "treaty",
+            "election",
+            "elections",
+            "coup",
+            "conflict",
+            "ceasefire",
+            "nato",
+            "opec",
+            "embargo",
+            "missile",
+            "missiles",
+            "invasion",
+            "diplomatic",
         ),
     ),
     (
         NewsCategory.RATES,
         (
-            "rbi", "repo", "interest", "monetary", "inflation", "cpi", "wpi",
-            "fed", "federal", "treasury", "yield", "yields", "bond", "bonds",
-            "rate", "rates", "policy",
+            "rbi",
+            "repo",
+            "interest",
+            "monetary",
+            "inflation",
+            "cpi",
+            "wpi",
+            "fed",
+            "federal",
+            "treasury",
+            "yield",
+            "yields",
+            "bond",
+            "bonds",
+            "rate",
+            "rates",
+            "policy",
         ),
     ),
     (
         NewsCategory.COMMODITY,
         (
-            "crude", "brent", "wti", "gold", "silver", "copper", "gas",
-            "commodity", "commodities", "bullion", "steel", "coal", "zinc",
-            "aluminium", "aluminum",
+            "crude",
+            "brent",
+            "wti",
+            "gold",
+            "silver",
+            "copper",
+            "gas",
+            "commodity",
+            "commodities",
+            "bullion",
+            "steel",
+            "coal",
+            "zinc",
+            "aluminium",
+            "aluminum",
         ),
     ),
     (
         NewsCategory.REGULATORY,
         (
-            "sebi", "irdai", "trai", "cci", "regulation", "regulations",
-            "regulator", "regulators", "penalty", "penalties", "probe",
-            "investigation", "circular", "compliance", "insider", "fraud",
+            "sebi",
+            "irdai",
+            "trai",
+            "cci",
+            "regulation",
+            "regulations",
+            "regulator",
+            "regulators",
+            "penalty",
+            "penalties",
+            "probe",
+            "investigation",
+            "circular",
+            "compliance",
+            "insider",
+            "fraud",
         ),
     ),
     (
         NewsCategory.CORPORATE,
         (
-            "results", "earnings", "profit", "revenue", "merger", "mergers",
-            "acquisition", "acquisitions", "acquires", "ipo", "qip", "buyback",
-            "dividend", "bonus", "rights", "stake", "board", "ceo", "appointment",
-            "resignation", "demerger", "order", "orders", "contract", "contracts",
-            "fda", "nod", "approval", "approves", "cleared", "patent", "partners",
-            "partnership", "joint", "venture", "stake", "stake sale", "q2", "q3",
-            "q4", "h1", "h2", "profit", "ebitda", "margin", "guidance",
+            "results",
+            "earnings",
+            "profit",
+            "revenue",
+            "merger",
+            "mergers",
+            "acquisition",
+            "acquisitions",
+            "acquires",
+            "ipo",
+            "qip",
+            "buyback",
+            "dividend",
+            "bonus",
+            "rights",
+            "stake",
+            "board",
+            "ceo",
+            "appointment",
+            "resignation",
+            "demerger",
+            "order",
+            "orders",
+            "contract",
+            "contracts",
+            "fda",
+            "nod",
+            "approval",
+            "approves",
+            "cleared",
+            "patent",
+            "partners",
+            "partnership",
+            "joint",
+            "venture",
+            "stake",
+            "stake sale",
+            "q2",
+            "q3",
+            "q4",
+            "h1",
+            "h2",
+            "profit",
+            "ebitda",
+            "margin",
+            "guidance",
         ),
     ),
     (
         NewsCategory.GLOBAL_MARKET,
         (
-            "nasdaq", "dow", "wall", "ftse", "nikkei", "hang", "global",
-            "asian", "european", "futures", "s&p",
+            "nasdaq",
+            "dow",
+            "wall",
+            "ftse",
+            "nikkei",
+            "hang",
+            "global",
+            "asian",
+            "european",
+            "futures",
+            "s&p",
         ),
     ),
     (
         NewsCategory.INDIA_MARKET,
         (
-            "nifty", "sensex", "bse", "nse", "fii", "dii", "midcap",
-            "smallcap", "rupee", "dalal", "equity", "equities", "stock",
-            "stocks", "mutual", "sip", "market", "markets", "index",
+            "nifty",
+            "sensex",
+            "bse",
+            "nse",
+            "fii",
+            "dii",
+            "midcap",
+            "smallcap",
+            "rupee",
+            "dalal",
+            "equity",
+            "equities",
+            "stock",
+            "stocks",
+            "mutual",
+            "sip",
+            "market",
+            "markets",
+            "index",
         ),
     ),
 )
@@ -132,7 +253,9 @@ _CATEGORY_RULES: tuple[tuple[NewsCategory, tuple[str, ...]], ...] = (
 _CATEGORY_PATTERNS: tuple[tuple[NewsCategory, re.Pattern[str]], ...] = tuple(
     (
         category,
-        re.compile(r"(?<![a-z0-9])(?:" + "|".join(map(re.escape, keywords)) + r")(?![a-z0-9])"),
+        re.compile(
+            r"(?<![a-z0-9])(?:" + "|".join(map(re.escape, keywords)) + r")(?![a-z0-9])"
+        ),
     )
     for category, keywords in _CATEGORY_RULES
 )
@@ -141,15 +264,43 @@ _CATEGORY_PATTERNS: tuple[tuple[NewsCategory, re.Pattern[str]], ...] = tuple(
 # Deliberately narrow: everyday business news ("wins contract", "order win") is
 # not structural, and remembering it would drown the signal.
 _LONG_TERM_MARKERS: tuple[str, ...] = (
-    "policy", "rate", "rates", "sanction", "sanctions", "tariff", "tariffs",
-    "war", "treaty", "reform", "reforms", "budget", "stimulus", "recession",
-    "default", "downgrade", "downgrades", "upgrade", "upgrades", "regulation",
-    "ban", "bans", "investigation", "fraud", "merger", "mergers",
-    "acquisition", "acquisitions", "structural", "bailout", "moratorium",
+    "policy",
+    "rate",
+    "rates",
+    "sanction",
+    "sanctions",
+    "tariff",
+    "tariffs",
+    "war",
+    "treaty",
+    "reform",
+    "reforms",
+    "budget",
+    "stimulus",
+    "recession",
+    "default",
+    "downgrade",
+    "downgrades",
+    "upgrade",
+    "upgrades",
+    "regulation",
+    "ban",
+    "bans",
+    "investigation",
+    "fraud",
+    "merger",
+    "mergers",
+    "acquisition",
+    "acquisitions",
+    "structural",
+    "bailout",
+    "moratorium",
 )
 
 _LONG_TERM_PATTERN = re.compile(
-    r"(?<![a-z0-9])(?:" + "|".join(map(re.escape, _LONG_TERM_MARKERS)) + r")(?![a-z0-9])"
+    r"(?<![a-z0-9])(?:"
+    + "|".join(map(re.escape, _LONG_TERM_MARKERS))
+    + r")(?![a-z0-9])"
 )
 
 # Categories whose events are structural by definition: a geopolitical or
@@ -165,8 +316,17 @@ _LONG_TERM_CATEGORIES = frozenset(
 
 # Rate/policy headline words that turn a routine RATES item into a structural one.
 _STRUCTURAL_RATE_MARKERS: tuple[str, ...] = (
-    "repo", "policy rate", "monetary policy", "rate cut", "rate hike",
-    "hikes", "cuts", "inflation", "cpi", "stimulus", "recession",
+    "repo",
+    "policy rate",
+    "monetary policy",
+    "rate cut",
+    "rate hike",
+    "hikes",
+    "cuts",
+    "inflation",
+    "cpi",
+    "stimulus",
+    "recession",
     "quantitative",
 )
 
@@ -286,9 +446,7 @@ def classify(title: str, summary: str) -> tuple[NewsCategory, bool]:
         return category, True
     if category is NewsCategory.RATES:
         # Routine rate flow stays short-term; structural policy moves persist.
-        return category, bool(
-            _STRUCTURAL_RATE_PATTERN.search(haystack)
-        )
+        return category, bool(_STRUCTURAL_RATE_PATTERN.search(haystack))
     return category, bool(_LONG_TERM_PATTERN.search(haystack))
 
 
@@ -330,9 +488,7 @@ def parse_feed(
         published_text = _text(item, "pubDate")
         try:
             published = (
-                parsedate_to_datetime(published_text)
-                if published_text
-                else ingested_at
+                parsedate_to_datetime(published_text) if published_text else ingested_at
             )
         except (TypeError, ValueError):
             published = ingested_at
@@ -517,7 +673,11 @@ class NewsStore:
         limit: int = 50,
         long_term_only: bool = False,
     ) -> tuple[NewsItem, ...]:
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 500
+        ):
             raise NewsError("News limit must be between 1 and 500.")
         query = (
             "SELECT news_id, source_id, url, title, summary, category, "
@@ -560,7 +720,11 @@ class NewsStore:
             raise NewsError("Invalid agent identifier.")
         if not isinstance(kind, MemoryKind):
             raise NewsError("Invalid memory kind.")
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 500
+        ):
             raise NewsError("Memory limit must be between 1 and 500.")
         pivot = _timestamp(as_of) if as_of is not None else _timestamp(self.clock.now())
         with closing(self._connect()) as connection:
@@ -582,7 +746,9 @@ class NewsStore:
                 title=str(row[5]),
                 body=str(row[6]),
                 known_at=_parse_timestamp(str(row[7])),
-                expires_at=_parse_timestamp(str(row[8])) if row[8] is not None else None,
+                expires_at=_parse_timestamp(str(row[8]))
+                if row[8] is not None
+                else None,
                 hit_count=int(row[9]),
             )
             for row in rows

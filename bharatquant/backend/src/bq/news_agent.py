@@ -22,6 +22,10 @@ from bq.news import (
     NewsStore,
     parse_feed,
 )
+from bq.tools.base import Tool
+from bq.tools.control import ResponseTool, UnknownTool
+from bq.tools.news import news_tools
+from bq.tools.registry import AgentToolPolicy, ToolRegistry, ToolRunner
 
 AGENT_ID = "news-research"
 
@@ -92,3 +96,29 @@ class NewsResearchAgent:
 
     def categories(self) -> tuple[NewsCategory, ...]:
         return tuple(NewsCategory)
+
+    def tools(self) -> tuple[Tool, ...]:
+        """The toolset this agent exposes, ready to register.
+
+        The tools wrap the same store the agent writes through, so an agent
+        loop and the CLI share one source of truth. See ``bq.tools.news``.
+        """
+        return news_tools(self.path, feed_url=self.feed_url, clock=self.clock)
+
+    def tool_registry(self) -> ToolRegistry:
+        """A registry containing this agent's tools plus loop-control tools."""
+        registry = ToolRegistry(self.tools())
+        registry.register(ResponseTool())
+        registry.register(UnknownTool(registry))
+        return registry
+
+    def runner(self, *, read_only: bool = False) -> ToolRunner:
+        """A tool runner scoped to this agent.
+
+        Read-only by default would hide ``news_ingest``; the research agent is
+        allowed to write, so mutation is on unless a caller opts out.
+        """
+        return ToolRunner(
+            self.tool_registry(),
+            AgentToolPolicy(profile=AGENT_ID, read_only=read_only),
+        )
