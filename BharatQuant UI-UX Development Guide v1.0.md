@@ -769,8 +769,10 @@ foundation status:
   owner setup/sign-in states, paper-only mode banner and responsive data cards.
 - Authenticated current capabilities are shown for data imports, paper
   accounts, schedules, snapshot freshness, calendar coverage and model usage.
-- Trade, Agent Lab and Settings are not implemented as working pages and are
-  clearly marked as unavailable.
+- The old welcome-page-only presentation is not the current UI.
+- Trade, Agent Lab and Settings routes are not implemented and are not linked
+  as working pages. This keeps the guide's navigation from implying unavailable
+  behavior.
 - Settings draft/preview/history, command palette, Agent Lab, replay/evals,
   experiments, feedback and full route navigation remain future work.
 - Any implementation update must preserve honest stale/error/degraded states
