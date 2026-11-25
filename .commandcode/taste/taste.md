@@ -1,0 +1,1 @@
+- Uses `just` as the task runner; wants a single `just run` command that chains the full pipeline (build → init → doctor → serve) so the app comes up with one invocation. Confidence: 0.6

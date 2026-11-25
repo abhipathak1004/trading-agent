@@ -1,12 +1,12 @@
 # BharatQuant Agents: Multi-Agent AI Trading & Investing System (Indian Equities)
 
-## Implementation Plan v3.11: ContextBuilder for Agent Context, India Agent Repos Reused, Personal-Use Licence Mode, Open-Source Reuse Map, React + TypeScript, MacBook Pro M5 Pro, Task-Class LLM Routing, High-Conviction Suggestions
+## Implementation Plan v3.12: Expanded Reuse (gs-quant, awesome-agentic-trading), Shadow Trades & Regime Weights, the /learn Docs Module, ContextBuilder Memory Decay, Personal-Use Licence Mode, React + TypeScript, MacBook Pro M5 Pro, Task-Class LLM Routing, High-Conviction Suggestions
 
 | Field | Value |
 |---|---|
 | Owner | Abhishek Pathak |
-| Version | 3.11 (plan only; supersedes v3.10 and earlier) |
-| Date | 21 Nov 2026 |
+| Version | 3.12 (plan only; supersedes v3.11 and earlier) |
+| Date | 25 Nov 2026 |
 | Scope | Paper trading of Indian equities (all NSE stocks above a minimum market cap that you set in the UI) |
 | LLMs | **Reasoning → DeepSeek and Gemini. Small tasks → local models (MLX on the M5 Pro)** to cut token use. Every call's input and output tokens are tracked; there is no spending cap |
 | UI | **React 19 + TypeScript single-page app (dark theme)**, confirmed |
@@ -18,7 +18,26 @@
 
 ## 0. What Changed
 
-### v3.11 (this version): Agent Context Management
+### v3.12 (this version): Expanded Reuse, Shadow Trades, and the /learn Module
+
+| # | Change | Where |
+|---|---|---|
+| N1 | **`gs-quant` (Goldman Sachs, Apache-2.0) added** as **R2 selective port + R3 architecture reference, never a runtime dependency**. Offline econometric/statistical formulas (rolling beta, volatility estimators, z-scores, drawdown/Sharpe conventions) are ported into `bq/compute/stats.py`; the `Strategy → Trigger → Action` backtest grammar informs our YAML DSL; `.price()`/`.calc()`/Marquee/GS calendars are explicitly out of scope | [Section 4.3.5](#435-backtesting-portfolio-and-statistics), [Section 4.3.11](#4311-cross-cutting-architecture-and-quant-references-v312), [Section 13.1](#131-strategy-types), [ADR-034](#b-adrs-to-write-in-phase-0) |
+| N2 | **`awesome-agentic-trading` adopted as an R3 taxonomy reference.** Its **Data → Agent → Execution → Harness → Application** five-layer model makes **Harness** (evals, PIT enforcement, shadow tracking, Brier calibration, replay parity, ContextBuilder manifests) a **first-class architectural pillar** | [Section 4.3.11](#4311-cross-cutting-architecture-and-quant-references-v312), [Section 5.4](#54-architectural-layers-data--agent--execution--harness--application), [Section 21](#21-repository-structure) |
+| N3 | **Shadow Trades (counterfactual learning)** auto-record **every** HIGH / VERY HIGH (and STRONG BUY) candidate as a virtual trade whether executed or not, backfill 1/3/5/10-day P&L, and compute a **Filter Verdict** (`HELPS` / `NEUTRAL` / `HURTS`) comparing skipped vs. tracked win rates | [Section 12.3.6](#1236-proving-that-strictness-works), [Section 16.5](#165-accuracy-metrics) |
+| N4 | **Conditional Regime Weights (3-layer merge)** for the LLM-free pre-ranker: `DEFAULT → base_tuned → regime_override[BULL|BEAR|SIDEWAYS|HIGH_VOL]`, gated by a minimum sample count per regime and a Wilson lower-bound threshold so regime-dependent signals switch weights only when the evidence supports it | [Section 12.2](#122-opportunity-engine), [Section 12.3.4](#1234-confidence-policy-configurable-from-the-ui) |
+| N5 | **BM25 memory pruning + age-based decay + frecency** in ContextBuilder Agent Memory: per-entry `created_at` / `last_accessed` / `hit_count`, decay (1.0× ≤ 30 d, linear to 0.20× at 365 d) plus a 1.25× frecency bonus for items accessed in the last 7 d, with a `/memory-admin` **dry-run and manual prune** UI | [Section 10.9.6](#1096-agent-memory) |
+| N6 | **Verdict calibration and Brier gap verdicts.** Daily **Market Stance** (`GREEN` / `YELLOW` / `RED`) is backfilled against 1/3/5-day forward NIFTY returns with a neutral dead-band; the reliability diagram gains explicit **overconfident / underconfident / well-calibrated** gap verdicts at a ±5% threshold | [Section 12.3.6](#1236-proving-that-strictness-works), [Section 16.5](#165-accuracy-metrics) |
+| N7 | **VIX-adjusted position-sizing curve** adopted as a configurable default: 100% normal → **85%** at India VIX 15–20 → **65%** at 20–25 → **50%** above 25 | [Section 18.2](#182-budget-manager), [Section 18.3](#183-risk-manager) |
+| N8 | **SEBI static-IPv4 enforcement (from April 2026).** Broker HTTP clients force **IPv4** to avoid IPv6-mismatch rejections against the static-IP API rule | [Section 25](#25-regulatory-notes), [Section 26](#26-delivery-roadmap) |
+| N9 | **Free dual-broker Phase 7 pattern:** **Fyers** (free live quotes/WebSocket) for data plus **Zerodha Personal** (free order execution) behind one `BrokerAdapter` | [Section 26](#26-delivery-roadmap), [Section 25](#25-regulatory-notes) |
+| N10 | **TradingAgents updated to v1.0.x deltas:** TypeScript research terminal (still **R3 design/prompt reference only**); **Markdown-defined specialist skills** (`Companies`, `Valuation`, `Markets`, `Risk`) under `config/llm/skills/`; a **Plan-Before-Execute** toggle for expensive runs; and **inline source attribution** (`src_id` + numbered sources) in Markdown/PDF exports | [Section 4.3.1](#431-agent-frameworks-r3-design-and-prompts), [Section 16.8](#168-manual-ai-strategy-review-review-my-strategy) |
+| N11 | **AI-trader sequential entry-quality gates** (composite-score threshold, previous-bar continuation, micro-momentum confirmation, short-window re-pricing) and **score-tiered sizing fallback** over raw Kelly when samples are small | [Section 12.3.2](#1232-evidence-families-chart-volume-and-more), [Section 12.3.3](#1233-from-evidence-to-confidence), [Section 12.3.4](#1234-confidence-policy-configurable-from-the-ui) |
+| N12 | **Vibe Trading UX/interop patterns:** contextual action chips on dashboard cards and an optional HTTP skill endpoint (`/.well-known/openclaw.json`, `POST /skills/<name>`) for local agent integration | [Section 7.4](#74-pages), [Section 8.1](#81-rest-fastapi-apiv1) |
+| N13 | **In-app `/learn` module** (page #22): versioned Markdown docs+academy with FTS5 search, KaTeX/Mermaid rendering, contextual "Learn why" deep-links, an optional "Explain with my data" button, and a **docs-as-code CI guardrail** so every feature/metric has a doc | [Section 7.7](#77-the-learn-module-feature-docs--trading--quant-academy), [Section 19](#19-storage-and-data-model), [Section 23](#23-testing-and-benchmarking), [ADR-035](#b-adrs-to-write-in-phase-0) |
+| N14 | New tables (`shadow_trades`, `regime_weight_versions`, `learn_docs_fts`, `learn_docs`, `learn_progress`), module `bq/learn/`, `docs/learn/`, and tests | [Section 19](#19-storage-and-data-model), [Section 21](#21-repository-structure), [Section 23](#23-testing-and-benchmarking) |
+
+### v3.11: Agent Context Management
 
 | # | Change | Where |
 |---|---|---|
@@ -360,6 +379,8 @@ v3.9 replaces the v3.8 survey with a **component-by-component reuse map**. Each 
 | Indicators | **TA-Lib** official wheels (R1), **polars_ta** (R1); polars-ta-lib (evaluated) | Incremental live indicators (Numba) | 150+ indicators and candlestick patterns without a C toolchain |
 | Chart structure and patterns | **smart-money-concepts** (R2 port), **py-market-profile** (R2 port) | Pattern library, multi-timeframe alignment | Swing, BOS/CHoCH and volume-profile logic ported, not invented |
 | Backtest analytics | **QuantStats** (R1) | Trade-level stats, deflated Sharpe, parity tests | HTML tear sheets and Monte Carlo for free |
+| Offline stats and backtest DSL | **gs-quant** (R2 selective port + R3 reference, **never a runtime dependency**) | Own Numba/Polars stats; own YAML DSL | Ported econometric formulas (rolling beta, vol estimators, z-scores, drawdown/Sharpe conventions) plus a proven `Trigger → Action` grammar |
+| Architecture taxonomy | **awesome-agentic-trading** (R3, reference only) | Harness pillar (evals, PIT, shadow tracking, calibration, replay) | Names the five layers and keeps the **Harness** first-class |
 | Sizing, allocation, CV | **skfolio** (R1), **scikit-learn** (R1) | Budget Manager rules, confidence model | Risk parity/HRP, walk-forward CV, isotonic calibration, L2 logistic |
 | News pipeline | **feedparser**, **trafilatura**, **datasketch**, **pyahocorasick** (R1) | Entity alias builder, signal schema | Extraction, dedupe and entity matching are off the shelf |
 | PDFs | **PyMuPDF** (R1, v3.10); **pypdfium2**, **pdfplumber** fallback; Docling optional | Page index for citations | Best extraction quality |
@@ -373,12 +394,18 @@ v3.9 replaces the v3.8 survey with a **component-by-component reuse map**. Each 
 
 | Project | Status (Nov 2026) | Licence | What we take | What we don't |
 |---|---|---|---|---|
-| **TauricResearch/TradingAgents** | Very active; **v0.7.1**. Recent releases added **parallel analysts**, **a separate provider per model tier** (so managers and analysts run on different models), DeepSeek support, and **point-in-time fixes**: backtests see only data published by each analysis date, and a fix for model dates that could read filings made after the run date | Apache-2.0 | **Adapt the analyst, bull/bear researcher, judge and risk-team prompts** into our prompt registry (with attribution). Mirror their PIT test cases (a filing dated after the decision date must be invisible) in our test suite. Their tiered provider design confirms our task-class routing | LangGraph runtime, US data vendors, their decision format |
+| **TauricResearch/TradingAgents** | Very active. **v0.7.1** added **parallel analysts**, **a separate provider per model tier**, DeepSeek support, and **point-in-time fixes**. **v3.12: re-checked at v1.0.x**, where the project became a **TypeScript research terminal** backed by the Tauric API (filings/news) — a UI/architecture shift, still **research-only** (no live trading) | Apache-2.0 | **Adapt the analyst, bull/bear researcher, judge and risk-team prompts** into our prompt registry (with attribution). Mirror their PIT test cases in our test suite. Their tiered provider design confirms our task-class routing. **v3.12 deltas:** adopt their **Markdown-defined specialist skills** (`Companies`, `Valuation`, `Markets`, `Risk`) as declarative research/dossier workflows under `config/llm/skills/`; add an optional **Plan-Before-Execute** mode for expensive runs; reinforce **inline source attribution** (`src_id` + numbered sources) in Markdown/PDF exports | LangGraph runtime, US data vendors, their decision format; **the TypeScript terminal and the Tauric API are not code we reuse (R3 design/prompt reference only)** |
 | **virattt/ai-hedge-fund** | Very active; v2.7.x. Now ships **paper-trading funds with a ledger, an approval step that shows the exact decision before it executes, a kill switch**, and charges spread and commission on every fill | MIT | **Persona prompts** (Graham, Buffett, contrarian and others) for our optional persona lenses. The approval preview and kill-switch UX as references for `/approvals` and the Command Center | US data provider, its backtester |
 | **AI4Finance-Foundation/FinRobot** | Active. Three generations; **V2 (`finrobot_desktop`) is the production one, built on PydanticAI + FastAPI + React/Tauri**. V1 (`finrobot_equity`) turns a ticker into an HTML/PDF equity-research report | Apache-2.0 | **Equity-research report structure and section prompts** for our value dossier ([Section 14](#14-value-investing-module)). Its stated principle (models reason, software computes, agents orchestrate, systems verify) is our ADR-009 | PydanticAI as a runtime (our DAG runner stays), its data providers |
 | **Anishg198/tradingagents-india** | Small project; licence not stated | — | Ideas only: checklist of India signals (FII/DII, promoter pledge, T+1) | Any code or text |
 
 **Decision.** Keep our own ~300-line DAG runner. **Seed 60–70% of agent prompts** from TradingAgents and ai-hedge-fund instead of writing them from scratch, then adapt them for India, our evidence families and our JSON schemas. Each adapted prompt records `source`, `source_version` and `licence`.
+
+**v3.12 additions from TradingAgents (R3, design/prompt reference only).**
+
+- **Markdown-defined specialist skills.** TradingAgents v1.0.x expresses its specialists as clean Markdown skill files. We adopt the same pattern for **declarative research and dossier workflows**: each skill is a Markdown file in `config/llm/skills/` (for example `companies.md`, `valuation.md`, `markets.md`, `risk.md`) with YAML frontmatter (`id`, `inputs`, `outputs`, `related_tasks`) and a `source:` field for provenance. The `ContextBuilder` loads the relevant skill file into the `reference` section ([Section 10.9.3](#1093-prompt-layout-fixed-section-order)), so a skill is data, not code, and can be versioned and promoted through evals like a prompt.
+- **Plan-Before-Execute (optional "Plan Mode").** For **expensive deep-research runs** (Value Dossier, AI Strategy Review), an optional toggle has the agent first propose a **research plan and an estimated token budget** for you to confirm, then execute. The plan is stored on the run row and shown before any spend. Off by default; enabled per run or per task in the routing UI.
+- **Inline source attribution.** Every figure in the Markdown and PDF exports carries an **inline `src_id` tag** and a **numbered sources list** at the end of each section, reusing the `src_id` scheme from [Section 10.9.3](#1093-prompt-layout-fixed-section-order). The export renderer refuses to emit a numeric figure that has no matching fact or cited source.
 
 #### 4.3.2 LLM Layer Helpers
 
@@ -424,6 +451,15 @@ v3.9 replaces the v3.8 survey with a **component-by-component reuse map**. Each 
 | **NautilusTrader** | **LGPL-3.0**; Python 3.13–3.15; macOS ARM64 supported | Still **not used** for v1: no Indian cash-equity venue model. Borrowed ideas unchanged |
 | **backtesting.py**, **backtrader** | AGPL-3.0 / GPL-3.0 (verify) | Not used |
 
+**gs-quant (Goldman Sachs, Apache-2.0, v2.2.x) — R2 selective port + R3 architecture reference, never a runtime dependency (v3.12).**
+
+| Aspect | Decision |
+|---|---|
+| **Explicit boundary** | **Live pricing (`.price()`, `.calc()`), the Marquee `Dataset` product, GS risk models and the exchange `GsCalendar` all require institutional Goldman Sachs Marquee credentials and are OUT OF SCOPE.** We never call them and never make them a runtime import |
+| **R2 selective port + dev golden reference** | Port selected **offline econometric/statistical formulas** from `gs_quant.timeseries` — rolling beta, volatility estimators, z-scores, drawdown and Sharpe conventions — into Polars/Numba in `bq/compute/stats.py`. Optionally depend on `gs_quant.timeseries` in a **dev-only test extra** to cross-check our ported values against the original (golden-value tests), the same pattern used for TA-Lib |
+| **R3 backtest DSL reference** | Adopt the declarative **`Strategy → Trigger (Periodic, Market, Date, Event) → Action (AddTrade, Hedge, Rebalance, ExitTrade)`** grammar from `gs_quant.backtests` to strengthen our YAML strategy DSL ([Section 13.1](#131-strategy-types)). Grammar only; no `gs_quant` runtime dependency |
+| **R3 testing and MCP reference** | Note its **`calc_cache` deterministic fixture-replay pattern** (record inputs/outputs, replay offline) as a reference for our own replay fixtures, and its experimental **FastMCP server** (`gs_quant/mcp/`) as a reference if we later expose local tools over MCP |
+
 **Deflated Sharpe ratio** and **probability of backtest overfitting** are short formulas; they are written in our `compute/stats.py` (~60 lines) with tests against published examples, rather than adding a dependency.
 
 #### 4.3.6 News and Text Processing
@@ -465,6 +501,10 @@ Four India-focused repositories were reviewed. All are personal or small-team pr
 | Support/resistance and pivot-point calculator; **cyclical patterns** (monthly seasonality, day-of-week, sector rotation) | Pivots → family 1. Seasonality → a **new optional feature** for the confidence model, evaluated walk-forward (dropped if it adds no skill) | R2 |
 | Strategy and signal performance trackers; 60-day historical recommender replay; "learning insights" on your own trades | Already covered by our scorecard and evening report; borrow their chart layouts | R3 |
 | "Today" page: session-aware greeting, auto-loaded top picks, 3×3 sector heatmap, a "Next step" card on every screen | Adopt in the Command Center ([Section 7.4](#74-pages)) | R3 (UX) |
+| **Shadow Trades (counterfactual learning)** — auto-records every `HIGH` / `VERY HIGH` (and `STRONG BUY`) candidate as a virtual shadow trade regardless of execution, backfills 1/3/5/10-day P&L, and derives a **Filter Verdict** (`HELPS` / `NEUTRAL` / `HURTS`) comparing skipped vs. tracked win rates | **Adopt wholesale.** Feeds the Evening Report and Opportunities Scorecard as the counterfactual baseline ([Section 12.3.6](#1236-proving-that-strictness-works), [Section 16.5](#165-accuracy-metrics)); new `shadow_trades` table ([Section 19](#19-storage-and-data-model)) | R2 |
+| **Conditional Regime Weights (3-layer merge)** — resolves pre-ranker weights as `DEFAULT → base_tuned → regime_override[BULL\|BEAR\|SIDEWAYS\|HIGH_VOL]`, gated by a minimum sample count per regime and a Wilson lower-bound threshold | **Adopt** for our LLM-free pre-ranker ([Section 12.2](#122-opportunity-engine)); impossible to keep weights static when the deterministic pre-ranker switches regimes at runtime | R2 |
+| **BM25 memory pruning + age-based decay + frecency** — per-entry `created_at` / `last_accessed` / `hit_count`, age decay plus a recent-access bonus, and a prune tool | **Adopt** in `ContextBuilder` Agent Memory ([Section 10.9.6](#1096-agent-memory)); add a `/memory-admin` dry-run and manual-prune UI | R2 |
+| **Verdict calibration and Brier gap verdicts** — backfills forward NIFTY returns against each daily verdict and labels the reliability diagram | **Adopt:** backfill 1/3/5-day forward NIFTY returns against the daily **Market Stance** (`GREEN`/`YELLOW`/`RED`) with a neutral dead-band, and add explicit **overconfident / underconfident / well-calibrated** gap verdicts (±5% threshold) ([Section 12.3.6](#1236-proving-that-strictness-works), [Section 16.5](#165-accuracy-metrics)) | R2 |
 
 **B. hopit-ai/india-trade-cli "Vibe Trading"** (MIT). CLI, macOS app and web UI; LLM-agnostic (Gemini, Ollama, OpenAI-compatible); Zerodha/Fyers live trading; Python 3.13 supported.
 
@@ -479,6 +519,10 @@ Four India-focused repositories were reviewed. All are personal or small-team pr
 | **Telegram bot** | Reuse for alerts and for the morning/evening report summary ([Section 22](#22-security-and-observability)) | R2 |
 | Zerodha and Fyers broker adapters, live quotes | **Phase 7 alternative** to OpenAlgo: port the adapters behind `BrokerAdapter` | R2 |
 | Personas, Pine Script skills | Persona prompts merged with ai-hedge-fund's; Pine Script not needed | R3 |
+| **VIX-adjusted position-sizing curve** — its concrete default step-down of size as India VIX rises | **Adopt as a configurable default** in the Budget/Risk Manager: 100% normal → **85%** at VIX 15–20 → **65%** at 20–25 → **50%** above 25 ([Section 18.2](#182-budget-manager), [Section 18.3](#183-risk-manager)) | R2 |
+| **SEBI April 2026 static-IPv4 enforcement** — its broker clients force IPv4 to satisfy SEBI's static-IP API rule | **Adopt** in Phase 7 broker clients: an explicit **IPv4-forcing** option so a dual-stack host does not present an IPv6 source that mismatches the registered static IP ([Section 25](#25-regulatory-notes)) | R2 |
+| **Free dual-broker Phase 7 pattern** — free live quotes/WebSocket from one broker, free order execution from another | **Document** as a concrete low-cost Phase 7 architecture behind one `BrokerAdapter`: **Fyers** (free live quotes/WebSocket) + **Zerodha Personal** (free order execution) ([Section 26](#26-delivery-roadmap)) | R3 |
+| **UX and interop patterns** — contextual action chips on dashboard cards; an HTTP skill endpoint (`/.well-known/openclaw.json`, `POST /skills/<name>`) for local agent tooling | Adopt the **action chips** on Command Center and detail cards ([Section 7.4](#74-pages)); evaluate the **HTTP skill-endpoint** pattern as an optional, local-only integration surface ([Section 8.1](#81-rest-fastapi-apiv1)) | R3 |
 
 **C. Bhala-Srinivash/nse-trading-skills** (licence file present). Nine prompt-only Claude Code skills for NSE/BSE: technical analysis, position sizing, stop-loss strategies, trailing stops, risk-reward, multi-timeframe analysis, RSI divergence, Fibonacci, and an orchestrator.
 
@@ -502,11 +546,26 @@ These are **written frameworks, not code**. Our rule is that LLMs never compute 
 | **Feature-engineering catalogue** (80 bar features) | Candidate features for the confidence model; each must earn its place in walk-forward tests | R2 |
 | **"Rule signal, then ML probability filter"** with per-strategy models | Matches our design. Adds an **optional gradient-boosted challenger** (XGBoost/LightGBM) beside the L2 logistic model; promoted only if its out-of-sample Brier score is better and calibration holds | R2 |
 | Kelly sizing, dynamic SL/target, trailing stops, regime gating | Cross-check of our Budget/Risk code | R3 |
+| **Sequential entry-quality gates** — a 4-gate intraday entry check: (1) composite score above a threshold, (2) previous-bar continuation in the trade direction, (3) micro-momentum confirmation, (4) a short-window price-repricing check to avoid "catching a falling knife" | **Adopt** as gates on intraday setup validation, evaluated walk-forward like any other filter, then folded into the evidence families ([Section 12.3.2](#1232-evidence-families-chart-volume-and-more), [Section 12.3.3](#1233-from-evidence-to-confidence)) | R2 |
+| **Score-tiered sizing fallback** — position size from conviction tiers rather than raw Kelly | **Adopt** as the default whenever a strategy has small sample sizes, aligning with `sizing_by_level` ([Section 12.3.4](#1234-confidence-policy-configurable-from-the-ui), [Section 18.2](#182-budget-manager)) | R2 |
 | Tick-level replay through the live pipeline | Confirms our replay-parity design; a template if a paid tick feed is added (Phase 7) | R3 |
 | Q-learning exit agent | **Not adopted**: high overfitting risk with our sample sizes | — |
 | Options models, TrueData, TimescaleDB | Not used (F&O is a non-goal; storage stays SQLite + Parquet) | — |
 
 **Not reviewed:** the Medium article "9 GitHub repositories every Indian algo trader should know about". I didn't open the Freedium link because Freedium gets around Medium's paywall, and a web search didn't return the original article. Once you have the list of nine repositories, add them to this section.
+
+#### 4.3.11 Cross-Cutting Architecture and Quant References (v3.12)
+
+Two references span the whole system rather than one component. Neither is a runtime dependency.
+
+**A. orangejustin/awesome-agentic-trading** (reference / awesome list — **R3: reference and taxonomy only**, no runnable code taken).
+
+| What it is | How we use it |
+|---|---|
+| A curated map of agentic-trading projects, MCP servers, evaluation harnesses and research papers | An **ongoing discovery map**: when we need a new data source, eval harness or research technique, we start here and then record the choice in this section |
+| Its **five-layer architectural taxonomy: Data → Agent → Execution → Harness → Application** | **Adopt the taxonomy as our own vocabulary.** Most critically it names **Harness** as a first-class layer: evals, PIT enforcement, shadow tracking, Brier calibration, replay parity and ContextBuilder manifests are the harness, not an afterthought. This becomes an explicit architectural pillar ([Section 5.4](#54-architectural-layers-data--agent--execution--harness--application)) and is reflected in the repository layout ([Section 21](#21-repository-structure)) |
+
+**B. goldmansachs/gs-quant** (Apache-2.0, v2.2.x — **R2 selective port + R3 architecture reference; NOT a runtime dependency**). Full boundary and port plan in [Section 4.3.5](#435-backtesting-portfolio-and-statistics); recorded as [ADR-034](#b-adrs-to-write-in-phase-0). The short form: offline `gs_quant.timeseries` formulas are ported into `bq/compute/stats.py` with dev-only golden-value cross-checks; the `gs_quant.backtests` grammar informs the YAML DSL; live pricing, Marquee, GS risk models and `GsCalendar` are out of scope.
 
 #### 4.3.9 Unchanged from v3.8
 
@@ -547,6 +606,21 @@ Lightweight Charts (Apache-2.0), uPlot, ECharts, TanStack Query/Table/Virtual, s
 | PDFs | PyMuPDF primary; pypdfium2/pdfplumber fallback |
 | Alerts | Telegram bot ported from Vibe Trading |
 | Live brokers (Phase 7) | OpenAlgo **or** ported Zerodha/Fyers adapters from Vibe Trading (decide in Phase 7) |
+
+**v3.12 additions to the decisions:**
+
+| Area | v3.12 decision |
+|---|---|
+| Offline stats | **Port `gs-quant`'s offline econometric formulas (R2)** into `bq/compute/stats.py`; cross-check with a dev-only `gs_quant.timeseries` extra. Live `gs-quant` (pricing, Marquee, GS calendars) is explicitly out of scope ([ADR-034](#b-adrs-to-write-in-phase-0)) |
+| Backtest DSL | **Adopt the `gs-quant.backtests` `Strategy → Trigger → Action` grammar (R3)** as the shape of our YAML DSL ([Section 13.1](#131-strategy-types)) |
+| Architecture vocabulary | **Adopt the awesome-agentic-trading five-layer taxonomy (R3)**, promoting **Harness** to a first-class pillar ([Section 5.4](#54-architectural-layers-data--agent--execution--harness--application)) |
+| Learning from rejected candidates | **Shadow Trades** record every HIGH/VERY HIGH candidate as a virtual trade and publish a **Filter Verdict** over skipped vs. tracked win rates ([Section 12.3.6](#1236-proving-that-strictness-works)) |
+| Pre-ranker weights | **Conditional Regime Weights** with a 3-layer merge and sample/Wilson gates ([Section 12.2](#122-opportunity-engine)) |
+| Memory hygiene | **BM25 prune + age decay + frecency** in Agent Memory, with a `/memory-admin` dry-run UI ([Section 10.9.6](#1096-agent-memory)) |
+| Position sizing | **VIX-adjusted step-down** as a configurable default; **score-tiered sizing** over raw Kelly when samples are small ([Section 18.2](#182-budget-manager)) |
+| Research workflows | **Markdown-defined skills**, **Plan-Before-Execute**, and **inline `src_id` attribution** (from TradingAgents) ([Section 4.3.1](#431-agent-frameworks-r3-design-and-prompts)) |
+| Broker clients | **Force IPv4** for SEBI static-IP compliance; document the **Fyers + Zerodha free dual-broker** Phase 7 pattern ([Section 25](#25-regulatory-notes)) |
+| In-app docs | **`/learn` module** with a **docs-as-code CI guardrail** ([Section 7.7](#77-the-learn-module-feature-docs--trading--quant-academy), [ADR-035](#b-adrs-to-write-in-phase-0)) |
 
 ### 4.5 Enhancement Backlog (Contribute Back Where Sensible)
 
@@ -657,6 +731,20 @@ bq.api         ← all (thin)
 ```
 
 These rules are enforced in CI with `import-linter`. In particular, **`risk` and `broker` must never import `llm`.**
+
+### 5.4 Architectural Layers: Data → Agent → Execution → Harness → Application
+
+v3.12 adopts the **five-layer taxonomy** (from `awesome-agentic-trading`, R3) as the project's shared vocabulary. It names **Harness** as a first-class layer so it is designed in, not bolted on.
+
+| Layer | What lives here | Where in the repo |
+|---|---|---|
+| **1. Data** | Providers, router, universe, tiers, quality, point-in-time stores, Parquet/DuckDB | `bq/data/`, `bq/fundamentals/`, `bq/research/` |
+| **2. Agent** | DAG runner, agents, personas, task-class LLM routing, **ContextBuilder**, prompts and Markdown skills, token ledger | `bq/agents/`, `bq/llm/`, `config/llm/` |
+| **3. Execution** | Paper engine (OMS, fills, positions, ledger, charges, tax lots), **risk / budget / approval**, broker adapter, decisions | `bq/broker/`, `bq/risk/`, `bq/opportunities/` |
+| **4. Harness** | **Evals, point-in-time enforcement, shadow tracking, Brier calibration, replay parity, ContextBuilder manifests, the `/learn` docs guardrail** | `evals/`, `benchmarks/`, `tests/`, `bq/compute/`, `bq/learn/`, `docs/learn/` |
+| **5. Application** | React SPA, API/WebSocket, scheduler, CLI, reports, the report archive and `/learn` reader | `web/`, `bq/api/`, `bq/cli/` |
+
+**Why this matters.** The harness is what makes the other layers trustworthy: it is where PIT is enforced ([Section 10.9.5](#1095-context-providers)), where every candidate (executed or not) is shadow-tracked ([Section 12.3.6](#1236-proving-that-strictness-works)), where calibration and Brier scores are computed ([Section 16.5](#165-accuracy-metrics)), and where replays must reproduce identical outputs ([Section 23](#23-testing-and-benchmarking)). Treating it as a named layer keeps these obligations from being quietly dropped.
 
 ---
 
@@ -852,7 +940,10 @@ Sizing uses *fast cores* (perflevel0) and *total high-performance cores* (all le
 | 18 | `/audit/:id` | Trade Explainer: full chain from fill back to sources, prompts and tokens |
 | 20 | `/schedules` | **Every job and runtime window** from the catalogue:<br>• triggers (time, interval, session event, dependency) with a next-5-runs preview<br>• catch-up, dependencies, HEAVY/LIGHT class, parameters, model overrides<br>• validation, Run now / Dry run, history with ON_TIME, LATE, MISSED or FAILED status, tokens in/out<br>• YAML export/import |
 | 21 | `/reports` (+ **Morning report settings**: versioned scope profiles, token estimate, preview) | Morning and evening reports and strategy reviews: calendar heat-map coloured by accuracy, full-text search, morning-vs-evening side-by-side view, accuracy and calibration trends, prediction table, export (MD, PDF, CSV) |
+| 22 | `/learn` (+ `/learn/:slug`) | **In-app feature docs and academy** ([Section 7.7](#77-the-learn-module-feature-docs--trading--quant-academy)): two pillars (BharatQuant feature documentation; trading/quant/Indian-market academy), instant offline search over an FTS5 index, Markdown with KaTeX formulas and Mermaid diagrams, contextual "Learn why" deep-links from metrics and badges, an optional "Explain with my data" button (token-tracked, grounded to `src_id`), reading progress and bookmarks |
 | 19 | `/settings` | Horizons, sessions, calendar, charges and tax, notifications, users, theme, backup/restore, system resources |
+
+**v3.12 UX/interop patterns (from Vibe Trading, R3).** Dashboard and detail cards carry **contextual action chips** — for example, on an opportunity card: *Paper trade · Watch · Dossier · Backtest · Dismiss*; on a report: *Explain · Export*. The chips are keyboard-reachable and mirror the Command Palette actions. The same pattern is evaluated for an optional, **local-only** HTTP skill endpoint (`/.well-known/openclaw.json` + `POST /skills/<name>`) so a local agent tool could invoke a small set of read-mostly actions ([Section 8.1](#81-rest-fastapi-apiv1)). The endpoint is off by default and, if enabled, binds to loopback behind the same auth and origin checks as every other route.
 
 ### 7.5 Mac-Native Touches
 
@@ -869,6 +960,119 @@ Sizing uses *fast cores* (perflevel0) and *total high-performance cores* (all le
   - **checks `Origin` on WebSocket upgrades and state-changing requests**;
   - binds to the loopback interface only.
 - **Development:** Vite runs on port 5173 and proxies to the backend on port 8000.
+
+### 7.7 The `/learn` Module (Feature Docs + Trading & Quant Academy)
+
+`/learn` is a first-class, offline, in-app documentation and learning surface with **two pillars**. It is not marketing copy and it is not a wiki bolted on the side: it is the **living documentation of the running system** plus a **structured academy** that explains the trading and quantitative ideas the system uses.
+
+**Design goal: zero runtime bloat.** Content is plain Markdown files on disk, indexed into SQLite FTS5 at startup/migration. There is no docs service, no external fonts and no network call to read a page. The router lazy-loads each article, so the base app bundle does not grow with the number of docs.
+
+#### 7.7.1 Pillar A — BharatQuant Feature Docs (Living App Documentation)
+
+One page per user-visible feature, metric or badge, written to answer *what it is, why it exists, how it is computed, and what it does not do*. Written and versioned with the code that implements it.
+
+Initial coverage (each links to the section of this plan it documents):
+
+| Feature doc | Covers |
+|---|---|
+| Confidence Engine & the 7 evidence families | [Section 12.3](#123-confidence-engine-fewer-high-conviction-suggestions) |
+| Market Stance / Daily Verdict and its calibration | [Section 16.2](#162-morning-report-0800-ist-market-research-predictions-and-trade-suggestions) |
+| ContextBuilder, context specs and **Memory decay** | [Section 10.9](#109-context-management-contextbuilder-v311) |
+| Task-Class LLM Routing and Free-First Gemini tiering | [Section 10.7](#107-gemini-keys-free-first-cost-tiering-and-failover), [Section 10.8](#108-task-classes-small-local-vs-reasoning-cloud) |
+| Paper Engine: NSE CAS, MIS, T+1, charges and tax lots | [Section 17](#17-paper-trading-engine) |
+| Morning/Evening reports and **Brier calibration** | [Section 16](#16-scheduled-reports-prediction-tracking-and-ai-strategy-review) |
+| **Shadow Trades and the Filter Verdict** | [Section 12.3.6](#1236-proving-that-strictness-works) |
+| Value investing and DCF (sensitivity grids) | [Section 14](#14-value-investing-module) |
+| AI Strategy Review and **Deflated Sharpe** | [Section 16.8](#168-manual-ai-strategy-review-review-my-strategy) |
+| Scheduler and clamshell operations | [Section 16.1](#161-scheduler-every-job-configurable-from-the-ui), [Section 20.4](#204-sleep-wake-and-power) |
+
+#### 7.7.2 Pillar B — Trading, Quant and Indian Market Academy
+
+Beginner-to-intermediate structured tracks. Each article is self-contained, cross-links to Pillar A feature docs, and states its assumptions. Formulas are rendered with **KaTeX**; diagrams with **Mermaid**.
+
+| Track | Sample topics |
+|---|---|
+| **Indian market mechanics** | NSE/BSE cash equities; **CNC vs MIS**; **T+1 settlement**; the revised **Closing Auction Session (CAS)**; circuit limits; **ASM/GSM**; FII/DII flows; delivery %; corporate actions; charges and **STCG/LTCG** tax lots |
+| **Technical and price-action techniques** | Candlesticks; market structure (HH/HL, **BOS/CHoCH**); support/resistance and pivots; **volume profile (POC/VA)**; VWAP and **anchored VWAP**; **RSI divergence**; **Fibonacci confluence**; 3-screen multi-timeframe analysis |
+| **Quantitative finance and risk management** | Base rates; **expected value (EV in R)**; reward-to-risk; position sizing (fixed fractional, ATR, Kelly, **VIX scaling**); stops and trailing stops (**chandelier exit**); **Sharpe/Sortino/Calmar**; **Deflated Sharpe**; max drawdown; **MAE/MFE**; correlation networks; **HRP/risk parity** |
+| **Statistical validation and AI trading** | **Point-in-time (PIT)** correctness; look-ahead and survivorship bias; walk-forward testing; **Brier score** and reliability curves; **Wilson confidence intervals**; **counterfactual shadow trades**; and *why LLMs propose while deterministic code computes and vets* ([ADR-009](#b-adrs-to-write-in-phase-0)) |
+
+#### 7.7.3 Storage and Authoring
+
+- **Authoring:** versioned **Markdown files with YAML frontmatter**, stored in `docs/learn/`, split into `docs/learn/features/` and `docs/learn/academy/`. They live in the repo next to the code and are reviewed like code.
+- **Frontmatter schema:**
+
+  ```yaml
+  # docs/learn/features/confidence-engine.md
+  id: confidence-engine
+  slug: confidence-engine
+  title: The Confidence Engine
+  category: feature            # feature | academy
+  track: null                  # for academy: mechanics | technical | quant | validation
+  difficulty: intermediate     # beginner | intermediate | advanced
+  related_routes: ["/opportunities", "/learn/evidence-families"]
+  related_terms: ["confluence gate", "EV in R", "Brier", "Wilson interval"]
+  updated_at: 2026-11-25
+  plan_ref: "12.3"
+  ```
+
+- **Indexing:** at startup and on `bq db migrate`, a loader parses every file and upserts it into SQLite. The Markdown body and a searchable plain-text projection go into an **FTS5** virtual table `learn_docs_fts`; structured fields go into `learn_docs`. Re-indexing is incremental (hash per file) and is also exposed as `bq learn reindex`.
+- **Reading state:** `learn_progress` stores per-article read state, last position and bookmarks.
+
+**Learn data model** (added to [Section 19](#19-storage-and-data-model)):
+
+| Table | Purpose |
+|---|---|
+| `learn_docs` | One row per article: `doc_id`, `slug`, `title`, `category`, `track`, `difficulty`, `plan_ref`, `body_hash`, `file_path`, `updated_at`, `related_routes` (JSON), `related_terms` (JSON) |
+| `learn_docs_fts` | FTS5 virtual table over title + body projection, for `⌘K` and `/learn` search (offline, instant) |
+| `learn_progress` | Per-article `last_read_at`, `last_position`, `bookmarked` |
+
+#### 7.7.4 Search and Navigation
+
+- **Offline, instantaneous search.** `/learn` and the **`⌘K` Command Palette** query `learn_docs_fts`; results show title, track and a matched snippet. No network call, no external search service.
+- **Navigation:** a left rail groups **Pillar A (Features)** and **Pillar B (Academy → the four tracks)**; breadcrumbs; previous/next within a track; a "related" block driven by `related_terms` and `related_routes`.
+- **Deep links:** every article has a stable slug URL (`/learn/:slug`), so it can be linked from anywhere — including a report, a chat with yourself, or a decision drawer.
+
+#### 7.7.5 Rendering
+
+- **Markdown renderer** with **KaTeX** for math, **Mermaid** for diagrams, and code blocks with the same theme as the rest of the app (dark). Formulas and diagrams are rendered client-side from the article text; no server rendering.
+- **Interactive/linked visual examples** where helpful, reusing the existing chart stack: **Lightweight Charts** for candlestick/price-action examples and **uPlot** for return-series or calibration examples. These are static illustrations with sample data, clearly labelled as examples — never live market data.
+- **Accessibility:** WCAG AA contrast on the dark theme, full keyboard navigation, reduced-motion support, and alt text for every diagram.
+
+#### 7.7.6 Contextual Deep-Linking ("Learn Why")
+
+Every major widget, metric and badge that a newcomer might not recognise carries a subtle **`?` popover** that opens a short glossary entry with a **"Learn more →"** link to the full `/learn/:slug` article. Examples of the `?`-targets:
+
+- **Brier score** and **reliability curve** (reports, `/analytics`)
+- **Deflated Sharpe** (AI strategy review)
+- **Chandelier exit** (exit configuration, trade detail)
+- **CAS badge** (closing auction session, order/position views)
+- **VIX multiplier** (sizing, risk panel)
+- **Wilson interval** (confidence cards, accuracy)
+- **Shadow Filter Verdict** (`HELPS`/`NEUTRAL`/`HURTS`, scorecard)
+
+The glossary text is sourced from the same Markdown (a short `summary` field in frontmatter), so the popover and the article never drift apart. A shared `<LearnHint term="..."/>` component reads a small indexed glossary map loaded with the app.
+
+#### 7.7.7 Optional "Explain With My Data"
+
+Inside a Pillar A feature doc, an optional **"Explain with my data"** button lets you ask a **SMALL or REASONING LLM** (routed through the task-class router, **token-tracked** under `purpose=live`, `task=learn.explain`) to explain the concept **using one of your own recent paper trades, backtests or morning reports**. Constraints:
+
+- **Strictly grounded.** The ContextBuilder supplies the selected artifact as **facts with `src_id`s** ([Section 10.9.3](#1093-prompt-layout-fixed-section-order)); the model may reference only those facts and the article text. It may **not invent numbers** ([ADR-009](#b-adrs-to-write-in-phase-0)).
+- **Privacy-aware.** The data is your own; routing respects the `paid_or_private` cost policy ([Section 10.7.6](#1076-free-tier-data-handling)) so private content never goes to a free-tier key.
+- **Ephemeral by default.** The explanation is shown in a drawer and is not saved unless you explicitly save it; nothing is written to memory.
+
+#### 7.7.8 Docs-as-Code Guardrail (CI)
+
+Documentation must not drift. A CI check enforces coverage:
+
+- The app maintains a registry of **documented surfaces** — routes, metrics, badges and glossary terms — each declaring an expected `learn` slug (declared next to the code, e.g. a `learn_slug` attribute or a `docs/learn/index.yaml` map).
+- **`bq learn check`** (run in CI) fails when:
+  - a route/metric/badge in the registry has **no matching `docs/learn/` article**, or its referenced slug does not exist;
+  - a `?`-hint term has no glossary entry;
+  - a `docs/learn/` file has invalid frontmatter or a `related_routes`/`related_terms` id that does not resolve.
+- Adding a new feature page or numeric metric therefore **requires** a doc entry (new file or an update to an existing one). The check ships with the rest of the harness ([Section 23](#23-testing-and-benchmarking)).
+
+**Milestone:** the module skeleton, Pillar A launch docs and the docs-as-code check land in **Milestone A**; the full academy tracks fill in behind the app features (see [Section 26](#26-delivery-roadmap)).
 
 ---
 
@@ -888,6 +1092,7 @@ Sizing uses *fast cores* (perflevel0) and *total high-performance cores* (all le
 | Strategy and testing | `strategies`, `backtests` |
 | Controls | `risk`, `approvals`, `policy` |
 | Agents and LLM | `agents`, `llm` (providers, models, routes, prompts, usage, calls) |
+| Learning | `learn` (index, docs, glossary, progress, reindex, `learn.explain` — see [Section 7.7](#77-the-learn-module-feature-docs--trading--quant-academy)) |
 | Oversight | `audit`, `config` (versions, diff, rollback) |
 
 - **Conventions:**
@@ -1429,6 +1634,23 @@ Memory turns the evening report's write-only lessons into context that later cal
 - A monthly job merges near-duplicate lessons and expires stale ones (`max_age`, or regime no longer relevant).
 - The memory store can be switched off per task (`memory.enabled: false`) for A/B evals.
 
+**Pruning, age decay and frecency (v3.12).** Retrieved memory is ranked, not just filtered. Every entry carries retrieval metadata — `created_at` (already stored as `known_at`), `last_accessed` and `hit_count` — and its effective retrieval weight is:
+
+$$\text{weight} = \text{relevance} \times \text{decay}(\text{age}) \times \text{frecency}(\text{last\_accessed})$$
+
+- **Age-based decay.** A fresh lesson keeps full weight; older lessons fade so the prompt reflects current conditions:
+
+  | Age | Decay multiplier |
+  |---|---|
+  | ≤ 30 days | 1.00 |
+  | 30 → 365 days | linear from 1.00 down to 0.20 |
+  | > 365 days | 0.20 (floor; expired at `max_age` per the spec) |
+
+- **Frecency bonus.** An entry accessed in the **last 7 days** gets a **1.25×** bonus, so lessons that keep proving useful stay near the top even as they age.
+- **BM25 keyword leg.** The hybrid query now has two legs: an exact filter (symbol/strategy/regime), a **sqlite-vec** similarity leg on the setup fingerprint, and an **FTS5/BM25** keyword leg. The **BM25 score is one of the `relevance` inputs** and is also what the prune tool uses to find low-value entries.
+- **Pruning is dry-run first, and reversible.** A `/memory-admin` view (a tab on `/llm/routing`) previews what a prune would remove and why, with explicit controls: `max_age_days`, `min_hits`, `min_decay`. A prune **soft-deletes** (excluded from retrieval, kept in the append-only log) so a bad prune can be undone. Pruning never changes a decision already taken and never deletes the only support for a recorded outcome; it only affects what is retrieved into future prompts.
+- **Everything stays PIT-safe:** `last_accessed`, `hit_count` and decay are retrieval-only attributes. They never enter the prompt as facts, and a replay recomputes retrieval from the manifest, so decay cannot leak future access information into a past context.
+
 #### 10.9.7 Multi-Step Tasks: Debates and Long Documents
 
 | Case | Technique |
@@ -1641,6 +1863,20 @@ $$\text{Score}=100\big(w_1S_{signal}+w_2C_{cal}+w_3RR+w_4A_{agree}+w_5L_{liq}+w_
 
 **Feedback loop:** every opportunity is tracked to its outcome, including **shadow P&L** for ones that were never traded. The scorecard breaks results down by type, horizon, agent and LLM model, and feeds calibration and $H_{hitrate}$.
 
+**Pre-ranker and conditional regime weights (v3.12).** Before the Confidence Engine runs, a deterministic, **LLM-free pre-ranker** (ported from indian-trading-agent's win-rate-weighted recommender, [Section 4.3.10](#4310-india-specific-agent-projects-v310)) scores and orders the raw candidate set so the expensive path sees a short list. Its signal weights resolve through a **3-layer merge**:
+
+$$\text{weights} = \text{regime\_override}[\text{regime}] \;\text{over}\; \text{base\_tuned} \;\text{over}\; \text{DEFAULT}$$
+
+| Layer | Meaning |
+|---|---|
+| `DEFAULT` | The shipped starting weights (per horizon) |
+| `base_tuned` | Weights re-fit from resolved outcomes across all regimes |
+| `regime_override[BULL\|BEAR\|SIDEWAYS\|HIGH_VOL]` | Regime-specific weights that override the layer above when the evidence supports it |
+
+- The regime is the current market regime already computed for evidence family 5 ([Section 12.3.2](#1232-evidence-families-chart-volume-and-more)).
+- **Conservative gating:** a `regime_override` is used **only** when the regime has at least `min_regime_samples` resolved outcomes (default 60) **and** the Wilson lower bound of its win rate clears `regime_override_wilson_floor` (default 0.50). Otherwise the merge falls back to `base_tuned`, then `DEFAULT`. This avoids switching weights on thin evidence.
+- Because the pre-ranker is pure arithmetic, its weights are a **versioned config** (`regime_weight_versions`) and can be proposed by the AI strategy review and validated out-of-sample like any other change.
+
 **Execution:** opportunities owned by a strategy follow that strategy's approval policy. Pure research suggestions **and morning-report suggestions** follow the **"Research Suggestions"** policy. It is seeded as **AUTO**, matching your default, so they are paper-traded after risk checks. One click switches it to SUGGEST_ONLY.
 
 
@@ -1700,11 +1936,22 @@ Each family is computed **deterministically** (Polars and Numba) and returns **c
 - Reward-to-risk below the minimum
 - Correlated-cluster cap reached
 
+**Sequential intraday entry-quality gates (v3.12, from AI-trader).** For **intraday** setups, in addition to the family confluence, entry is validated by four cheap, ordered gates that run **after** the deterministic gates and **before** the LLM review. All four must pass; a failure at any gate stops the chain (so the expensive later gates are skipped). Each gate is deterministic and evaluated walk-forward before it earns a place:
+
+| # | Gate | Purpose |
+|---|---|---|
+| 1 | **Composite score threshold** | The candidate's pre-ranker/score must clear a configured floor |
+| 2 | **Previous-bar continuation** | The prior bar must continue in the intended direction (no immediate reversal) |
+| 3 | **Micro-momentum confirmation** | Short-window momentum must agree with the direction |
+| 4 | **Short-window re-pricing check** | Price must not be re-pricing sharply against the entry — the guard against **"catching a falling knife"** |
+
+These gates exist because intraday entries are the most susceptible to entering into a fast adverse move; they add no LLM calls and run in the same vectorised pass as the other evidence.
+
 **Optional chart-vision check** (`technical.chart_vision`, free Gemini Flash): a rendered candlestick chart with volume, VWAP and levels is reviewed as a second opinion. It can **confirm or veto, but never raise** confidence.
 
 #### 12.3.3 From Evidence to Confidence
 
-1. **Setup detection** produces a candidate with an entry trigger, a **structure- or ATR-based stop** and **level-based targets** (next resistance or measured move).
+1. **Setup detection** produces a candidate with an entry trigger, a **structure- or ATR-based stop** and **level-based targets** (next resistance or measured move). For **intraday** setups the candidate must also clear the four **sequential entry-quality gates** ([Section 12.3.2](#1232-evidence-families-chart-volume-and-more)) before it moves on — this is the "don't catch a falling knife" guard.
 2. **Base rate.** The historical hit rate of the *same setup type, horizon and market regime*, measured by the fast Numba backtester on point-in-time data and refreshed weekly. These are deterministic rules, so the LLM look-ahead problem in [Section 13.3](#133-correctness) does not apply. **A setup with fewer than 100 historical instances is ineligible** ("insufficient history").
 3. **Conditional estimate.** A deliberately **simple, regularised model** (L2 logistic regression on the evidence-family scores), trained walk-forward, adjusts the base rate for this candidate. It is shrunk toward the base rate when evidence is thin (empirical Bayes). *v3.10:* an optional **gradient-boosted challenger** (XGBoost or LightGBM, features from the AI-trader catalogue plus seasonality) runs in shadow and replaces the logistic model only if its out-of-sample Brier score is better and its calibration curve holds for 60+ live outcomes.
 4. **Calibration.**
@@ -1736,12 +1983,23 @@ confidence_policy:
     no_new_entries_first_minutes: 15
     delayed_data: BLOCK
   sizing_by_level: {VERY_HIGH: 1.0, HIGH: 0.75}      # multiplier on the Budget Manager risk unit
+  sizing_over_kelly: false              # v3.12: true = use conviction tiers, not raw Kelly (default when samples are small)
+  sizing_vix_stepdown:                  # v3.12: multiplier applied by India VIX band (from Vibe Trading)
+    "0-15": 1.00
+    "15-20": 0.85
+    "20-25": 0.65
+    "25+": 0.50
+  regime_weights:                       # v3.12: pre-ranker 3-layer merge gates (Section 12.2)
+    min_regime_samples: 60
+    regime_override_wilson_floor: 0.50
   show_watch_list: true                 # MODERATE items listed (collapsed), never suggested
   long_term: THESIS_CONFIDENCE          # value ideas use the valuation/thesis confidence in Section 14
 ```
 
 - The same policy applies to the **morning report**, the **Opportunities board** (default filter: HIGH and above) and **AUTO paper trading**: only suggested (HIGH or VERY HIGH) trades can auto-execute, and they still pass the Risk Manager.
 - **Market predictions can abstain.** In the morning-report scope, each prediction kind has a `min_confidence` (default 0.60). Below it, the report states **"No call (low confidence)"**. Abstentions are recorded and their would-be outcomes tracked, so accuracy is always shown **together with coverage** (calls made ÷ calls possible). Abstaining therefore cannot hide poor performance.
+- **Position size is confidence- and volatility-adjusted (v3.12).** The final size is the Budget Manager risk unit × `sizing_by_level` × **the VIX band multiplier** from `sizing_vix_stepdown` (100% / 85% / 65% / 50% as India VIX rises). When a setup's sample size is small, **score-tiered sizing (`sizing_over_kelly: true`) is the default over raw Kelly**, because Kelly is unstable on thin samples.
+- **Regime weight switches are gated.** The pre-ranker only adopts a `regime_override` when `min_regime_samples` and `regime_override_wilson_floor` are met ([Section 12.2](#122-opportunity-engine)); otherwise it falls back to tuned, then default weights.
 
 #### 12.3.5 Performance
 
@@ -1760,6 +2018,26 @@ confidence_policy:
 - **Alert when the gates aren't adding value.** If rejected candidates perform as well as suggested ones over a significant sample, you are alerted. Likewise if VERY HIGH is not beating HIGH.
 - **Threshold changes** are versioned configuration. The **AI strategy review** can propose them, and they are validated out-of-sample like any other suggestion.
 
+**Shadow Trades: counterfactual learning (v3.12, from indian-trading-agent).** Shadow tracking already resolves every candidate. v3.12 makes it explicit and published:
+
+- **Every `HIGH` / `VERY HIGH` (and `STRONG BUY`) candidate is auto-recorded as a virtual shadow trade**, whether it was executed, manually skipped or never traded. A shadow trade stores the same entry trigger, stop, targets and horizon as a real one, plus the reason it was not taken.
+- **Forward P&L is backfilled at 1/3/5/10 days** using the same deterministic resolution code as live trades (net of modelled charges and slippage), so a shadow and a real trade are directly comparable.
+- A **Filter Verdict** compares the win rate and expectancy of **skipped** vs. **tracked** candidates:
+
+  | Verdict | Meaning |
+  |---|---|
+  | `HELPS` | The filter is dropping candidates that underperform the ones it keeps (the gate is adding value) |
+  | `NEUTRAL` | No material difference (within the Wilson interval) |
+  | `HURTS` | Skipped candidates perform as well or better — the gate may be too strict |
+
+- The verdict appears in the **Evening Report** and the **Opportunities Scorecard**, so "we passed on this and it worked out" is always visible, not hidden. Everything remains PIT-safe: a shadow trade's outcome is only known at its resolution time and never enters a past prompt.
+
+**Verdict calibration and Brier gap verdicts (v3.12).** The daily **Market Stance** is treated as a first-class prediction and calibrated like one:
+
+- Backfill **1 / 3 / 5-day forward NIFTY returns** against each day's stance. A configurable **neutral dead-band** (default ±0.15%) means a flat move neither confirms nor refutes a stance.
+- The reliability diagram gains explicit **gap verdicts**: **overconfident**, **underconfident** or **well-calibrated**, defined by a **±5 percentage-point** threshold between predicted and observed frequency in each probability bucket.
+- A persistent gap raises an alert and can seed a threshold or calibration change, validated out-of-sample before it takes effect.
+
 ---
 
 ## 13. Strategies and Backtesting
@@ -1776,6 +2054,30 @@ confidence_policy:
 | Value / portfolio | Screen, rank, weight and rebalance a portfolio |
 
 **DSL safety:** the DSL is parsed into an AST and evaluated against a whitelist of functions. Python's `eval` is never used.
+
+**DSL grammar (v3.12, inspired by `gs-quant.backtests`, R3).** The YAML DSL is organised around the declarative **`Strategy → Trigger → Action`** shape:
+
+```yaml
+# config/strategies/example.yaml
+strategy: {id: orb, horizon: INTRADAY, universe: tier:T1}
+triggers:
+  - kind: PERIODIC       # fires on a schedule/bar cadence
+    every: 5m
+    window: "09:15-15:20"
+  - kind: MARKET         # fires on a price/indicator condition
+    when: "close > orb_high and rvol > 1.5"
+  - kind: DATE           # fires on specific dates
+    on: [2026-12-07]
+  - kind: EVENT          # fires on a session/earnings/calendar event
+    event: EARNINGS
+actions:
+  - kind: ADD_TRADE   {size: by_confidence, stop: atr(2), target: measured_move}
+  - kind: HEDGE       {when: "portfolio_beta > 1.2", instrument: NIFTY_FUT}
+  - kind: REBALANCE   {to: "target_weights", drift: 0.05}
+  - kind: EXIT_TRADE  {when: "close < chandelier(3, 22) or time_stop > 10d"}
+```
+
+The four trigger kinds (`PERIODIC`, `MARKET`, `DATE`, `EVENT`) and the four action kinds (`ADD_TRADE`, `HEDGE`, `REBALANCE`, `EXIT_TRADE`) are taken from gs-quant's grammar as a design reference; the implementation, compiler (Polars/Numba) and function whitelist are ours. Natural-language → DSL generation produces this same shape.
 
 ### 13.2 Two Backtest Engines with One Set of Semantics
 
@@ -2093,7 +2395,8 @@ class Prediction(BaseModel):
 - Today's prediction-by-prediction table (✅/❌/partial, with actual values)
 - Trade-suggestion outcomes in R and ₹ (paper, net of charges)
 - Rolling 5-, 20- and 60-day accuracy
-- Calibration chart
+- Calibration chart, with **Brier gap verdicts** (overconfident / underconfident / well-calibrated) (v3.12)
+- **Shadow Trades summary and the Filter Verdict** (`HELPS`/`NEUTRAL`/`HURTS`), and the **Market Stance forward calibration** (1/3/5-day NIFTY returns) (v3.12)
 - Comparison with baselines
 - Model attribution (Gemini vs DeepSeek)
 - Notes for tomorrow
@@ -2111,6 +2414,9 @@ class Prediction(BaseModel):
 | Breakdown by kind, target, regime, model, prompt version and day of week | All | Shows where the system is good or bad |
 | **By confidence level** (VERY HIGH, HIGH, MODERATE, LOW, vetoed): hit rate, expectancy, reliability | TRADE + predictions | Shows whether higher confidence really means better outcomes |
 | **Coverage** (calls made ÷ possible) and **near-miss performance** | All | Stops abstention from hiding weakness; checks the gates add value |
+| **Brier gap verdict** (`overconfident` / `underconfident` / `well-calibrated`, ±5% threshold) | All probabilistic predictions | Turns the reliability curve into an actionable label instead of a chart to eyeball ([Section 12.3.6](#1236-proving-that-strictness-works)) |
+| **Market Stance forward calibration** (1/3/5-day NIFTY returns with a neutral dead-band) | Market Stance / Daily Verdict | Checks whether GREEN/YELLOW/RED actually predicts forward index behaviour |
+| **Shadow Filter Verdict** (`HELPS` / `NEUTRAL` / `HURTS`) | HIGH/VERY HIGH candidates, executed or not | Compares skipped vs. tracked outcomes so a too-strict gate is visible ([Section 12.3.6](#1236-proving-that-strictness-works)) |
 
 **Statistical honesty:**
 
@@ -2199,6 +2505,10 @@ class StrategySuggestion(BaseModel):
 
 **Cost visibility.** Before running, the dialog shows an **estimated token count** and the number of backtest variants. After running, actual input and output tokens are shown and recorded in the ledger under `purpose=live`, `task=strategy.review*`.
 
+**Optional Plan-Before-Execute (v3.12, from TradingAgents).** For this expensive run (and the Value Dossier), an optional **Plan Mode** toggle makes the agent first propose a **research plan** — which diagnostics it will run, which variants it will test, and an estimated token/backtest budget — for you to **confirm or adjust before any spend**. The proposed plan and your confirmation are stored on the review row. Plan Mode is off by default and can be enabled per run or per task in the routing UI. It changes nothing about the safety rule that no suggestion is applied without out-of-sample validation and your acceptance.
+
+The `strategy.review` output and the saved report use **inline source attribution** ([Section 4.3.1](#431-agent-frameworks-r3-design-and-prompts)): every claim cites the diagnostic or resolved outcome it rests on, and every figure carries an `src_id`.
+
 ### 16.9 New LLM Tasks (Added to Routing)
 
 | Task | Primary | Fallback | Notes |
@@ -2211,6 +2521,7 @@ class StrategySuggestion(BaseModel):
 | `youtube.video_extraction` | Gemini fast | n/a (Gemini only; video input) | Watches public videos by URL; returns insights with timestamps |
 | `strategy.review` | **DeepSeek reasoning** | Paid Gemini | Structured suggestions; never local, never a free Gemini key |
 | `strategy.review.critic` | Paid Gemini | DeepSeek reasoning | Optional second opinion; a different provider gives less correlated errors |
+| `learn.explain` (v3.12) | **Local (SMALL)** | Free Gemini → DeepSeek chat | The `/learn` "Explain with my data" button ([Section 7.7.7](#777-optional-explain-with-my-data)); strictly grounded to `src_id` facts from one of your own paper trades, backtests or reports; private-aware routing; ephemeral by default |
 
 All of these tasks can be changed in the routing UI and are token-tracked per run. The Schedules page shows tokens per run, and the LLM Usage page breaks them down by task.
 
@@ -2235,6 +2546,11 @@ All of these tasks can be changed in the routing UI and are token-tracked per ru
 | `accuracy_daily` | Daily roll-ups by kind, target, model and regime, used for fast charts |
 | `strategy_reviews` | Review runs: scope, diagnostics ref, suggestions, variants, validation results, decisions |
 | `strategy_review_suggestions` | One row per suggestion, with its decision and reason |
+| `shadow_trades` (v3.12) | One row per HIGH/VERY HIGH (and STRONG BUY) candidate regardless of execution: entry trigger, stop, targets, horizon, not-taken reason, forward 1/3/5/10-day P&L, `filter_verdict` (`HELPS`/`NEUTRAL`/`HURTS`) |
+| `regime_weight_versions` (v3.12) | Versioned pre-ranker weights for the `DEFAULT` → `base_tuned` → `regime_override[…]` merge, with sample counts and Wilson bounds that gated the switch |
+| `learn_docs` (v3.12) | One row per `/learn` article: `doc_id`, `slug`, `title`, `category`, `track`, `difficulty`, `plan_ref`, `body_hash`, `file_path`, `updated_at`, `related_routes`, `related_terms` |
+| `learn_docs_fts` (v3.12) | FTS5 virtual table over title + body projection for offline `⌘K` and `/learn` search |
+| `learn_progress` (v3.12) | Per-article read state: `last_read_at`, `last_position`, `bookmarked` |
 ---
 
 ## 17. Paper Trading Engine
@@ -2281,6 +2597,21 @@ All of these tasks can be changed in the routing UI and are token-tracked per ru
 
 **Position sizing:** fixed-fractional risk, ATR volatility target, capped fractional Kelly, fixed notional, conviction bands, or equal weight. Sizes are rounded to whole shares.
 
+**VIX-adjusted step-down and score-tiered sizing (v3.12).** Two adjustments sit on top of the chosen sizing method:
+
+- **VIX step-down** (adopted as a configurable default from Vibe Trading, [Section 4.3.10](#4310-india-specific-agent-projects-v310)): the risk unit is multiplied by a band based on India VIX:
+
+  | India VIX | Size multiplier |
+  |---|---|
+  | 0–15 | 100% |
+  | 15–20 | 85% |
+  | 20–25 | 65% |
+  | above 25 | 50% |
+
+- **Score-tiered sizing over raw Kelly.** When a strategy's sample size is small, **conviction tiers (`sizing_by_level`) are the default rather than raw Kelly**, because Kelly is unstable on thin samples ([Section 12.3.4](#1234-confidence-policy-configurable-from-the-ui)).
+
+Both multipliers are visible in the sizing preview and are covered by the Risk Manager's checks.
+
 **Sizing all intents at once.** Instead of a Python loop, one vectorised computation sizes every intent in the cycle. Risk parity and Kelly calculations use Numba.
 
 **Token accounting:** reports tokens per strategy, per trade, and tokens per ₹ of P&L. There are no caps by default.
@@ -2299,7 +2630,7 @@ The Risk Manager is deterministic, cannot import any LLM code, and **always runs
 | Exposure | Per-symbol cap across horizons; maximum open positions; sector and correlation caps |
 | Losses | Daily, weekly and monthly loss limits; cool-off after consecutive losses |
 | Funds and orders | Enough funds; order rate within limits |
-| Market conditions | Event-risk windows; India VIX multiplier |
+| Market conditions | Event-risk windows; **India VIX multiplier** using the concrete step-down bands in [Section 18.2](#182-budget-manager) (100% / 85% / 65% / 50%) |
 | **Auto-mode circuit breaker** | Too many orders or rejections triggers a strategy pause and an alert |
 
 **Performance:** the checks run as pure functions over arrays for all intents in the cycle, taking under 1 ms for typical batches.
@@ -2350,7 +2681,7 @@ The Risk Manager is deterministic, cannot import any LLM code, and **always runs
 | Data | `data_providers`, `data_routes`, `data_source_events`, `data_quality_issues` |
 | Research | `news_items`, `news_signals`, `yt_channels`, `yt_videos`, `yt_insights`, `technical_reports`, `market_reports`, `embeddings` |
 | Fundamentals | `filings`, `financial_statements` (versioned), `ratios_snapshot`, `shareholding`, `valuation_runs`, `qualitative_assessments`, `research_notes`, `theses`, `thesis_checks` |
-| Opportunities | `opportunities`, `opportunity_events`, `opportunity_outcomes`, `alerts` |
+| Opportunities | `opportunities`, `opportunity_events`, `opportunity_outcomes`, `alerts`, **`shadow_trades`** and **`regime_weight_versions`** (v3.12) |
 | Context and memory (v3.11) | `context_specs` (versioned), **`context_manifests`**, `memories` (kind, fingerprint, text, known_at, support_n, expires_at), `memory_embeddings` (sqlite-vec), `doc_chunks` + FTS5 index |
 | LLM | `llm_providers`, `llm_models`, `task_routes`, `prompts`, **`llm_calls`**, **`llm_usage_daily`**, `llm_price_table`, `llm_caps` (null), `eval_runs` |
 | Strategy | `strategies`, `strategy_versions`, `backtests`, `backtest_trades`, `backtest_metrics` |
@@ -2358,6 +2689,7 @@ The Risk Manager is deterministic, cannot import any LLM code, and **always runs
 | Trading | `accounts`, `account_config_versions`, `capital_movements`, `orders`, `order_events` (hash-chained), `fills`, `positions`, `holdings`, `tax_lots`, `funds_ledger`, `charges`, `settlements`, `dividends`, `account_snapshots` |
 | Platform | `users`, `config_versions`, `config_audit` (hash-chained), `outbox`, `jobs` |
 | Reports and predictions | `schedules`, `job_runs`, `reports` (+FTS5), `predictions`, `prediction_outcomes`, `accuracy_daily`, `strategy_reviews`, `strategy_review_suggestions` (see [Section 16.10](#1610-data-model-additions)) |
+| Learning (v3.12) | `learn_docs`, **`learn_docs_fts`** (FTS5, offline search), `learn_progress` (see [Section 7.7.3](#773-storage-and-authoring)) |
 
 **Migrations:** numbered plain-SQL files applied by `bq db migrate` with stdlib `sqlite3` (no ORM). Repositories use hand-written SQL.
 
@@ -2464,7 +2796,7 @@ bharatquant/
 │   ├── compute/         pure functions + kernels
 │   │   ├── indicators.py      (polars_ta / TA-Lib wrappers; polars-ta-lib if it wins the bake-off)
 │   │   ├── structure_numba.py (ported from smart-money-concepts, MIT) · volprofile_numba.py (ported from py-market-profile, BSD)
-│   │   ├── stats.py           (deflated Sharpe, PBO; QuantStats for tear sheets)
+│   │   ├── stats.py           (deflated Sharpe, PBO; gs-quant ported econometrics; QuantStats for tear sheets)
 │   │   ├── sim_numba.py       (portfolio simulator, sweeps — reference impl)
 │   │   ├── risk_kernels.py    (vectorised checks, sizing)
 │   │   └── _native.py         (loads bq_kernels if present, else numba fallback)
@@ -2472,6 +2804,7 @@ bharatquant/
 │   ├── llm/             service, router, prompts, cache, guardrails, ledger, rollups, adapters/ (gemini, deepseek, [litellm], [ollama])
 │   │   └── context/     builder, spec, providers/ (evidence_pack, price, portfolio, market, news_notes, creator_notes, doc_chunks, memory, debate_state), fit, tokenize, manifest
 │   ├── memory/          writers (evening report, reviews, decisions), retrieval, hygiene jobs
+│   ├── learn/           loader (frontmatter, body projection), index (FTS5), search, glossary, docs-as-code check   (v3.12)
 │   ├── research/        news, youtube (asr chain), technical, market, store
 │   ├── fundamentals/    ingest (xbrl, pdf, shareholding), normalise, ratios, screener, valuation, qualitative, thesis
 │   ├── opportunities/   scanners, scoring, lifecycle, outcomes
@@ -2485,16 +2818,19 @@ bharatquant/
 ├── crates/bq_kernels/   Cargo.toml, src/ (incr_indicators, fill_batch, tax_lots, market_cap, sim) — PyO3 + maturin (abi3)
 ├── web/                 React + TS + Vite
 │   ├── src/app/ (router, providers, theme)  src/pages/  src/components/ (charts, tables, badges, forms)
+│   ├── src/pages/learn/ (reader, track nav, FTS search, LearnHint popover)   (v3.12)
 │   ├── src/api/ (generated client + zod)    src/ws/ (client, topic store)   src/workers/ (table sort, export)
 │   └── package.json  pnpm-lock.yaml  vite.config.ts  tailwind.css
 ├── THIRD_PARTY_NOTICES.md   licences and attributions for ported code and adapted prompts
 ├── evals/   promptfoo configs + golden sets (provider = bq eval-proxy)
-├── config/              settings, horizons, universe, approval_policy, accounts.seed, market/ (sessions, holidays, charges, tax), data/, llm/, strategies/, screens/
+├── config/              settings, horizons, universe, approval_policy, accounts.seed, market/ (sessions, holidays, charges, tax), data/, llm/ (incl. **skills/** markdown specialist skills), strategies/, screens/, **learn/** (glossary map)
 ├── deploy/macos/        in.bharatquant.serve.plist (launchd), caffeinate notes
 ├── benchmarks/          budgets.yaml + pytest-benchmark suites
 ├── tests/               unit, property, golden, contracts, parity, integration, e2e (playwright)
-└── docs/                adr/, runbooks/, user-guide/
+└── docs/                adr/, runbooks/, user-guide/, **learn/ (features/ + academy/ markdown; v3.12)**
 ```
+
+**Layer note (v3.12).** The repository maps onto the five layers of [Section 5.4](#54-architectural-layers-data--agent--execution--harness--application): `bq/data` + `bq/fundamentals` + `bq/research` are **Data**; `bq/agents` + `bq/llm` + `config/llm` are **Agent**; `bq/broker` + `bq/risk` + `bq/opportunities` + `bq/backtest` are **Execution**; `evals/`, `benchmarks/`, `tests/`, `bq/compute`, `bq/learn` and `docs/learn` are the **Harness**; `web/`, `bq/api`, `bq/cli` and the report archive are the **Application**.
 
 ---
 
@@ -2523,10 +2859,13 @@ bharatquant/
 | Unit and property (Hypothesis) | Charges, tax lots, corporate actions, OMS, sizing, risk, DSL, valuation, approval resolution, capital and TWR/XIRR, universe hysteresis |
 | **Kernel parity** | Rust and Numba kernels must give identical results (property tests over random inputs) |
 | **Engine parity** | The fast simulator and the event-driven paper replay must produce the same trades and P&L on golden datasets |
-| Golden | Contract notes, DCF cases, ratios, market cap, indicator library outputs against TA-Lib 0.8.3 reference values, ported SMC/volume-profile kernels against the original pandas implementations |
+| Golden | Contract notes, DCF cases, ratios, market cap, indicator library outputs against TA-Lib 0.8.3 reference values, ported SMC/volume-profile kernels against the original pandas implementations, and **v3.12: `bq/compute/stats.py` econometrics cross-checked against a dev-only `gs_quant.timeseries` extra** |
 | **Licence report** | `pip-licenses` + `license-checker` tag copyleft components; informational in PERSONAL mode, blocking only in DISTRIBUTE mode |
 | **Point-in-time (from TradingAgents' fixes)** | A filing, news item or price dated after the decision timestamp must be invisible to agents, backtests and reports |
 | **Context (v3.11)** | Property tests: built context never exceeds `max_input_tokens`; required sections are never dropped; no item with `known_at > as_of` (including memories); same inputs give the same `manifest_hash`; replay rebuilds identical contexts; every cited `src_id` exists in the manifest; news-storm budget test |
+| **Memory decay & pruning (v3.12)** | Decay and frecency functions are monotonic and bounded; a prune dry-run predicts exactly what a real prune removes; retrieval metadata (`last_accessed`, `hit_count`) never enters the prompt; a replayed context is unchanged by later access |
+| **Shadow trades & regime weights (v3.12)** | A shadow trade is recorded for every HIGH/VERY HIGH candidate regardless of execution; forward 1/3/5/10-day P&L is deterministic and matches the live resolver; the Filter Verdict is derived from Wilson intervals; a `regime_override` is applied only when `min_regime_samples` and the Wilson floor are met |
+| **Learn docs (v3.12)** | **`bq learn check` fails CI** when a documented surface (route/metric/badge) has no article, when a `related_routes`/`related_terms` id does not resolve, or when frontmatter is invalid; reindex is idempotent; FTS returns expected hits for a known query; `learn.explain` is grounded to `src_id` facts |
 | Token ledger | Every LLM path writes the correct rows, crash-spill replay works, and the linter rule blocks direct provider SDK calls |
 | Provider contracts | Gemini, DeepSeek and every data adapter tested against recorded fixtures |
 | API contract | The OpenAPI schema matches the generated TypeScript client (CI diff) |
@@ -2568,8 +2907,10 @@ Everything is designed around the **08:00–17:00 operating window** on trading 
   - API access from a static IP with OAuth/2FA, and
   - registration through the broker for self-built algos above the order-rate threshold.
 - **Order-to-trade ratio.** Revised OTR norms apply from April 2026.
+- **Static IPv4 (v3.12).** The static-IP requirement is a **source-address** rule. On a dual-stack host, an outbound broker call can present an **IPv6** source that does not match the registered static IPv4, and the request is rejected. Every live broker HTTP client therefore supports an explicit **IPv4-forcing** option (resolve and connect over IPv4 only), and `bq doctor` warns when a dual-stack network could break the rule. This is taken from Vibe Trading's broker clients ([Section 4.3.10](#4310-india-specific-agent-projects-v310)).
 - **Already built into the design:** an algo-ID field, a global rate limiter, low modify/cancel churn, and white-box strategy documentation.
 - **OpenAlgo as gateway (Phase 7).** If OpenAlgo is used as the broker gateway, confirm its compliance features with your broker.
+- **Free dual-broker Phase 7 pattern (v3.12).** A concrete low-cost live architecture, behind one `BrokerAdapter`: **Fyers** for free live quotes/WebSocket (data) plus **Zerodha Personal** for free order execution. Both are reached over their APIs; market data and order routing stay separate concerns behind the adapter, and the paper engine remains the default until the Phase 7 gates pass.
 - **Sharing outputs.** Sharing suggestions with others may bring in SEBI rules for Research Analysts or Investment Advisers.
 - **Data terms.** Respect the terms of use of every data source.
 - **Disclaimer.** This is not legal or tax advice.
@@ -2586,7 +2927,7 @@ The full roadmap below is large for one person. The **minimum viable path** deli
 
 | Milestone | Delivers | Indicative duration |
 |---|---|---|
-| **A. Daily intelligence loop** (v3.9: reuse-first; see [Section 4.6](#46-effect-on-effort-indicative)) | Calendar and sessions, free EOD data and bulk snapshots, LLM layer with token ledger, **task-class routing: local MLX for small tasks (quality-gated), DeepSeek and Gemini for reasoning**, **free-first Gemini tiering (then DeepSeek, then paid Gemini)**, **chart and volume analysis plus Confidence Engine v1** (base rates from fast setup studies; PROVISIONAL labels until calibrated),, **fully configurable scheduler**, **configurable morning-report scope**, **08:00 morning report, 17:00 evening accuracy, provisional and confirmed outcomes, report archive**. React pages: Command Center, Reports, Schedules, LLM Usage | 5–7 weeks |
+| **A. Daily intelligence loop** (v3.9: reuse-first; see [Section 4.6](#46-effect-on-effort-indicative)) | Calendar and sessions, free EOD data and bulk snapshots, LLM layer with token ledger, **task-class routing: local MLX for small tasks (quality-gated), DeepSeek and Gemini for reasoning**, **free-first Gemini tiering (then DeepSeek, then paid Gemini)**, **chart and volume analysis plus Confidence Engine v1** (base rates from fast setup studies; PROVISIONAL labels until calibrated),, **fully configurable scheduler**, **configurable morning-report scope**, **08:00 morning report, 17:00 evening accuracy, provisional and confirmed outcomes, report archive**. React pages: Command Center, Reports, Schedules, LLM Usage, **`/learn` v1 (Pillar A feature docs + academy skeleton + docs-as-code CI check)**. v3.12 also lands here: **shadow trades**, **conditional regime weights** and the **`gs-quant` ported stats** | 5–7 weeks |
 | **B. Paper trading core** | Paper engine (CNC/MIS, charges, T+1, CAS), accounts and capital, rule-based strategies, risk and approval (AUTO), auto paper-trading of report suggestions | 5–6 weeks |
 | **C. Improve loop** | Fast backtester, **manual AI strategy review** with validation (QuantStats tear sheets, skfolio, scikit-learn calibration), Opportunity Engine, scorecard | 3–4 weeks |
 | D onwards | Research agents (news, YouTube), value investing, hardening, then paid data and live trading | as in Phases 4–7 |
@@ -2641,6 +2982,7 @@ The phase list below shows the full scope. **Milestones A–C reorder Phases 0�
 - **Scheduler UI (`/schedules`), 08:00 morning report (market and technical inputs), frozen prediction registry, 17:00 evening accuracy report, deterministic resolvers and metrics, report archive and `/reports` page**
 - **Manual AI strategy review** (diagnostics, LLM suggestions, parallel variant validation, accept as DRAFT)
 - `/opportunities`, `/chart/:symbol` and `/agents` pages
+- **v3.12:** fill in the **full `/learn` academy tracks** (Pillar B), surface the **Shadow Filter Verdict** on the scorecard, and extend the **docs-as-code check** so every new page, metric and `?`-hint has a doc and a glossary entry
 - **Exit criteria:** you can swap a task's model live from the UI, the token matrix is complete, and the decision-cycle Gantt view works. **Ten consecutive trading days of morning and evening reports have been saved, with every prediction resolved automatically, and one strategy review has completed end to end.**
 
 ### Phase 4: Research Agents (Weeks 13–17)
@@ -2673,6 +3015,7 @@ The phase list below shows the full scope. **Milestones A–C reorder Phases 0�
 - Paid data adapter, enabled through configuration
 - Expand the T1 tier
 - **Broker gateway:** OpenAlgo (separate process) **or** Zerodha/Fyers adapters ported from Vibe Trading behind `BrokerAdapter`: sandbox first, then a small live pilot after compliance review
+- **v3.12:** document and, if chosen, implement the **free dual-broker pattern** (Fyers for live quotes/WebSocket, Zerodha Personal for execution) behind one `BrokerAdapter`, and enforce **IPv4-forcing** on every live broker client for the SEBI static-IP rule ([Section 25](#25-regulatory-notes)). `bq doctor` gains a dual-stack/static-IP warning
 
 ```mermaid
 gantt
@@ -2761,11 +3104,11 @@ None of these block the plan; each has a working default.
 |---|---|
 | Backend runtime | Python 3.13, uvloop, FastAPI, msgspec/orjson, httpx (HTTP/2), APScheduler |
 | Data | Polars, DuckDB, PyArrow, Parquet (ZSTD), SQLite (WAL) + sqlite-vec |
-| Compute | polars_ta, TA-Lib 0.8.3 wheels (golden reference, candlesticks), Numba (`njit`, `prange`) incl. ports of smart-money-concepts and py-market-profile; QuantStats, skfolio, scikit-learn; own Rust crate only if a benchmark requires it |
+| Compute | polars_ta, TA-Lib 0.8.3 wheels (golden reference, candlesticks), Numba (`njit`, `prange`) incl. ports of smart-money-concepts and py-market-profile; QuantStats, skfolio, scikit-learn; **gs-quant econometrics ported into `stats.py` (R2, dev-only cross-check; ADR-034)**; own Rust crate only if a benchmark requires it |
 | LLM | Native HTTP (httpx) adapters for Gemini REST and DeepSeek (OpenAI-compatible); Pydantic v2 structured outputs; local MLX/Ollama optional |
 | Research | nselib, jugaad-data, NseIndiaApi (optional), yfinance, pandas_market_calendars, feedparser, trafilatura, datasketch, pyahocorasick, PyMuPDF/PyMuPDF4LLM (primary), pypdfium2, pdfplumber (Docling optional), Gemini video understanding (YouTube); mlx-whisper optional |
 | LLM helpers | json-repair, Outlines (local constrained decoding, evaluated), promptfoo (evals via ledger proxy), LiteLLM price file (display-only costs) |
-| Frontend | React 19, TypeScript, Vite, React Router v7, TanStack Query/Table/Virtual, Zustand, Tailwind v4, shadcn/ui, Lightweight Charts, uPlot, ECharts, Monaco, cmdk, Comlink |
+| Frontend | React 19, TypeScript, Vite, React Router v7, TanStack Query/Table/Virtual, Zustand, Tailwind v4, shadcn/ui, Lightweight Charts, uPlot, ECharts, Monaco, cmdk, Comlink, **KaTeX + Mermaid + Markdown renderer (`/learn`; ADR-035)** |
 | Tooling | uv, ruff, mypy, pytest, Hypothesis, pytest-benchmark, import-linter, pip-licenses / license-checker (licence gate); pnpm, Vitest, Playwright, ESLint/Biome; cargo, maturin, clippy |
 | Delivery | Native macOS (uv, pnpm, launchd); optional arm64 Docker; GitHub Actions macOS arm64 runners |
 
@@ -2806,6 +3149,8 @@ None of these block the plan; each has a working default.
 | ADR-031 | PERSONAL licence mode (any open-source code may be reused; provenance recorded; DISTRIBUTE mode for sharing) |
 | ADR-033 | ContextBuilder: per-task specs, fixed layout, PIT in one place, manifest per call, read-back memory that can only lower confidence |
 | ADR-032 | India agent reuse: indian-trading-agent prompts, recommender and Daily Verdict; Vibe Trading scorecard, conflict-triggered debate and Telegram; nse-trading-skills as deterministic rule specs; AI-trader features and gradient-boosted challenger |
+| ADR-034 | `gs-quant` offline-only reuse: **R2 selective port** of `gs_quant.timeseries` econometrics into `bq/compute/stats.py` (cross-checked with a dev-only extra) and **R3 reference** for the `Strategy → Trigger → Action` DSL grammar and the `calc_cache` replay pattern. **Live pricing, Marquee, GS risk models and `GsCalendar` are out of scope; `gs-quant` is never a runtime dependency** |
+| ADR-035 | The `/learn` module: versioned Markdown docs+academy (`docs/learn/`) indexed into SQLite FTS5, KaTeX/Mermaid rendering, contextual `?`-hints, an optional grounded "Explain with my data" path, and a **docs-as-code CI guardrail** (`bq learn check`) so features and metrics cannot drift from their docs |
 
 ---
 *This is a living document. Record decisions as ADRs and update this plan at the end of each phase.*
