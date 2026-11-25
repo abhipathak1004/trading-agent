@@ -20,7 +20,7 @@ doctor:
 serve:
     cd bharatquant && uv run --locked bq serve
 
-run: build init
+run: build init doctor
     cd bharatquant && uv run --locked bq serve
 
 web-dev:
