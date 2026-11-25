@@ -1,0 +1,1 @@
+"""BharatQuant paper-trading application."""
