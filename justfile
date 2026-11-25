@@ -1,3 +1,12 @@
+# BharatQuant task runner.
+#
+# Why `PYTHONPATH` is exported below: on macOS, Python's `site.py` skips any
+# `.pth` file that carries the hidden file flag (`st_flags & UF_HIDDEN`). uv's
+# editable-install `.pth` can end up with that flag, which makes `import bq`
+# fail with "No module named 'bq'" even though the package is installed.
+# Pointing PYTHONPATH at the source tree makes every command immune to it.
+export PYTHONPATH := justfile_directory() / "bharatquant" / "backend" / "src"
+
 default:
     @just --list
 
@@ -25,6 +34,9 @@ run: build init doctor
 
 web-dev:
     cd bharatquant/web && npm run dev
+
+news:
+    cd bharatquant && uv run --locked bq news ingest
 
 test:
     cd bharatquant && uv run --locked pytest -q
