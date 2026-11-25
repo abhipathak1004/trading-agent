@@ -1,6 +1,21 @@
 # BharatQuant — working handoff (compacted)
 
-_Generated 2026-11-25 at the start of the news-research-agent task. Read this instead of the full chat history._
+_Generated 2026-11-25 at the start of the news-research-agent task; **updated
+after the agent landed**. Read this instead of the full chat history._
+
+## Status: news research agent is implemented
+
+Committed as `ab56b49`, with a packaging fix in the follow-up commit. The agent
+lives in `bq/news.py` (parse, classify, dedupe, store), `bq/news_agent.py`
+(orchestration) and `bq/infra/news_feed.py` (bounded HTTP fetch). Interfaces are
+`bq news ingest`, `bq news digest --limit N`, `just news`, and the owner-only
+`GET /api/v1/news/digest`. Tests are in `tests/test_news.py` (26).
+
+Known limitations, deliberately left as next steps: classification is
+first-match keyword based, `OTHER` is a large bucket, and there is no
+summarisation or article-body fetch. Any model pass must be opt-in with an
+explicit token budget, applied to `OTHER`/low-confidence items only — never per
+article on ingest.
 
 ## What the project is
 

@@ -128,3 +128,39 @@ requires permission before use.
 **Consequences:** The dependency inventory is not a legal review or a
 redistribution bundle. The project license and full redistribution notices
 remain undecided.
+
+## ADR-009: Deterministic news intake before any model involvement
+
+**Status:** Implemented for ingest; no summarisation or model pass exists.
+
+**Decision:** Ingest market news from Pulse by Zerodha's RSS feed and keep the
+work deterministic. Never fetch article bodies: the feed already carries a title
+and a one-line summary, which is the entire cost model. Deduplicate with a hash
+of the normalised HTTPS URL plus an order-insensitive fingerprint of title
+words, and classify with whole-word keyword rules. Store a separate, smaller
+memory table holding only items that clear a structural-impact bar. Bound every
+input: 2 MB feed, 500 items, 512/1,024-character fields, and clamp a feed's
+future-dated publication times to ingest time rather than trusting them.
+
+**Consequences:** Ingest is free and repeatable, but classification is only as
+good as its keyword rules; a headline mentioning two topics is labelled by the
+first matching category, and `OTHER` is a large bucket. Memory quality depends
+on a hand-tuned impact rule, so the bar needs review against real feeds.
+There is no summarisation, no article body, and no cross-source corroboration.
+Any model-assisted enrichment must be opt-in and carry an explicit token
+budget; it must not become a per-article call on ingestion.
+
+## ADR-010: Runtime path must be importable without development tooling
+
+**Status:** Accepted.
+
+**Decision:** Every module the CLI imports at startup must be satisfiable by
+runtime dependencies alone. `httpx` is a runtime dependency because the news
+agent's fetcher imports it. Verification is a clean virtualenv plus
+`pip install .` and `python -c "import bq.cli"`, not a check inside the
+development environment where dev extras are already present.
+
+**Consequences:** Adding a new runtime import path requires checking both the
+locked production dependency set and the dependency notices. A test that only
+runs in the development environment cannot detect this class of packaging
+failure; the install check must be performed explicitly.

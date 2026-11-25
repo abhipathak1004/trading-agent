@@ -34,7 +34,7 @@ dependencies are included because they are part of the lock.
 | Transitive | [h11](https://pypi.org/project/h11/0.16.0/) | 0.16.0 | MIT |
 | Build and development | [hatchling](https://pypi.org/project/hatchling/1.33.0/) | 1.33.0 | MIT |
 | Transitive | [httpcore](https://pypi.org/project/httpcore/1.0.9/) | 1.0.9 | BSD-3-Clause |
-| Development | [httpx](https://pypi.org/project/httpx/0.28.1/) | 0.28.1 | BSD-3-Clause |
+| Runtime | [httpx](https://pypi.org/project/httpx/0.28.1/) | 0.28.1 | BSD-3-Clause |
 | Transitive | [idna](https://pypi.org/project/idna/3.20/) | 3.20 | BSD-3-Clause |
 | Transitive | [iniconfig](https://pypi.org/project/iniconfig/2.3.1/) | 2.3.1 | MIT |
 | Runtime | [jsonschema](https://pypi.org/project/jsonschema/4.26.0/) | 4.26.0 | MIT |
@@ -46,7 +46,7 @@ dependencies are included because they are part of the lock.
 | Transitive | [packaging](https://pypi.org/project/packaging/26.3/) | 26.3 | Apache-2.0 OR BSD-2-Clause |
 | Transitive | [pathspec](https://pypi.org/project/pathspec/1.1.1/) | 1.1.1 | MPL-2.0 (bundled license) |
 | Transitive | [pluggy](https://pypi.org/project/pluggy/1.7.0/) | 1.7.0 | MIT |
-| Transitive | [pydantic](https://pypi.org/project/pydantic/2.14.4/) | 2.14.4 | MIT |
+| Runtime | [pydantic](https://pypi.org/project/pydantic/2.14.4/) | 2.14.4 | MIT |
 | Transitive | [pydantic-core](https://pypi.org/project/pydantic-core/2.50.5/) | 2.50.5 | MIT |
 | Transitive | [pycparser](https://pypi.org/project/pycparser/3.12/) | 3.12 | BSD-3-Clause |
 | Transitive | [Pygments](https://pypi.org/project/pygments/2.21.0/) | 2.21.0 | BSD-2-Clause |
@@ -54,7 +54,7 @@ dependencies are included because they are part of the lock.
 | Runtime | [referencing](https://pypi.org/project/referencing/0.37.0/) | 0.37.0 | MIT |
 | Transitive | [rpds-py](https://pypi.org/project/rpds-py/2026.9.1/) | 2026.9.1 | MIT |
 | Development | [ruff](https://pypi.org/project/ruff/0.17.6/) | 0.17.6 | MIT |
-| Transitive | [starlette](https://pypi.org/project/starlette/1.10.0/) | 1.10.0 | BSD-3-Clause |
+| Runtime | [starlette](https://pypi.org/project/starlette/1.10.0/) | 1.10.0 | BSD-3-Clause |
 | Transitive | [tomlkit](https://pypi.org/project/tomlkit/0.15.2/) | 0.15.2 | MIT |
 | Transitive | [trove-classifiers](https://pypi.org/project/trove-classifiers/2026.9.21.13/) | 2026.9.21.13 | Apache-2.0 (bundled license) |
 | Development | [types-jsonschema](https://pypi.org/project/types-jsonschema/4.26.0.20261006/) | 4.26.0.20261006 | Apache-2.0 |

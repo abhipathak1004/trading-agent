@@ -9,8 +9,13 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "argon2-cffi>=25.1,<26",
     "fastapi>=0.115,<1",
+    "httpx>=0.28,<1",
     "jsonschema>=4.26,<5",
+    # Imported directly, so declared directly rather than relied on as
+    # transitive dependencies of fastapi.
+    "pydantic>=2.14,<3",
     "referencing>=0.37,<1",
+    "starlette>=1.10,<2",
     "tzdata",
     "uvicorn>=0.34,<1",
 ]

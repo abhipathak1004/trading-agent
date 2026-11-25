@@ -157,7 +157,7 @@ Implemented in [bharatquant](./bharatquant/):
 - [Project setup documentation](./bharatquant/README.md), [dependency/license inventory](./bharatquant/THIRD_PARTY_NOTICES.md), npm lockfile, ignored generated static build output, and Hatch configuration to include that output in wheels.
 - Pinned Hatchling at 1.33.0 in the build-system requirement and development lock; CI builds with `--no-build-isolation` to use the locked backend.
 - npm is used instead of the planned pnpm because pnpm was absent and Corepack failed signature validation; the signature failure was not bypassed.
-- [GitHub Actions workflow](./bharatquant/.github/workflows/ci.yml) configures Ubuntu and `macos-15` Apple Silicon checks, frontend install/build/audit, Python lint/type/tests, lock verification, idempotent CLI initialization, and wheel asset, freshness, model validator, scoring, sizing, dependency metadata and all thirteen migration checks. `npm audit` now runs in the correct `web` directory. Actions are pinned to release commit SHAs; the four selected action repositories were checked at those commits and report MIT licenses. CI pins uv to 0.12.13.
+- [GitHub Actions workflow](./bharatquant/.github/workflows/ci.yml) configures Ubuntu and `macos-15` Apple Silicon checks, frontend install/build/audit, Python lint/type/tests, lock verification, idempotent CLI initialization, and wheel asset, freshness, model validator, scoring, sizing, dependency metadata and all thirteen migration checks. `npm audit` now runs in the correct `web` directory. Actions are pinned to release commit SHAs; the four selected action repositories were checked at those commits and report MIT licenses. CI pins uv to 0.12.13. **Correction (current snapshot): this workflow file is not present in the repository — see the corrections block below.**
 - [External-source gates](./bharatquant/docs/external-source-gates.md) record checks and blockers: NSE pages timed out, Google AI documentation was denied by network policy, and DeepSeek documentation returned HTTP 403. No restricted access was bypassed; related provider and market behavior remains disabled.
 
 Verification on this Mac used Python 3.12.7 because Python 3.13 is not installed.
@@ -249,30 +249,85 @@ deterministic.
 - **Interfaces**: `bq news ingest` and `bq news digest --limit N` on the CLI;
   owner-only, non-cacheable `GET /api/v1/news/digest` in the API.
 
-Verification: **329 backend tests** pass (26 new in `tests/test_news.py`),
-**13 frontend tests**, ruff clean, frontend build clean. Live ingest and digest
-were exercised against the real Pulse feed, then local state was removed.
+Verification: **330 backend tests** pass (26 new in `tests/test_news.py`, plus a
+runtime-dependency guard), **13 frontend tests**, ruff clean, frontend build
+clean. Live ingest and digest were exercised against the real Pulse feed, then
+local state was removed.
+
+An authenticated Settings tab consolidates configuration: `GET
+/api/v1/settings/overview` reports registered model tasks, effective schedules,
+scheduler state and model-usage groups, alongside explicit not-configured states
+for providers, API keys and agents. It is deliberately read-only; the copy says
+so rather than implying controls that do not exist.
 
 Tests that hardcoded a migration count now derive it from
 `packaged_migrations()`, so adding a migration no longer breaks unrelated
 suites.
 
+### Packaging fix: undeclared runtime imports
+
+A clean install exposed a real defect. `bq.cli` imports the news agent, which
+imports `httpx`, but `httpx` was declared only in the development dependency
+group. A production `pip install .` therefore produced a `bq` command that could
+not start. `httpx` is now a runtime dependency.
+
+Two further direct imports were reaching the runtime through `fastapi` rather
+than being declared: `pydantic` and `starlette`. They are now declared
+explicitly, because a package you import should not depend on another package's
+transitive closure to stay resolvable.
+
+`tests/test_runtime_dependencies.py` guards this going forward. It walks the
+import graph reachable from `bq.cli` and fails if any module imports a top-level
+package that is not in `[project].dependencies`. It is import-graph based, so it
+runs in milliseconds; ADR-010 records the heavier clean-install check
+(`python -m venv`, `pip install .`, `python -c "import bq.cli"`) for release
+preparation.
+
 ### Environment note: hidden `.pth` files
 
-The recurring `ModuleNotFoundError: No module named 'bq'` is now understood.
-Python's `site.py` skips `.pth` files carrying the macOS **hidden file flag**
-(`st_flags & UF_HIDDEN`), and uv's editable-install `.pth` picks that flag up on
-this machine. `chflags nohidden` fixes it until uv rewrites the file. Until that
-is addressed, run Python through:
-`PYTHONPATH=$PWD/backend/src env -u VIRTUAL_ENV UV_CACHE_DIR=/tmp/uv-cache uv run --locked …`
+The recurring `ModuleNotFoundError: No module named 'bq'` is now understood and
+worked around at the project boundary. Python's `site.py` skips any `.pth` file
+carrying the macOS **hidden file flag** (`st_flags & UF_HIDDEN`), and uv's
+editable-install `.pth` inside `.venv` can end up with that flag set. Nothing in
+this project set it, a fresh venv in `/tmp` is clean, and `uv sync` does not
+re-apply it, so the origin is environmental rather than a project defect.
+
+The `justfile` now exports `PYTHONPATH` to `bharatquant/backend/src`, and pytest
+is configured with `pythonpath = ["backend/src"]`. Both were verified with the
+flag deliberately forced to `hidden`: `just init`, `just doctor`, `just run` and
+the full suite all pass. Commands therefore no longer depend on venv internals.
+
+## Corrections to the historical record above
+
+The block above predates the current tree and several statements are no longer
+true. Kept for history; read these instead:
+
+| Earlier claim | Current state |
+|---|---|
+| "Python 3.13 is not installed"; suite verified on 3.12.7 | 3.13.18 is installed and the suite runs on it |
+| "previous checkpoint passed 223 pytest tests" | **330** backend tests pass |
+| "9 frontend tests" | **13** frontend tests pass |
+| "thirteen migrations" | **22** migrations; the count is now derived in tests rather than hardcoded |
+| "CI builds with `--no-build-isolation`"; workflow pinned to SHAs | **No CI workflow file exists** in this repository snapshot; recreate before relying on hosted checks |
+| "the workspace has no Git repository" | It is a Git repository on branch `dev` |
+| Dependencies: no `httpx` at runtime | `httpx`, `pydantic` and `starlette` are **runtime** dependencies; a production install previously could not start `bq` |
+| `bq` commands fail after install | Fixed at the project boundary: `justfile` and pytest export `PYTHONPATH` to the source tree |
 
 ## Resume next
 
-1. **Install Python 3.13** (`brew install python@3.13`) and run the full suite: `uv sync --locked && uv run --locked pytest -q`. Verify dispatch tests pass.
-2. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
-3. **P1 offline complete**: scheduler lifespan, dependency dispatch, paper accounts, exact-paise OMS, reconciliation, TWR/XIRR and universe publishing are implemented and tested. Before P1 acceptance on the target Mac, run the 271-test backend suite and frontend build in Python 3.13/Node 22, verify external market/provider claims and provider adapters remain disabled, and add schedule/operator controls if job handlers are later enabled.
-4. Verify market/provider claims through authorized access before implementing features that rely on them. Complete legal review/full license notices if redistribution is planned and decide the project license.
-5. Run GitHub CI and test on the target Apple Silicon Mac, including frontend tests on Node 22. Do not add trading pages or mock balances. Keep P0 in progress and do not claim P1 acceptance until prerequisites and acceptance checks pass. Extend symbol normalization with independently reviewed source authority and conflict handling, then integrate it into ingestion without treating unassessed mappings as verified. Extend calendar-aware diagnostics with verified instrument/session eligibility, source authority and quality incidents before using them as readiness gates. Extend the provider contract for calendar, range and other use cases only with explicit provenance and coverage semantics; implement automatic wake processing and session/dependency semantics around the schedule and job-run stores. Before connecting wake decisions to execution, validate dependency occurrence identities, job-specific catch-up safety and durable dispatch, and prevent hindsight entries. Do not enable real adapters or seed external market facts before authoritative-source and terms gates pass.
-6. Continue P2 by making task definitions authoritative at the gateway boundary, including enforceable source-selection and citation requirements, output validation, route/fallback and timeouts; establish trusted model/privacy eligibility evidence and source classification, trusted source-version lookup, validated model-specific tokenization and comprehensive source-level context replay, including dropped content. Citation paths are currently optional, check only the configured array and do not establish claim coverage. Define the output serialization policy and resolve untrusted-schema resource limits before relying on output validation. Build a gateway that owns attempt accounting and cannot bypass registry policy. Keep model clients disabled until privacy, provider terms and source gates are verified. Protect plaintext task and manifest content and add prompt-injection defenses before accepting real data.
-7. Continue P5 with owner-reviewed risk limits, accounts, order state transitions, atomic reservations and independent safety gates before connecting the sizing calculation to any order flow. Keep short selling, execution and live trading disabled until their prerequisites are verified.
-8. Continue P3 after its P1/P2 prerequisites: frozen point-in-time predictions, evidence-backed outcome revisions, coverage and small-sample reporting, calibration/baselines and immutable reports. The isolated binary-score helper is not a prediction registry or report workflow.
+1. **Next functional step: wire the news agent into the schedule.** `bq news
+   ingest` runs standalone; it is not yet a registered job or a schedule entry.
+   Add it to the job catalogue and a daily schedule so ingest happens in the
+   operating window, then expose long-term memories to the morning report.
+   Consider a bounded dedupe window so old items stop consuming the item cap.
+2. **Improve news classification only with an explicit budget.** `OTHER` is the
+   largest bucket and first-match labelling mislabels headlines that mention two
+   topics. Any model pass must be opt-in, capped by tokens, and applied to the
+   ambiguous subset — never a per-article call during ingest.
+3. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
+4. **P1 offline complete**: scheduler lifespan, dependency dispatch, paper accounts, exact-paise OMS, reconciliation, TWR/XIRR and universe publishing are implemented and tested. Before P1 acceptance on the target Mac, run the full backend suite and frontend build in Python 3.13/Node 22, verify external market/provider claims and provider adapters remain disabled, and add schedule/operator controls if job handlers are later enabled.
+5. Verify market/provider claims through authorized access before implementing features that rely on them. Complete legal review/full license notices if redistribution is planned and decide the project license.
+6. Run GitHub CI and test on the target Apple Silicon Mac, including frontend tests on Node 22. The CI workflow referenced in earlier checkpoints is **not present in this repository snapshot**; recreate it before relying on hosted checks. Do not add trading pages or mock balances. Keep P0 in progress and do not claim P1 acceptance until prerequisites and acceptance checks pass. Extend symbol normalization with independently reviewed source authority and conflict handling, then integrate it into ingestion without treating unassessed mappings as verified. Extend calendar-aware diagnostics with verified instrument/session eligibility, source authority and quality incidents before using them as readiness gates. Extend the provider contract for calendar, range and other use cases only with explicit provenance and coverage semantics; implement automatic wake processing and session/dependency semantics around the schedule and job-run stores. Before connecting wake decisions to execution, validate dependency occurrence identities, job-specific catch-up safety and durable dispatch, and prevent hindsight entries. Do not enable real adapters or seed external market facts before authoritative-source and terms gates pass.
+7. Continue P2 by making task definitions authoritative at the gateway boundary, including enforceable source-selection and citation requirements, output validation, route/fallback and timeouts; establish trusted model/privacy eligibility evidence and source classification, trusted source-version lookup, validated model-specific tokenization and comprehensive source-level context replay, including dropped content. Citation paths are currently optional, check only the configured array and do not establish claim coverage. Define the output serialization policy and resolve untrusted-schema resource limits before relying on output validation. Build a gateway that owns attempt accounting and cannot bypass registry policy. Keep model clients disabled until privacy, provider terms and source gates are verified. Protect plaintext task and manifest content and add prompt-injection defenses before accepting real data.
+8. Continue P5 with owner-reviewed risk limits, accounts, order state transitions, atomic reservations and independent safety gates before connecting the sizing calculation to any order flow. Keep short selling, execution and live trading disabled until their prerequisites are verified.
+9. Continue P3 after its P1/P2 prerequisites: frozen point-in-time predictions, evidence-backed outcome revisions, coverage and small-sample reporting, calibration/baselines and immutable reports. The isolated binary-score helper is not a prediction registry or report workflow.

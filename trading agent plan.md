@@ -1139,6 +1139,8 @@ Documentation must not drift. A CI check enforces coverage:
 
 Each agent's tool permissions are enforced by the DAG runner. For example, research agents **cannot place orders**, and Execution **cannot change any limits**.
 
+**Implementation status (2026-11-25):** **News Research is implemented**, as a deterministic ingest agent rather than the batched LLM pipeline sketched above. It pulls the Pulse by Zerodha RSS feed (which already carries a title and one-line summary per story, so article bodies are never fetched), deduplicates by normalised-URL hash plus an order-insensitive title fingerprint, and classifies by whole-word keyword rules into eight categories. It makes **no model calls**. Items that clear a structural-impact bar are written to a separate agent-memory table with point-in-time validity. Modules: `bq/news.py`, `bq/news_agent.py`, `bq/infra/news_feed.py`; storage `022_news_agent.sql`; interfaces `bq news ingest|digest` and the owner-only `GET /api/v1/news/digest`. Known gaps: first-match classification mislabels headlines covering two topics, `OTHER` is a large bucket, and no summarisation exists. Any LLM pass must be opt-in with a token budget over the ambiguous subset, never per article at ingest. See [ADR-009](./bharatquant/docs/architecture-decisions.md).
+
 ### 9.2 DAG Runner
 
 A small, purpose-built async runner of about 300 lines replaces LangGraph.

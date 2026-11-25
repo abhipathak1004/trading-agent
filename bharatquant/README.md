@@ -34,8 +34,14 @@ existing data, and starts the loopback server. On first use, complete owner
 setup in the browser or run `just auth-setup` in a terminal.
 
 Other useful recipes include `just build`, `just doctor`, `just test`,
-`just check`, and `just web-dev`. `just web-dev` starts only the Vite frontend;
-owner sign-in is not supported on its dev origin.
+`just check`, `just news` and `just web-dev`. `just web-dev` starts only the
+Vite frontend; owner sign-in is not supported on its dev origin.
+
+Recipes export `PYTHONPATH` to the source tree. On macOS, Python skips any
+`.pth` file carrying the hidden file flag, and uv's editable install can pick
+that flag up inside `.venv`; without the export, commands fail with
+`ModuleNotFoundError: No module named 'bq'` even though the package is
+installed. `pytest` is configured the same way.
 
 ## Manual build and run
 
@@ -529,6 +535,51 @@ execution is implemented.
 The locked dependency and license inventory is in
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md). It is not a legal review or
 a redistribution bundle; the project has no declared redistribution license.
+
+## News research agent
+
+The first agent ingests market news from **Pulse by Zerodha**
+(`https://pulse.zerodha.com/feed.xml`) and keeps what matters over the long
+term. It makes **no model calls**: fetching, parsing, deduplication and
+classification are deterministic, which is the cost strategy.
+
+```sh
+uv run --locked bq news ingest              # fetch, store new items, update memory
+uv run --locked bq news digest --limit 20   # long-term-impact memories as JSON
+```
+
+Or `just news` from the repository root.
+
+**Why it stays cheap.** Pulse's feed already carries a title and a one-line
+summary for every story, so **full articles are never fetched**. A single
+request returns roughly 150 stories in about 107 KB. Only that metadata is
+stored (bounded to 512 characters for a title and 1,024 for a summary).
+
+**Deduplication** uses no LLM: each item is keyed by a hash of its normalised
+HTTPS URL plus an order-insensitive fingerprint of its title words. Re-ingesting
+the same feed stores nothing and reports every item as a duplicate.
+
+**Classification** uses whole-word keyword rules into eight categories:
+`INDIA_MARKET`, `GLOBAL_MARKET`, `GEOPOLITICAL`, `COMMODITY`, `RATES`,
+`CORPORATE`, `REGULATORY` and `OTHER`. Whole-word matching matters — substring
+matching classified "celebrated" as a rate story.
+
+**Memory** keeps only long-term-impact items. Geopolitical and regulatory news
+qualifies outright; rate news must contain a structural word (repo, policy rate,
+rate cut or hike, inflation) so routine RBI notices do not flood memory; other
+categories need an explicit marker. Memories carry `known_at` and `expires_at`,
+are filtered point-in-time, and track `hit_count` for later frecency pruning.
+A live run produced 15 memories from 156 stories.
+
+`news_items` and `agent_memories` are immutable by trigger. The authenticated
+`GET /api/v1/news/digest` endpoint returns the 20 most recent items and
+memories; it is owner-only and non-cacheable.
+
+Limitations: classification is keyword-based and can mislabel a headline that
+mentions two topics (a merger story that opens with "RBI" lands first-match).
+`OTHER` is currently a large bucket. This agent performs no summarisation and
+does not fetch article bodies; any model-assisted pass would need an explicit
+token budget.
 
 ## Continuous integration
 
