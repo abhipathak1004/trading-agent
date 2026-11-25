@@ -770,6 +770,9 @@ foundation status:
 - Authenticated current capabilities are shown for data imports, paper
   accounts, schedules, snapshot freshness, calendar coverage and model usage.
 - The old welcome-page-only presentation is not the current UI.
+- A browser smoke check of owner access at 390px and 1440px found no
+  horizontal overflow. This does not certify WCAG AA or the full acceptance
+  checklist.
 - Trade, Agent Lab and Settings routes are not implemented and are not linked
   as working pages. This keeps the guide's navigation from implying unavailable
   behavior.

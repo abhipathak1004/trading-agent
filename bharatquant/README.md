@@ -18,8 +18,26 @@ foundation capabilities and does not imply that unavailable features exist.
 - Python 3.13
 - Node.js 22.12 or newer supported by Vite, plus npm
 - `uv`
+- Optional: [`just`](https://just.systems/) for the repository shortcuts
 
-## Build and run
+## Quick shortcuts
+
+From the repository root, run `just` to list recipes:
+
+```sh
+just install
+just run
+```
+
+`just run` builds the web app, initializes local storage without overwriting
+existing data, and starts the loopback server. On first use, complete owner
+setup in the browser or run `just auth-setup` in a terminal.
+
+Other useful recipes include `just build`, `just doctor`, `just test`,
+`just check`, and `just web-dev`. `just web-dev` starts only the Vite frontend;
+owner sign-in is not supported on its dev origin.
+
+## Manual build and run
 
 From the project directory:
 

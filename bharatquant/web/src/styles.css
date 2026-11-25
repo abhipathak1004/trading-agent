@@ -344,8 +344,8 @@ a.nav-item:hover,
 }
 
 .nav-item--muted {
-  color: #70766c;
-  cursor: not-allowed;
+  color: var(--muted);
+  cursor: default;
 }
 
 .sidebar-footer {
