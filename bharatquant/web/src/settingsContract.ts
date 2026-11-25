@@ -8,16 +8,40 @@ export type ConfiguredTask = {
   spec_version: string;
 };
 
+export const PROVIDERS = ["GEMINI", "DEEPSEEK", "OPENAI", "CUSTOM"] as const;
+export type Provider = (typeof PROVIDERS)[number];
+
+export type ApiKeyStatus = {
+  provider: Provider;
+  configured: boolean;
+  masked: string | null;
+};
+
+export type AppConfig = {
+  provider: Provider;
+  model_name: string;
+  news_feed_url: string;
+  news_memory_ttl_days: number;
+  api_keys: ApiKeyStatus[];
+  model_route_configured: boolean;
+  updated_at: string | null;
+};
+
 export type SettingsOverview = {
   tasks: ConfiguredTask[];
   task_count: number;
   schedule_count: number;
   scheduler_running: boolean;
   model_usage_groups: number;
-  provider_connected: false;
-  api_keys_configured: false;
-  agent_configuration_state: "not_configured";
+  provider_connected: boolean;
+  api_keys_configured: boolean;
+  agent_configuration_state: "not_configured" | "configured";
+  config: AppConfig;
 };
+
+export const MAX_MODEL_NAME_CHARS = 200;
+export const MIN_MEMORY_TTL_DAYS = 1;
+export const MAX_MEMORY_TTL_DAYS = 3650;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -33,6 +57,13 @@ function isStringList(value: unknown): value is string[] {
     value.length > 0 &&
     value.every((item) => typeof item === "string" && item.length > 0)
   );
+}
+
+function parseProvider(value: unknown): Provider {
+  if (typeof value !== "string" || !(PROVIDERS as readonly string[]).includes(value)) {
+    throw new Error("Invalid provider");
+  }
+  return value as Provider;
 }
 
 function parseTask(value: unknown): ConfiguredTask {
@@ -64,6 +95,61 @@ function parseTask(value: unknown): ConfiguredTask {
   };
 }
 
+function parseApiKey(value: unknown): ApiKeyStatus {
+  if (
+    !isRecord(value) ||
+    typeof value.configured !== "boolean" ||
+    (value.masked !== null && typeof value.masked !== "string")
+  ) {
+    throw new Error("Invalid API key status");
+  }
+  const provider = parseProvider(value.provider);
+  if (value.configured !== (typeof value.masked === "string")) {
+    throw new Error("Invalid API key status");
+  }
+  return {
+    provider,
+    configured: value.configured,
+    masked: value.masked as string | null,
+  };
+}
+
+export function parseConfig(value: unknown): AppConfig {
+  if (
+    !isRecord(value) ||
+    typeof value.model_name !== "string" ||
+    typeof value.news_feed_url !== "string" ||
+    !isCount(value.news_memory_ttl_days) ||
+    value.news_memory_ttl_days < MIN_MEMORY_TTL_DAYS ||
+    value.news_memory_ttl_days > MAX_MEMORY_TTL_DAYS ||
+    !Array.isArray(value.api_keys) ||
+    value.api_keys.length > PROVIDERS.length ||
+    typeof value.model_route_configured !== "boolean" ||
+    (value.updated_at !== null &&
+      (typeof value.updated_at !== "string" ||
+        !Number.isFinite(Date.parse(value.updated_at))))
+  ) {
+    throw new Error("Invalid application config");
+  }
+  const apiKeys = value.api_keys.map(parseApiKey);
+  const seen = new Set<string>();
+  for (const key of apiKeys) {
+    if (seen.has(key.provider)) {
+      throw new Error("Invalid application config");
+    }
+    seen.add(key.provider);
+  }
+  return {
+    provider: parseProvider(value.provider),
+    model_name: value.model_name,
+    news_feed_url: value.news_feed_url,
+    news_memory_ttl_days: value.news_memory_ttl_days,
+    api_keys: apiKeys,
+    model_route_configured: value.model_route_configured,
+    updated_at: value.updated_at as string | null,
+  };
+}
+
 export function parseOverview(value: unknown): SettingsOverview {
   if (
     !isRecord(value) ||
@@ -74,10 +160,16 @@ export function parseOverview(value: unknown): SettingsOverview {
     !isCount(value.schedule_count) ||
     typeof value.scheduler_running !== "boolean" ||
     !isCount(value.model_usage_groups) ||
-    value.provider_connected !== false ||
-    value.api_keys_configured !== false ||
-    value.agent_configuration_state !== "not_configured"
+    typeof value.provider_connected !== "boolean" ||
+    typeof value.api_keys_configured !== "boolean" ||
+    (value.agent_configuration_state !== "not_configured" &&
+      value.agent_configuration_state !== "configured") ||
+    !("config" in value)
   ) {
+    throw new Error("Invalid settings overview");
+  }
+  const config = parseConfig(value.config);
+  if (value.provider_connected !== config.model_route_configured) {
     throw new Error("Invalid settings overview");
   }
   return {
@@ -89,5 +181,6 @@ export function parseOverview(value: unknown): SettingsOverview {
     provider_connected: value.provider_connected,
     api_keys_configured: value.api_keys_configured,
     agent_configuration_state: value.agent_configuration_state,
+    config,
   };
 }

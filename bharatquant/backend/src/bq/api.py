@@ -41,7 +41,8 @@ from bq.infra.model_attempts import ModelAttemptStore, TokenUsage
 from bq.infra.scheduler import SchedulerLoop, SchedulerRunner
 from bq.infra.schedules import ScheduleStore
 from bq.infra.task_registry import TaskRegistry
-from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsStore
+from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsError, NewsStore
+from bq.news_agent import NewsResearchAgent
 from bq.paper_accounts import (
     PaperAccountStatus,
     PaperAccountStore,
@@ -53,6 +54,14 @@ from bq.schedules import (
     WakeDecision,
     next_daily_occurrences,
     next_interval_occurrences,
+)
+from bq.settings import (
+    MAX_API_KEY_CHARS,
+    MAX_SETTING_CHARS,
+    AppConfig,
+    Provider,
+    SettingsError,
+    SettingsStore,
 )
 
 WEB_ROOT = Path(__file__).with_name("static")
@@ -232,6 +241,41 @@ class NewsDigest(BaseModel):
     memories: list[NewsMemoryStatus]
 
 
+class NewsIngestResult(BaseModel):
+    source_id: str
+    fetched: int
+    stored: int
+    duplicates: int
+    long_term_memories: int
+
+
+class ApiKeyStatus(BaseModel):
+    provider: Provider
+    configured: bool
+    masked: str | None
+
+
+class AppConfigStatus(BaseModel):
+    provider: Provider
+    model_name: str
+    news_feed_url: str
+    news_memory_ttl_days: int
+    api_keys: list[ApiKeyStatus]
+    model_route_configured: bool
+    updated_at: datetime | None
+
+
+class AppConfigUpdate(BaseModel):
+    provider: Provider
+    model_name: str = Field(max_length=MAX_SETTING_CHARS, strict=True)
+    news_feed_url: str = Field(max_length=MAX_SETTING_CHARS, strict=True)
+    news_memory_ttl_days: int = Field(strict=True)
+
+
+class ApiKeyUpdate(BaseModel):
+    api_key: str = Field(min_length=1, max_length=MAX_API_KEY_CHARS, strict=True)
+
+
 class SettingsOverview(BaseModel):
     """Read-only settings surface: what is configured, and what is not."""
 
@@ -240,9 +284,10 @@ class SettingsOverview(BaseModel):
     schedule_count: int
     scheduler_running: bool
     model_usage_groups: int
-    provider_connected: Literal[False]
-    api_keys_configured: Literal[False]
-    agent_configuration_state: Literal["not_configured"]
+    provider_connected: bool
+    api_keys_configured: bool
+    agent_configuration_state: Literal["not_configured", "configured"]
+    config: AppConfigStatus
 
 
 def _daily_schedule_status(
@@ -290,6 +335,25 @@ def _token_usage_status(usage: TokenUsage) -> TokenUsageStatus:
         estimated_tokens=str(usage.estimated_tokens),
         estimated_count=usage.estimated_count,
         unknown_count=usage.unknown_count,
+    )
+
+
+def _app_config_status(config: AppConfig) -> AppConfigStatus:
+    return AppConfigStatus(
+        provider=config.provider,
+        model_name=config.model_name,
+        news_feed_url=config.news_feed_url,
+        news_memory_ttl_days=config.news_memory_ttl_days,
+        api_keys=[
+            ApiKeyStatus(
+                provider=key.provider,
+                configured=key.configured,
+                masked=key.masked,
+            )
+            for key in config.api_keys
+        ],
+        model_route_configured=config.model_route_configured,
+        updated_at=config.updated_at,
     )
 
 
@@ -400,6 +464,7 @@ def create_app(
         attempts = ModelAttemptStore(database_path)
         schedules = ScheduleStore(database_path, available_jobs=frozenset())
         paper_accounts = PaperAccountStore(database_path)
+        settings = SettingsStore(database_path)
         scheduler = SchedulerLoop(
             SchedulerRunner(
                 database_path,
@@ -628,6 +693,7 @@ def create_app(
             effective = overview.effective
             active = effective.snapshot.schedules if effective is not None else ()
             usage = attempts.usage()
+            config = settings.load()
             return SettingsOverview(
                 tasks=[
                     ConfiguredTask(
@@ -649,10 +715,78 @@ def create_app(
                 schedule_count=len(active),
                 scheduler_running=scheduler.running,
                 model_usage_groups=len(usage),
-                provider_connected=False,
-                api_keys_configured=False,
-                agent_configuration_state="not_configured",
+                provider_connected=config.model_route_configured,
+                api_keys_configured=config.api_keys_configured,
+                agent_configuration_state=(
+                    "configured" if config.model_route_configured else "not_configured"
+                ),
+                config=_app_config_status(config),
             )
+
+        @app.get("/api/v1/settings/config")
+        def get_settings_config(request: Request) -> AppConfigStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return _app_config_status(settings.load())
+
+        @app.put("/api/v1/settings/config")
+        def update_settings_config(
+            request: Request, body: AppConfigUpdate
+        ) -> AppConfigStatus:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            try:
+                config = settings.save_config(
+                    provider=body.provider,
+                    model_name=body.model_name,
+                    news_feed_url=body.news_feed_url,
+                    news_memory_ttl_days=body.news_memory_ttl_days,
+                )
+            except SettingsError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return _app_config_status(config)
+
+        @app.put("/api/v1/settings/api-keys/{provider}")
+        def set_provider_api_key(
+            request: Request, provider: Provider, body: ApiKeyUpdate
+        ) -> AppConfigStatus:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            try:
+                settings.set_api_key(provider, body.api_key)
+            except SettingsError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return _app_config_status(settings.load())
+
+        @app.delete("/api/v1/settings/api-keys/{provider}")
+        def clear_provider_api_key(
+            request: Request, provider: Provider
+        ) -> AppConfigStatus:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            settings.clear_api_key(provider)
+            return _app_config_status(settings.load())
 
         @app.get("/api/v1/news/digest")
         def news_digest(request: Request) -> NewsDigest:
@@ -688,6 +822,37 @@ def create_app(
                     )
                     for item in memories
                 ],
+            )
+
+        @app.post("/api/v1/news/ingest")
+        def news_ingest(request: Request) -> NewsIngestResult:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            config = settings.load()
+            agent = NewsResearchAgent(
+                database_path,
+                feed_url=config.news_feed_url,
+                source_id=PULSE_SOURCE_ID,
+            )
+            try:
+                report = agent.run(memory_ttl_days=config.news_memory_ttl_days)
+            except NewsError as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"News feed unavailable: {exc}"
+                ) from exc
+            return NewsIngestResult(
+                source_id=report.source_id,
+                fetched=report.fetched,
+                stored=report.stored,
+                duplicates=report.duplicates,
+                long_term_memories=report.long_term_memories,
             )
 
         @app.get("/api/v1/auth/session")

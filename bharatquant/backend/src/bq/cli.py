@@ -39,8 +39,9 @@ from bq.data.instruments import compare_symbol_sources
 from bq.data.records import DataRecordStore, MissingDataImport, MissingDataRecord
 from bq.infra.database import DatabaseError, check_database, migrate
 from bq.infra.model_attempts import ModelAttemptStore
-from bq.news import PULSE_FEED_URL, NewsError
+from bq.news import NewsError
 from bq.news_agent import NewsResearchAgent
+from bq.settings import SettingsStore
 
 
 def _default_home() -> Path:
@@ -106,13 +107,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     news_ingest.add_argument(
         "--source-url",
-        default=PULSE_FEED_URL,
-        help="HTTPS RSS feed URL (default: Pulse by Zerodha).",
+        default=None,
+        help="HTTPS RSS feed URL; defaults to the configured feed (Pulse by Zerodha).",
     )
     news_digest = news_actions.add_parser(
         "digest", help="Print long-term-impact news memories as JSON."
     )
     news_digest.add_argument("--limit", type=int, default=20)
+    settings_actions = actions.add_parser("settings").add_subparsers(
+        dest="settings_action", required=True
+    )
+    settings_actions.add_parser(
+        "show", help="Print the configured model, feed and API key status as JSON."
+    )
     data_actions = actions.add_parser("data").add_subparsers(
         dest="data_action", required=True
     )
@@ -403,7 +410,11 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
             elif args.action == "news" and args.news_action == "ingest":
-                report = NewsResearchAgent(path, feed_url=args.source_url).run()
+                config = SettingsStore(path).load()
+                feed_url = args.source_url or config.news_feed_url
+                report = NewsResearchAgent(path, feed_url=feed_url).run(
+                    memory_ttl_days=config.news_memory_ttl_days
+                )
                 print(
                     json.dumps(
                         {
@@ -430,6 +441,28 @@ def main(argv: list[str] | None = None) -> int:
                             }
                             for item in memories
                         ],
+                        sort_keys=True,
+                    )
+                )
+            elif args.action == "settings":
+                config = SettingsStore(path).load()
+                print(
+                    json.dumps(
+                        {
+                            "provider": config.provider.value,
+                            "model_name": config.model_name,
+                            "news_feed_url": config.news_feed_url,
+                            "news_memory_ttl_days": config.news_memory_ttl_days,
+                            "model_route_configured": config.model_route_configured,
+                            "api_keys": [
+                                {
+                                    "provider": key.provider.value,
+                                    "configured": key.configured,
+                                    "masked": key.masked,
+                                }
+                                for key in config.api_keys
+                            ],
+                        },
                         sort_keys=True,
                     )
                 )

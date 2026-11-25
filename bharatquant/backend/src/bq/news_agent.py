@@ -6,12 +6,13 @@ wanted, it belongs behind an explicit opt-in and a token budget, not here.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from bq.core import Clock, SystemClock
 from bq.infra.news_feed import fetch_feed
 from bq.news import (
+    DEFAULT_MEMORY_TTL,
     PULSE_FEED_URL,
     PULSE_SOURCE_ID,
     AgentMemory,
@@ -52,13 +53,23 @@ class NewsResearchAgent:
         self.source_id = source_id
         self.store = store or NewsStore(path, self.clock)
 
-    def run(self, *, payload: bytes | None = None) -> RunReport:
+    def run(
+        self, *, payload: bytes | None = None, memory_ttl_days: int | None = None
+    ) -> RunReport:
         """One pass. ``payload`` lets a caller inject already-fetched bytes."""
         started_at = self.clock.now().astimezone(UTC)
         raw = payload if payload is not None else fetch_feed(self.feed_url)
         entries = parse_feed(raw, ingested_at=started_at)
+        memory_ttl = (
+            DEFAULT_MEMORY_TTL
+            if memory_ttl_days is None
+            else timedelta(days=memory_ttl_days)
+        )
         result: IngestResult = self.store.ingest(
-            entries, source_id=self.source_id, agent_id=AGENT_ID
+            entries,
+            source_id=self.source_id,
+            agent_id=AGENT_ID,
+            memory_ttl=memory_ttl,
         )
         return RunReport(
             source_id=self.source_id,

@@ -77,15 +77,23 @@ export default function SettingsOverviewPanel() {
                 ? "No model attempts recorded."
                 : `${status.overview.model_usage_groups} task/model usage group(s).`}
             </dd>
-            <dt>Providers</dt>
+            <dt>Model route</dt>
             <dd>
-              No model provider is connected. API keys are not configured; adding
-              keys and model routes is not implemented yet.
+              {status.overview.provider_connected
+                ? `${status.overview.config.provider} · ${status.overview.config.model_name}`
+                : "Not configured. Set a model name and provider key below."}
             </dd>
-            <dt>Agents</dt>
+            <dt>API keys</dt>
             <dd>
-              Agent configuration is not available. The agent runtime and its
-              settings will appear here once implemented.
+              {status.overview.api_keys_configured
+                ? `${status.overview.config.api_keys.filter((key) => key.configured).length} provider key(s) configured.`
+                : "No provider API keys configured."}
+            </dd>
+            <dt>Research agent</dt>
+            <dd>
+              {status.overview.agent_configuration_state === "configured"
+                ? `Configured. Feed ${status.overview.config.news_feed_url}, memory retained ${status.overview.config.news_memory_ttl_days} day(s).`
+                : `Feed ${status.overview.config.news_feed_url}; model route incomplete.`}
             </dd>
           </dl>
 

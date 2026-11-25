@@ -112,8 +112,12 @@ def test_urls_must_be_https_and_are_normalized() -> None:
 
 
 def test_shingle_hash_ignores_word_order_but_not_content() -> None:
-    assert shingle_hash("Nifty hits record high") == shingle_hash("record high Nifty hits")
-    assert shingle_hash("Nifty hits record high") != shingle_hash("Sensex falls sharply")
+    assert shingle_hash("Nifty hits record high") == shingle_hash(
+        "record high Nifty hits"
+    )
+    assert shingle_hash("Nifty hits record high") != shingle_hash(
+        "Sensex falls sharply"
+    )
     with pytest.raises(NewsError, match="no usable words"):
         shingle_hash("   ...   ")
 
@@ -124,10 +128,18 @@ def test_shingle_hash_ignores_word_order_but_not_content() -> None:
         ("RBI cuts repo rate by 25 bps", NewsCategory.RATES, True),
         ("RBI brings back 60 tonnes of gold reserves", NewsCategory.RATES, False),
         ("SEBI fines broker for insider trading", NewsCategory.REGULATORY, True),
-        ("New sanctions announced after border conflict", NewsCategory.GEOPOLITICAL, True),
+        (
+            "New sanctions announced after border conflict",
+            NewsCategory.GEOPOLITICAL,
+            True,
+        ),
         ("Crude oil slips on demand worries", NewsCategory.COMMODITY, False),
         ("Infosys wins order, board approves buyback", NewsCategory.CORPORATE, False),
-        ("Alembic Pharma gets US FDA nod for cancer drug", NewsCategory.CORPORATE, False),
+        (
+            "Alembic Pharma gets US FDA nod for cancer drug",
+            NewsCategory.CORPORATE,
+            False,
+        ),
         ("Nasdaq ends higher as US futures rise", NewsCategory.GLOBAL_MARKET, False),
         ("Nifty and Sensex close flat", NewsCategory.INDIA_MARKET, False),
         ("Local festival celebrated across the city", NewsCategory.OTHER, False),
@@ -141,9 +153,15 @@ def test_classification_is_deterministic(
 
 def test_keywords_match_whole_words_only() -> None:
     # "celebrated" contains "rate"; it must not be classified as RATES.
-    assert classify("Local festival celebrated across the city", "")[0] is NewsCategory.OTHER
+    assert (
+        classify("Local festival celebrated across the city", "")[0]
+        is NewsCategory.OTHER
+    )
     # "warning" contains "war"; it must not be geopolitical.
-    assert classify("Analyst issues warning on margins", "")[0] is not NewsCategory.GEOPOLITICAL
+    assert (
+        classify("Analyst issues warning on margins", "")[0]
+        is not NewsCategory.GEOPOLITICAL
+    )
 
 
 def test_ingest_deduplicates_by_url_and_title(tmp_path: Path) -> None:
@@ -290,6 +308,59 @@ def test_news_digest_endpoint_is_private_and_reports_items(tmp_path: Path) -> No
             )
             assert logout.status_code == 204
             assert (await client.get("/api/v1/news/digest")).status_code == 401
+
+    asyncio.run(check())
+
+
+def test_news_ingest_endpoint_runs_agent_with_injected_feed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "bq.db"
+    migrate(path, create=True)
+    auth = OwnerAuth(path)
+
+    def fake_fetch(*_args: object, **_kwargs: object) -> bytes:
+        return FEED
+
+    monkeypatch.setattr("bq.news_agent.fetch_feed", fake_fetch)
+    app = create_app(database_path=path)
+
+    async def check() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://127.0.0.1:8000",
+        ) as client:
+            assert (await client.post("/api/v1/news/ingest")).status_code == 401
+
+            auth.setup("synthetic owner password")
+            login = await client.post(
+                "/api/v1/auth/login",
+                headers={"Origin": ALLOWED_ORIGIN},
+                json={"password": "synthetic owner password"},
+            )
+            csrf = login.json()["csrf_token"]
+
+            # Missing CSRF token is rejected.
+            assert (await client.post("/api/v1/news/ingest")).status_code == 403
+            # Wrong origin is rejected.
+            assert (
+                await client.post(
+                    "/api/v1/news/ingest",
+                    headers={"Origin": "https://evil.example", "X-CSRF-Token": csrf},
+                )
+            ).status_code == 403
+
+            response = await client.post(
+                "/api/v1/news/ingest",
+                headers={"Origin": ALLOWED_ORIGIN, "X-CSRF-Token": csrf},
+            )
+            assert response.status_code == 200
+            assert response.headers["cache-control"] == "no-store"
+            body = response.json()
+            assert body["fetched"] == 4
+            assert body["stored"] == 4
+            assert body["duplicates"] == 0
+            assert body["long_term_memories"] == 2
 
     asyncio.run(check())
 

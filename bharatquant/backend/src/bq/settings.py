@@ -132,9 +132,7 @@ def validate_news_feed_url(value: str) -> str:
         or parts.username is not None
         or parts.password is not None
     ):
-        raise SettingsError(
-            "Feed URL must be HTTPS without embedded credentials."
-        )
+        raise SettingsError("Feed URL must be HTTPS without embedded credentials.")
     return url
 
 

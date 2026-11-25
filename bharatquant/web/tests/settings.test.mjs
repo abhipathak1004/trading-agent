@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseOverview } from "../src/settingsContract.ts";
+import { parseConfig, parseOverview } from "../src/settingsContract.ts";
+
+const validConfig = {
+  provider: "GEMINI",
+  model_name: "gemini-2.5-pro",
+  news_feed_url: "https://pulse.zerodha.com/feed.xml",
+  news_memory_ttl_days: 365,
+  api_keys: [
+    { provider: "GEMINI", configured: true, masked: "********abcd" },
+  ],
+  model_route_configured: true,
+  updated_at: "2026-11-25T12:00:00Z",
+};
 
 const valid = {
   tasks: [
@@ -19,9 +31,10 @@ const valid = {
   schedule_count: 0,
   scheduler_running: true,
   model_usage_groups: 0,
-  provider_connected: false,
-  api_keys_configured: false,
-  agent_configuration_state: "not_configured",
+  provider_connected: true,
+  api_keys_configured: true,
+  agent_configuration_state: "configured",
+  config: validConfig,
 };
 
 test("a valid settings overview is accepted", () => {
@@ -29,6 +42,8 @@ test("a valid settings overview is accepted", () => {
   assert.equal(parsed.task_count, 1);
   assert.equal(parsed.tasks[0].task_id, "confidence.review");
   assert.deepEqual(parsed.tasks[0].allowed_data, ["PRIVATE", "PUBLIC"]);
+  assert.equal(parsed.config.provider, "GEMINI");
+  assert.equal(parsed.config.model_route_configured, true);
 });
 
 test("tasks cannot exceed the declared count or the 50-row cap", () => {
@@ -46,14 +61,20 @@ test("tasks cannot exceed the declared count or the 50-row cap", () => {
   );
 });
 
-test("a connected provider or configured keys are rejected", () => {
-  for (const override of [
-    { provider_connected: true },
-    { api_keys_configured: true },
-    { agent_configuration_state: "configured" },
-  ]) {
-    assert.throws(() => parseOverview({ ...valid, ...override }));
-  }
+test("overview provider state must match the configured route", () => {
+  assert.throws(() =>
+    parseOverview({
+      ...valid,
+      provider_connected: false,
+      config: validConfig,
+    }),
+  );
+  assert.throws(() =>
+    parseOverview({
+      ...valid,
+      config: { ...validConfig, model_route_configured: false },
+    }),
+  );
 });
 
 test("malformed tasks are rejected", () => {
@@ -65,5 +86,40 @@ test("malformed tasks are rejected", () => {
     { ...valid.tasks[0], spec_version: "" },
   ]) {
     assert.throws(() => parseOverview({ ...valid, tasks: [task], task_count: 1 }));
+  }
+});
+
+test("a valid configuration is accepted with no keys", () => {
+  const parsed = parseConfig({
+    ...validConfig,
+    api_keys: [],
+    model_route_configured: false,
+    updated_at: null,
+  });
+  assert.deepEqual(parsed.api_keys, []);
+  assert.equal(parsed.model_route_configured, false);
+});
+
+test("configuration rejects bad providers, retention and key states", () => {
+  for (const override of [
+    { provider: "ANTHROPIC" },
+    { news_memory_ttl_days: 0 },
+    { news_memory_ttl_days: 3651 },
+    { news_memory_ttl_days: 1.5 },
+    { updated_at: "not-a-time" },
+    {
+      api_keys: [{ provider: "GEMINI", configured: true, masked: null }],
+    },
+    {
+      api_keys: [{ provider: "GEMINI", configured: false, masked: "********abcd" }],
+    },
+    {
+      api_keys: [
+        { provider: "GEMINI", configured: true, masked: "********abcd" },
+        { provider: "GEMINI", configured: true, masked: "********wxyz" },
+      ],
+    },
+  ]) {
+    assert.throws(() => parseConfig({ ...validConfig, ...override }));
   }
 });

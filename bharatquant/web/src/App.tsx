@@ -7,9 +7,11 @@ import SnapshotFreshness from "./SnapshotFreshness";
 import ScheduleStatus from "./ScheduleStatus";
 import UsageStatus from "./UsageStatus";
 import PaperAccountStatus from "./PaperAccountStatus";
+import ResearchPanel from "./ResearchPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
+import SettingsConfigPanel from "./SettingsConfigPanel";
 
-type WorkspaceView = "today" | "settings";
+type WorkspaceView = "today" | "research" | "settings";
 
 type ServiceState = "checking" | "online" | "offline";
 type SessionState =
@@ -284,6 +286,14 @@ export default function App() {
             )}
             <button
               type="button"
+              className={`nav-item nav-item--button${view === "research" ? " nav-item--active" : ""}`}
+              aria-current={view === "research" ? "page" : undefined}
+              onClick={() => setView("research")}
+            >
+              <span aria-hidden="true">◎</span>Research
+            </button>
+            <button
+              type="button"
               className={`nav-item nav-item--button${view === "settings" ? " nav-item--active" : ""}`}
               aria-current={view === "settings" ? "page" : undefined}
               onClick={() => setView("settings")}
@@ -312,7 +322,9 @@ export default function App() {
       <div className="workspace">
         <header className="status-strip" aria-label="System status">
           <div className="status-strip__identity">
-            <span className="breadcrumb">{view === "settings" ? "Settings" : "Today"}</span>
+            <span className="breadcrumb">
+              {view === "settings" ? "Settings" : view === "research" ? "Research" : "Today"}
+            </span>
             <span className="mode-label">PAPER ONLY</span>
           </div>
           <div className={`service-status service-status--${serviceState}`}>
@@ -491,6 +503,38 @@ export default function App() {
           </section>
         )}
 
+        {serviceState === "online" && session.state === "signed_in" && view === "research" && (
+          <section className="dashboard" id="research" aria-labelledby="research-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">RESEARCH</p>
+                <h1 id="research-page-title">Research</h1>
+                <p className="intro">
+                  The news research agent: deterministic ingest, deduplication and
+                  long-term memory. No model calls.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">FOUNDATION</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Research scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Deterministic and cost-bounded</strong>
+                <p>
+                  Ingest stores compact feed metadata only — never full articles —
+                  and performs no model calls. Feed URL and retention are set in
+                  Settings.
+                </p>
+              </div>
+            </section>
+
+            <div className="dashboard-grid dashboard-grid--research">
+              <ResearchPanel csrfToken={session.csrfToken} />
+            </div>
+          </section>
+        )}
+
         {serviceState === "online" && session.state === "signed_in" && view === "settings" && (
           <section className="dashboard" id="settings" aria-labelledby="settings-title">
             <header className="page-header">
@@ -508,15 +552,16 @@ export default function App() {
             <section className="mode-banner" aria-label="Settings scope">
               <span aria-hidden="true">i</span>
               <div>
-                <strong>Read-only in this build</strong>
+                <strong>Configure model, keys and research</strong>
                 <p>
-                  This page shows the current configuration. Editing models, API
-                  keys, schedules and agents from here is not implemented yet; use
-                  the command line where a capability already exists.
+                  Model provider, model name, provider API keys, the news feed and
+                  memory retention are editable here. No model provider is called by
+                  this build; task definitions and schedules remain read-only.
                 </p>
               </div>
             </section>
 
+            <SettingsConfigPanel csrfToken={session.csrfToken} />
             <SettingsOverviewPanel />
 
             <div className="dashboard-grid dashboard-grid--settings" id="settings-schedules">

@@ -769,6 +769,141 @@ a.nav-item:hover,
   font-weight: 600;
 }
 
+/* Research tab ------------------------------------------------------- */
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.panel-header h2 {
+  margin: 0;
+}
+
+.auth-button--compact {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
+.panel-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.research-counts {
+  margin: 14px 0 0;
+  color: var(--muted-strong);
+  font-size: 13px;
+}
+
+.research-result {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgb(139 92 246 / 35%);
+  border-radius: 6px;
+  background: rgb(139 92 246 / 8%);
+  color: var(--muted-strong);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.news-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news-list li {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
+}
+
+.news-list strong,
+.news-list a {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.news-list a {
+  text-decoration: none;
+}
+
+.news-list a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.news-list span:not(.news-tag),
+.news-list time {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.news-tag {
+  justify-self: start;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.dashboard-grid--research {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Editable configuration forms -------------------------------------- */
+
+.config-form {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.config-form label {
+  color: var(--muted-strong);
+  font-size: 13px;
+}
+
+.config-form input,
+.config-form select {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.config-form button {
+  justify-self: start;
+  margin-top: 8px;
+}
+
+.config-feedback {
+  margin: 0;
+  color: var(--accent);
+  font-size: 12px;
+}
+
 .session-error {
   width: min(100%, 1280px);
   margin: 0 auto 20px;

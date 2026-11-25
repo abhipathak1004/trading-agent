@@ -6,11 +6,44 @@ Start here when resuming work. This file lives in the workspace and does not dep
 
 Updated 25 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
+
+**Latest slice — Research tab + editable Settings.** The UI now has a
+**Research** tab and a writable **Settings** page.
+
+- **Settings (writable config)** — `bq/settings.py` (already committed) is now
+  wired into the API and UI. Migration `023_application_settings.sql` adds
+  `app_settings` (non-secret) and `provider_api_keys` (secrets). New endpoints
+  (all owner-only, `no-store`, CSRF + origin checked on writes):
+  `GET/PUT /api/v1/settings/config`, `PUT/DELETE
+  /api/v1/settings/api-keys/{provider}`. Configuration covers provider, model
+  name, news feed URL and long-term-memory retention (days). API keys are never
+  returned to the browser — only a masked hint (`********abcd`); the real key is
+  available internally via `SettingsStore.api_key`. Keys are stored in
+  plaintext in the local DB (acceptable for a single-owner loopback app, not
+  vault-grade). Every change appends an audit event without secret material.
+  `model_route_configured` is true only when a model name *and* the matching
+  provider key exist. **No model provider is called by this build.**
+- **Research tab** — new `ResearchPanel.tsx`: reads `GET /api/v1/news/digest`
+  and runs `POST /api/v1/news/ingest` (CSRF + origin). Ingest honours the
+  configured feed URL and retention via `NewsResearchAgent.run(memory_ttl_days=
+  ...)`. Still deterministic: zero model calls, no full-article fetches.
+- **Settings overview** — `/api/v1/settings/overview` now reports real
+  `provider_connected`, `api_keys_configured`, `agent_configuration_state` and
+  an embedded `config` block.
+- **CLI parity** — `bq settings show` prints masked config as JSON; `bq news
+  ingest` now uses the configured feed URL and retention (pass `--source-url`
+  to override).
+
+Verification: **341 backend tests** pass, **18 frontend contract tests** pass,
+ruff lint clean on changed files, frontend typecheck + build clean. 16 mypy
+errors remain in files untouched here (`cli.py` EOD-report union,
+`paper_performance`, `infra/scheduler`, `test_agents`, `test_llm_gateway`) and
+predate this work.
+
 The React shell uses the companion UI/UX guide's dark app-shell pattern:
 fixed navigation, a top status strip, a clear paper-only mode banner, and
-responsive owner setup/dashboard states. Navigation is limited to implemented
-foundation views; Trade, Agent Lab and Settings are marked unavailable rather
-than presented as working features.
+responsive owner setup/dashboard states. Navigation covers Today, Research and
+Settings; Trade and Agent Lab remain marked unavailable.
 The latest additions are `infra/dispatch.py` and `infra/scheduler.py`: a
 wake-to-job dispatch layer and a small 30-second asyncio process loop. The
 `bq serve` lifespan starts the loop and reports its running state in schedule
