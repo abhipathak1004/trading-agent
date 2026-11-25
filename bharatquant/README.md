@@ -1,10 +1,17 @@
 # BharatQuant
 
 BharatQuant is a local-first Indian-markets research and paper-trading project.
-It currently provides a web shell, an offline EOD CSV importer and
-authenticated import-status, snapshot-freshness, calendar-coverage,
-schedule-status and model-usage views. Live market providers,
-accounts, orders and trading features are not implemented.
+It currently provides an authenticated foundation workspace, an offline EOD
+CSV importer, and import-status, snapshot-freshness, calendar-coverage,
+schedule-status, paper-account and model-usage views. Live market providers,
+trade pages, accounts management, orders and trading features are not
+implemented.
+
+The frontend follows the companion
+[UI/UX Development Guide](../BharatQuant%20UI-UX%20Development%20Guide%20v1.0.md)
+for the app shell and non-negotiable UX rules. Settings, Agent Lab and the
+command palette remain planned; navigation is limited to implemented
+foundation capabilities and does not imply that unavailable features exist.
 
 ## Requirements
 
@@ -80,6 +87,28 @@ uv run --locked pytest -q
 ```
 
 The frontend contract tests use Node's experimental TypeScript stripping.
+
+## Development skills
+
+Copilot's repository instructions are in
+[`.github/copilot-instructions.md`](../.github/copilot-instructions.md), with
+project skills in [`.github/skills/`](../.github/skills/). Use Clean Software
+Craftsmanship for behavior, boundaries, maintainability and verification;
+Ponytail guidance to keep changes minimal but complete; and Graphify when
+cross-file relationships or change impact are useful. The full Clean Software
+Craftsmanship source remains in
+[`clean-software-craftsmanship/`](../clean-software-craftsmanship/).
+
+Graphify is an optional local developer tool, not an application dependency.
+For broad code-relationship questions, query an existing `graphify-out/`
+graph first. If the local CLI is installed and the graph is missing or stale,
+`graphify extract . --code-only` builds a local AST graph without LLM
+extraction; `graphify-out/` is git-ignored. Verify graph findings in source and
+tests. Do not upload this codebase to a hosted graph service. The repository
+instructions describe Copilot's Graphify workflow; they do not install
+Graphify or Ponytail plugins or enable Ponytail slash commands. Install the
+optional Graphify CLI with `uv tool install --python 3.12 graphifyy`; its VS
+Code registration command is `graphify vscode install`.
 
 The health endpoint is a liveness check only. No provider, exchange-rule,
 investment-performance or macOS hardware claims have been verified. See

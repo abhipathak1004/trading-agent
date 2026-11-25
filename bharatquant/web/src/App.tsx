@@ -240,167 +240,237 @@ export default function App() {
   }[serviceState];
 
   return (
-    <main className="shell">
-      <header className="topbar">
+    <main className="app-shell">
+      <aside className="sidebar" aria-label="Primary navigation">
         <a className="wordmark" href="/" aria-label="BharatQuant home">
-          <span className="wordmark-mark" aria-hidden="true">
-            BQ
-          </span>
+          <span className="wordmark-mark" aria-hidden="true">BQ</span>
           <span>BharatQuant</span>
         </a>
-        <span className="local-label">
+
+        {session.state === "signed_in" && (
+          <nav className="sidebar-nav" aria-label="Workspace">
+            <p className="nav-label">Workspace</p>
+            <a className="nav-item nav-item--active" href="#today">
+              <span aria-hidden="true">◫</span>Today
+            </a>
+            <a className="nav-item" href="#data">
+              <span aria-hidden="true">▦</span>Data
+            </a>
+            <a className="nav-item" href="#schedules">
+              <span aria-hidden="true">◷</span>Schedules
+            </a>
+            <a className="nav-item" href="#diagnostics">
+              <span aria-hidden="true">⌁</span>Diagnostics
+            </a>
+            <p className="nav-label nav-label--secondary">Not available yet</p>
+            <span className="nav-item nav-item--muted" aria-disabled="true">
+              <span aria-hidden="true">◇</span>Trade
+            </span>
+            <span className="nav-item nav-item--muted" aria-disabled="true">
+              <span aria-hidden="true">◈</span>Agent Lab
+            </span>
+            <span className="nav-item nav-item--muted" aria-disabled="true">
+              <span aria-hidden="true">⚙</span>Settings
+            </span>
+          </nav>
+        )}
+
+        <div className="sidebar-footer">
           <span className="local-dot" aria-hidden="true" />
-          LOCAL WORKSPACE
-        </span>
-      </header>
+          <div>
+            <strong>Local workspace</strong>
+            <span>Loopback only</span>
+          </div>
+        </div>
+      </aside>
 
-      <section className="welcome" aria-labelledby="welcome-title">
-        <p className="eyebrow">INDIAN MARKETS · RESEARCH · PAPER ONLY</p>
-        <h1 id="welcome-title">
-          Research with
-          <br />
-          <span>discipline.</span>
-        </h1>
-        <p className="intro">
-          A local-first workspace for market research and paper trading. Real
-          money is never at risk.
-        </p>
-
-        <div className={`service-status service-status--${serviceState}`}>
-          <span className="status-indicator" aria-hidden="true" />
-          <span role="status" aria-live="polite">
-            {statusText}
-          </span>
-          {serviceState === "offline" && (
+      <div className="workspace">
+        <header className="status-strip" aria-label="System status">
+          <div className="status-strip__identity">
+            <span className="breadcrumb">Today</span>
+            <span className="mode-label">PAPER ONLY</span>
+          </div>
+          <div className={`service-status service-status--${serviceState}`}>
+            <span className="status-indicator" aria-hidden="true" />
+            <span role="status" aria-live="polite">{statusText}</span>
+            {serviceState === "offline" && (
+              <button
+                className="retry-button"
+                onClick={() => {
+                  setServiceState("checking");
+                  setRetry((value) => value + 1);
+                }}
+                type="button"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+          {session.state === "signed_in" && (
             <button
-              className="retry-button"
-              onClick={() => {
-                setServiceState("checking");
-                setRetry((value) => value + 1);
-              }}
               type="button"
+              className="text-button sign-out-button"
+              onClick={() => void signOut()}
+              disabled={pending}
             >
-              Retry
+              {pending ? "Signing out..." : "Sign out"}
             </button>
           )}
-        </div>
+        </header>
 
-        {serviceState === "online" && (
-          <section className="auth-panel" aria-labelledby="auth-title">
-            <h2 id="auth-title">Owner access</h2>
-            {session.state === "checking" && <p>Checking owner access...</p>}
-            {session.state === "setup_required" && (
-              <form className="login-form setup-form" onSubmit={(event) => void setOwnerPassword(event)}>
-                <label htmlFor="setup-password">Create owner password</label>
-                <input
-                  id="setup-password"
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={12}
-                  maxLength={256}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  disabled={pending}
-                  required
-                />
-                <label htmlFor="setup-confirmation">Confirm password</label>
-                <input
-                  id="setup-confirmation"
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={12}
-                  maxLength={256}
-                  value={confirmation}
-                  onChange={(event) => setConfirmation(event.target.value)}
-                  disabled={pending}
-                  required
-                />
-                <p className={`password-strength password-strength--${passwordStrength(password)}`}>
-                  Strength: {passwordStrength(password)}
-                </p>
-                {confirmation && password !== confirmation && (
-                  <p className="password-match">Passwords do not match.</p>
-                )}
-                <button
-                  type="submit"
-                  className="auth-button"
-                  disabled={
-                    pending ||
-                    password.length < 12 ||
-                    password !== confirmation
-                  }
-                >
-                  {pending ? "Setting up..." : "Set owner password"}
-                </button>
-              </form>
-            )}
-            {session.state === "unavailable" && (
-              <p>
-                Owner access is unavailable.{" "}
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => {
-                    setSession({ state: "checking" });
-                    setSessionRetry((value) => value + 1);
-                  }}
-                >
-                  Retry
-                </button>
-              </p>
-            )}
-            {session.state === "signed_out" && (
-              <form className="login-form" onSubmit={(event) => void signIn(event)}>
-                <label htmlFor="owner-password">Owner password</label>
-                <div className="login-row">
+        {session.state === "signed_in" && error && (
+          <p className="auth-error session-error" role="alert">{error}</p>
+        )}
+
+        {serviceState === "online" && session.state !== "signed_in" && (
+          <section className="auth-workspace" aria-labelledby="auth-title">
+            <div className="auth-heading">
+              <p className="eyebrow">PRIVATE LOCAL WORKSPACE</p>
+              <h1 id="auth-title">
+                {session.state === "setup_required" ? "Set up owner access" : "Welcome back"}
+              </h1>
+              <p>Research with discipline. Paper only; no broker connection.</p>
+            </div>
+            <section className="auth-card">
+              {session.state === "checking" && <p>Checking owner access...</p>}
+              {session.state === "setup_required" && (
+                <form className="login-form setup-form" onSubmit={(event) => void setOwnerPassword(event)}>
+                  <label htmlFor="setup-password">Create owner password</label>
                   <input
-                    id="owner-password"
+                    id="setup-password"
                     type="password"
-                    autoComplete="current-password"
+                    autoComplete="new-password"
+                    minLength={12}
                     maxLength={256}
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     disabled={pending}
                     required
                   />
-                  <button type="submit" className="auth-button" disabled={pending}>
-                    {pending ? "Signing in..." : "Sign in"}
+                  <label htmlFor="setup-confirmation">Confirm password</label>
+                  <input
+                    id="setup-confirmation"
+                    type="password"
+                    autoComplete="new-password"
+                    minLength={12}
+                    maxLength={256}
+                    value={confirmation}
+                    onChange={(event) => setConfirmation(event.target.value)}
+                    disabled={pending}
+                    required
+                  />
+                  <p className={`password-strength password-strength--${passwordStrength(password)}`}>
+                    Strength: {passwordStrength(password)}
+                  </p>
+                  {confirmation && password !== confirmation && (
+                    <p className="password-match">Passwords do not match.</p>
+                  )}
+                  <button
+                    type="submit"
+                    className="auth-button"
+                    disabled={pending || password.length < 12 || password !== confirmation}
+                  >
+                    {pending ? "Setting up..." : "Set owner password"}
                   </button>
-                </div>
-              </form>
-            )}
-            {session.state === "signed_in" && (
-              <div className="signed-in">
-                <p>Signed in as owner.</p>
-                <button
-                  type="button"
-                  className="auth-button"
-                  onClick={() => void signOut()}
-                  disabled={pending}
-                >
-                  {pending ? "Signing out..." : "Sign out"}
-                </button>
-              </div>
-            )}
-            {error && (
-              <p className="auth-error" role="alert">
-                {error}
-              </p>
-            )}
+                </form>
+              )}
+              {session.state === "unavailable" && (
+                <p>
+                  Owner access is unavailable.{" "}
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => {
+                      setSession({ state: "checking" });
+                      setSessionRetry((value) => value + 1);
+                    }}
+                  >
+                    Retry
+                  </button>
+                </p>
+              )}
+              {session.state === "signed_out" && (
+                <form className="login-form" onSubmit={(event) => void signIn(event)}>
+                  <label htmlFor="owner-password">Owner password</label>
+                  <div className="login-row">
+                    <input
+                      id="owner-password"
+                      type="password"
+                      autoComplete="current-password"
+                      maxLength={256}
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      disabled={pending}
+                      required
+                    />
+                    <button type="submit" className="auth-button" disabled={pending}>
+                      {pending ? "Signing in..." : "Sign in"}
+                    </button>
+                  </div>
+                </form>
+              )}
+              {error && <p className="auth-error" role="alert">{error}</p>}
+            </section>
           </section>
         )}
-        {serviceState === "online" && session.state === "signed_in" && <DataStatus />}
-        {serviceState === "online" && session.state === "signed_in" && <SnapshotFreshness />}
-        {serviceState === "online" && session.state === "signed_in" && <CalendarCoverage />}
-        {serviceState === "online" && session.state === "signed_in" && <ScheduleStatus />}
-        {serviceState === "online" && session.state === "signed_in" && <PaperAccountStatus />}
-        {serviceState === "online" && session.state === "signed_in" && <UsageStatus />}
-      </section>
 
-      <footer className="footer">
-        <span>Local-first · Built for one owner</span>
-        <span>Paper environment · No broker connection</span>
-      </footer>
+        {serviceState !== "online" && (
+          <section className="offline-workspace" aria-labelledby="workspace-status-title">
+            <p className="eyebrow">SYSTEM STATUS</p>
+            <h1 id="workspace-status-title">
+              {serviceState === "checking" ? "Checking local service" : "Local service unavailable"}
+            </h1>
+            <p>
+              {serviceState === "checking"
+                ? "Waiting for the loopback workspace..."
+                : "Start the BharatQuant service and retry. No data is being shown."}
+            </p>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && (
+          <section className="dashboard" id="today" aria-labelledby="today-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">COMMAND CENTER</p>
+                <h1 id="today-title">Today</h1>
+                <p className="intro">Research with discipline. Your local paper-only workspace.</p>
+              </div>
+              <span className="status-badge status-badge--provisional">FOUNDATION</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Current mode">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Operating in paper-only foundation mode</strong>
+                <p>
+                  Trading, live research, and agent workflows are not enabled.
+                  Existing local diagnostics remain available below.
+                </p>
+              </div>
+            </section>
+
+            <div className="dashboard-grid" id="data">
+              <PaperAccountStatus />
+              <DataStatus />
+              <div id="schedules">
+                <ScheduleStatus />
+              </div>
+            </div>
+
+            <div className="dashboard-grid dashboard-grid--diagnostics" id="diagnostics">
+              <SnapshotFreshness />
+              <CalendarCoverage />
+              <UsageStatus />
+            </div>
+          </section>
+        )}
+
+        <footer className="footer">
+          <span>Local-first · Built for one owner</span>
+          <span>Paper environment · No broker connection</span>
+        </footer>
+      </div>
     </main>
   );
 }

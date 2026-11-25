@@ -760,6 +760,25 @@ Use this list to sign off the UI.
 
 ---
 
+## Implementation Status
+
+The guide is a target-state design, not an implementation claim. Current
+foundation status:
+
+- The React app uses the dark app-shell layout: sidebar, top status strip,
+  owner setup/sign-in states, paper-only mode banner and responsive data cards.
+- Authenticated current capabilities are shown for data imports, paper
+  accounts, schedules, snapshot freshness, calendar coverage and model usage.
+- Trade, Agent Lab and Settings are not implemented as working pages and are
+  clearly marked as unavailable.
+- Settings draft/preview/history, command palette, Agent Lab, replay/evals,
+  experiments, feedback and full route navigation remain future work.
+- Any implementation update must preserve honest stale/error/degraded states
+  and must not connect to live providers or broker behavior before the
+  documented external and data gates are complete.
+
+---
+
 ## 19. Appendix: Screen Wireframes
 
 ### 19.1 Settings → Models and Routing

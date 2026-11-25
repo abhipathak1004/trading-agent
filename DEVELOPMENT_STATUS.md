@@ -4,18 +4,34 @@ Start here when resuming work. This file lives in the workspace and does not dep
 
 ## Current handoff
 
-Updated 23 November 2026. The roadmap is **not complete**: the application is
+Updated 25 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
+The React shell uses the companion UI/UX guide's dark app-shell pattern:
+fixed navigation, a top status strip, a clear paper-only mode banner, and
+responsive owner setup/dashboard states. Navigation is limited to implemented
+foundation views; Trade, Agent Lab and Settings are marked unavailable rather
+than presented as working features.
 The latest additions are `infra/dispatch.py` and `infra/scheduler.py`: a
 wake-to-job dispatch layer and a small 30-second asyncio process loop. The
 `bq serve` lifespan starts the loop and reports its running state in schedule
 status. It records due decisions and enqueues matching `JobRun` occurrences,
 but still does not execute job handlers or provide schedule-editing UI.
 
-The in-project frontend build predates the `ALLOW` option. The current source
-was built successfully into an isolated session directory without replacing
-the shared build. When safe, run `npm run build` in `bharatquant/web` before
-serving or packaging the updated UI. Do not disturb other users' processes.
+The checked-in frontend bundle is generated from `bharatquant/web`. After
+changing the frontend, run `npm run build` in `bharatquant/web` so the packaged
+SPA stays synchronized with its source.
+
+## Latest checkpoint — development skills
+
+Added repository-scoped Copilot instructions and focused Clean Software
+Craftsmanship, Graphify, and Ponytail skills under `.github/`. The project
+README documents how contributors should apply them. Clean Software
+Craftsmanship's existing full source remains canonical. The project guidance
+does not install Ponytail's plugin or slash commands, and neither tool is a
+BharatQuant runtime dependency.
+
+Graphify is an optional local developer tool. Keep extraction local and
+code-only, and verify graph findings against source and tests.
 
 ## Scope and decisions
 
@@ -25,6 +41,7 @@ serving or packaging the updated UI. Do not disturb other users' processes.
 - Delayed intraday data defaults to `WARN`; critically stale or invalid data still blocks new entries. Unavailable LLM confidence review permits labeled `RULES_ONLY` after deterministic gates pass. A known veto still stands.
 - Verify current exchange rules, terms, licenses and platform capabilities before enabling dependent features. Prefer vetted dependencies and original code/prompts; do not copy external source or prompts.
 - Apply [Clean Software Craftsmanship](./clean-software-craftsmanship/SKILL.md): small verifiable increments, domain policy independent of infrastructure, clear failures at boundaries, tests for the risk being changed.
+- Apply the repository's [Copilot skill instructions](./.github/copilot-instructions.md): use the relevant Clean Software Craftsmanship, Graphify, and Ponytail guidance on future development tasks. Keep Graphify local and code-only; verify graph findings against source and tests.
 
 ## Deferred external-access checklist
 
