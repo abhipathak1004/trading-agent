@@ -17,6 +17,13 @@ wake-to-job dispatch layer and a small 30-second asyncio process loop. The
 status. It records due decisions and enqueues matching `JobRun` occurrences,
 but still does not execute job handlers or provide schedule-editing UI.
 
+The web shell is re-themed to a dark violet accent (`#0B0812` background,
+`#8B5CF6` accent, Inter + JetBrains Mono self-hosted under `web/public/fonts/`).
+Fonts are bundled via `@font-face` from the same origin, matching the existing
+`font-src 'self'` CSP. The owner setup flow now signs the owner in immediately
+(`POST /api/v1/auth/setup` returns `signed_in` + session cookie + CSRF token on
+success), so the first visit no longer requires a separate sign-in form.
+
 The checked-in frontend bundle is generated from `bharatquant/web`. After
 changing the frontend, run `npm run build` in `bharatquant/web` so the packaged
 SPA stays synchronized with its source.
@@ -31,7 +38,10 @@ does not install Ponytail's plugin or slash commands, and neither tool is a
 BharatQuant runtime dependency.
 
 Graphify is an optional local developer tool. Keep extraction local and
-code-only, and verify graph findings against source and tests.
+code-only, and verify graph findings against source and tests. A baseline
+`graphify-out/` (1,490 nodes, 5,277 edges, 47 communities) was generated
+code-only on 25 November 2026. ``graphify-out/`` remains gitignored and is a
+local cache, not a deliverable.
 
 ## Scope and decisions
 
@@ -162,6 +172,26 @@ After adding `ALLOW`, Node 23.1.0 passed **9 frontend tests**, typecheck and an 
 Earlier checks verified a wheel containing registered-output verification, freshness, time-aware/calibration/baseline scoring, sizing, model-output validation, the SPA index and thirteen migrations. Registered-output tests compose routing, exact task/schema identity, record replay and schema failure. Freshness tests cover the CLI's exact output, threshold boundaries, delayed modes, stale/quality blocks and inconsistent or unavailable timestamps. Scoring tests cover known Brier/log-loss/Wilson values, threshold accuracy, empty samples, impossible certainties, calibration boundaries, baseline alignment, late/pending predictions, as-of boundaries, DST folds and invalid/bounded inputs. Sizing tests cover risk and cash limits, flooring, zero, invalid inputs, large values and a range of integer invariants. Output tests cover exact decimal constraints and bounds, decimal context isolation, local and remote references, invalid stored schemas, nested duplicate keys, non-finite numbers, malformed/oversized/deep JSON and non-disclosing errors. Citation tests cover included and dropped records, other versions, forged content and bounded input. Tests also cover independently selected symbol sources, conflicting and uncovered results, corrections, as-of boundaries, malformed records, CLI output and concurrent snapshot consistency; scheduler tests exercise inclusive windows, a 1,000-occurrence limit, DST ambiguity/nonexistence, excluded weekdays, invalid occurrences, snapshot version changes, batch rollback, idempotency, authenticated preview and absence of dispatch. Earlier tests cover point-in-time data and context, calendar-aware EOD, record-backed replay, model routing and usage, leases, CSV imports and migration preservation. Pylance selected the host Python rather than the isolated test environment and reports missing `uvicorn`, `jsonschema` source and `referencing` imports; runtime and strict mypy checks used the isolated environment. Pylance diagnostics for context routing, freshness, scoring, sizing and the citation module were clean. A temporary synthetic HTTP server and browser accessibility snapshot verified the calendar panel's open/closed/uncovered states, invalid-range and invalid-response errors, and narrow viewport without horizontal overflow. An earlier synthetic check covered daily schedule preview; screenshot capture failed, so visual appearance was not inspected. Earlier isolated Edge checks covered private import and usage views, login and logout. Temporary servers were stopped.
 
 The workflow has not run on GitHub or Apple Silicon hardware.
+
+## Checkpoint — dark violet theme + bundled fonts + auto sign-in
+
+- Backend auth tests were extended to cover the auto-sign-in contract
+  (`state == "signed_in"`, `set-cookie`, valid session after setup). The
+  full Python 3.13 suite passes **301 tests**. Changed Python files pass
+  Ruff lint; pre-existing format violations in unrelated files were left
+  alone.
+- Frontend: 9 contract tests pass under Node 22.1.0. Typecheck and the
+  production Vite build succeed. Self-hosted fonts (Inter 4.1 and JetBrains
+  Mono 2.304, SIL OFL 1.1) ship under `bharatquant/web/public/fonts/`;
+  their licenses are recorded in
+  `bharatquant/THIRD_PARTY_NOTICES.md` and ship alongside.
+- Manual browser checks (127.0.0.1:8000) confirmed: (a) first visit renders
+  the setup form, creates the owner password and lands on the dashboard
+  without a separate sign-in; (b) a returning visitor sees the welcome-back
+  sign-in form, signs in and reaches the dashboard; (c) the violet accent,
+  Inter headings and mono labels render consistently at 1440px and 390px
+  widths without horizontal overflow.
+
 
 The workflow has not run on GitHub because the workspace has no Git repository; the Mac job and Node 22 frontend test execution are configured, not verified. Equivalent wheel-content checks passed locally; `actionlint` was unavailable for a recheck of the updated workflow (the earlier version passed actionlint 1.7.12). Hosted macOS CI may incur account charges. The inventory records package/license metadata and locked registry hashes but is not a legal review; full notices for redistribution and the BharatQuant project license remain undecided. WebSocket protections and a password-recovery workflow do not exist. Every future private route must explicitly enforce authentication, and state-changing routes must enforce origin and CSRF checks. Still pending: Apple Silicon macOS operation, provider or market-rule claims, and private-data and trading behavior. This is not an operational trading app.
 

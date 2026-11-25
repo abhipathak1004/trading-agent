@@ -194,7 +194,16 @@ def test_web_owner_setup_is_origin_protected_confirmed_and_audited(
                 json={"password": PASSWORD, "confirmation": PASSWORD},
             )
             assert setup.status_code == 200
-            assert setup.json()["state"] == "signed_out"
+            assert setup.json()["state"] == "signed_in"
+            assert setup.json()["csrf_token"]
+            cookie = setup.headers["set-cookie"]
+            assert "HttpOnly" in cookie and "SameSite=strict" in cookie
+            assert "Domain=" not in cookie
+            assert setup.headers["cache-control"] == "no-store"
+
+            session = await client.get("/api/v1/auth/session")
+            assert session.json()["state"] == "signed_in"
+            assert session.json()["csrf_token"] == setup.json()["csrf_token"]
 
             duplicate = await client.post(
                 "/api/v1/auth/setup",

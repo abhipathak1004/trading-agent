@@ -163,7 +163,14 @@ export default function App() {
         }
         return;
       }
-      setSession({ state: "signed_out" });
+      const body: unknown = await response.json();
+      const nextSession = parseSession(body);
+      if (nextSession.state === "signed_in") {
+        setSession(nextSession);
+      } else {
+        // Setup succeeded but no session was issued (e.g. race); fall back to sign-in.
+        setSession({ state: "signed_out" });
+      }
     } catch {
       setError("Password setup failed. Check the local service and try again.");
     } finally {
@@ -370,7 +377,7 @@ export default function App() {
                     className="auth-button"
                     disabled={pending || password.length < 12 || password !== confirmation}
                   >
-                    {pending ? "Setting up..." : "Set owner password"}
+                    {pending ? "Setting up..." : "Create owner password"}
                   </button>
                 </form>
               )}

@@ -149,6 +149,19 @@ including optional platform-specific binaries not installed on Windows.
 | Transitive | [undici-types](https://www.npmjs.com/package/undici-types/v/8.9.0) | 8.9.0 | all | MIT |
 | Development | [vite](https://www.npmjs.com/package/vite/v/8.3.8) | 8.3.8 | all | MIT |
 
+
+## Bundled fonts
+
+The web shell self-hosts two open-licensed font families (OFL 1.1); the
+license files ship alongside the woff2 files in `web/public/fonts/`.
+Fonts are loaded via `@font-face` only from this origin and only for the
+weights listed below — there is no external font request.
+
+| Font | Version | Weights used | License | Files |
+| --- | --- | --- | --- | --- |
+| Inter | 4.1 | 400, 500, 600, 700 | SIL OFL 1.1 | `web/public/fonts/Inter-*.woff2` |
+| JetBrains Mono | 2.304 | 400, 500, 600 | SIL OFL 1.1 | `web/public/fonts/JetBrainsMono-*.woff2` |
+
 ## CI actions
 
 These are build-time workflow dependencies, pinned to release commits:

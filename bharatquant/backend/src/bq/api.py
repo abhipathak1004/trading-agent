@@ -604,7 +604,9 @@ def create_app(
             return SessionStatus(state="signed_in", csrf_token=session.csrf_token)
 
         @app.post("/api/v1/auth/setup")
-        def setup_owner(request: Request, body: SetupRequest) -> SessionStatus:
+        def setup_owner(
+            request: Request, response: Response, body: SetupRequest
+        ) -> SessionStatus:
             verify_origin(request)
             if auth.is_configured():
                 raise HTTPException(
@@ -620,7 +622,23 @@ def create_app(
                 ) from exc
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
-            return SessionStatus(state="signed_out")
+            try:
+                session = auth.login(body.password)
+            except OwnerNotConfigured:
+                return SessionStatus(state="signed_out")
+            except InvalidCredentials:
+                return SessionStatus(state="signed_out")
+            except LoginLocked:
+                return SessionStatus(state="signed_out")
+            response.set_cookie(
+                COOKIE_NAME,
+                session.token,
+                max_age=SESSION_SECONDS,
+                httponly=True,
+                samesite="strict",
+                path="/",
+            )
+            return SessionStatus(state="signed_in", csrf_token=session.csrf_token)
 
         @app.post("/api/v1/auth/logout", status_code=204)
         def logout(request: Request) -> Response:
