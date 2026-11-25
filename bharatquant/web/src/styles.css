@@ -429,6 +429,27 @@ a.nav-item:hover,
   color: var(--accent);
 }
 
+.nav-item--button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--muted-strong);
+  cursor: pointer;
+  text-align: left;
+}
+
+.nav-item--button:hover {
+  background: var(--surface-2);
+  color: var(--accent-strong);
+}
+
+.nav-item--nested {
+  min-height: 34px;
+  padding-left: 22px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .nav-item > span:first-child {
   width: 16px;
   color: var(--muted);
@@ -683,6 +704,71 @@ a.nav-item:hover,
   line-height: 1.5;
 }
 
+/* Settings tab ------------------------------------------------------- */
+
+.settings-panel {
+  max-width: none;
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgb(22 16 34 / 78%);
+}
+
+.settings-facts {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: 8px 20px;
+  margin: 0;
+}
+
+.settings-facts dt {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-facts dd {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.dashboard-grid--settings {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.task-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-list li {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.task-list strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.settings-panel h3 {
+  margin: 18px 0 8px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .session-error {
   width: min(100%, 1280px);
   margin: 0 auto 20px;
@@ -810,6 +896,15 @@ a.nav-item:hover,
 
   .dashboard-grid .data-panel {
     padding: 16px;
+  }
+
+  .settings-facts {
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+  }
+
+  .settings-facts dt {
+    margin-top: 10px;
   }
 
   .login-row {

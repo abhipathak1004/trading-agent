@@ -40,6 +40,7 @@ from bq.infra.jobs import JobRunStore
 from bq.infra.model_attempts import ModelAttemptStore, TokenUsage
 from bq.infra.scheduler import SchedulerLoop, SchedulerRunner
 from bq.infra.schedules import ScheduleStore
+from bq.infra.task_registry import TaskRegistry
 from bq.paper_accounts import (
     PaperAccountStatus,
     PaperAccountStore,
@@ -193,6 +194,29 @@ class ScheduleStatus(BaseModel):
     scheduler_running: bool
 
 
+class ConfiguredTask(BaseModel):
+    task_id: str
+    task_version: str
+    task_class: str
+    allowed_data: list[str]
+    allowed_tiers: list[str]
+    prompt_version: str
+    spec_version: str
+
+
+class SettingsOverview(BaseModel):
+    """Read-only settings surface: what is configured, and what is not."""
+
+    tasks: list[ConfiguredTask]
+    task_count: int
+    schedule_count: int
+    scheduler_running: bool
+    model_usage_groups: int
+    provider_connected: Literal[False]
+    api_keys_configured: Literal[False]
+    agent_configuration_state: Literal["not_configured"]
+
+
 def _daily_schedule_status(
     schedule: DailySchedule, *, observed_at: datetime, pending_change: bool
 ) -> DailyScheduleStatus:
@@ -291,6 +315,7 @@ def create_app(
                 "/api/v1/data/",
                 "/api/v1/llm/",
                 "/api/v1/schedules/",
+                "/api/v1/settings/",
                 "/api/v1/paper/",
             )
         ):
@@ -563,6 +588,41 @@ def create_app(
                     for item in overview.recent_decisions
                 ],
                 scheduler_running=scheduler.running,
+            )
+
+        @app.get("/api/v1/settings/overview")
+        def settings_overview(request: Request) -> SettingsOverview:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            definitions = TaskRegistry(database_path).list_latest(limit=50)
+            overview = schedules.overview()
+            effective = overview.effective
+            active = effective.snapshot.schedules if effective is not None else ()
+            usage = attempts.usage()
+            return SettingsOverview(
+                tasks=[
+                    ConfiguredTask(
+                        task_id=item.policy.task_id,
+                        task_version=item.policy.version,
+                        task_class=item.policy.task_class.value,
+                        allowed_data=sorted(
+                            value.value for value in item.policy.allowed_data
+                        ),
+                        allowed_tiers=sorted(
+                            value.value for value in item.policy.allowed_tiers
+                        ),
+                        prompt_version=item.prompt_version,
+                        spec_version=item.spec_version,
+                    )
+                    for item in definitions
+                ],
+                task_count=len(definitions),
+                schedule_count=len(active),
+                scheduler_running=scheduler.running,
+                model_usage_groups=len(usage),
+                provider_connected=False,
+                api_keys_configured=False,
+                agent_configuration_state="not_configured",
             )
 
         @app.get("/api/v1/auth/session")

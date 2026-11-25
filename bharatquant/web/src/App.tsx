@@ -7,6 +7,9 @@ import SnapshotFreshness from "./SnapshotFreshness";
 import ScheduleStatus from "./ScheduleStatus";
 import UsageStatus from "./UsageStatus";
 import PaperAccountStatus from "./PaperAccountStatus";
+import SettingsOverviewPanel from "./SettingsOverviewPanel";
+
+type WorkspaceView = "today" | "settings";
 
 type ServiceState = "checking" | "online" | "offline";
 type SessionState =
@@ -68,6 +71,7 @@ export default function App() {
   const [confirmation, setConfirmation] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [view, setView] = useState<WorkspaceView>("today");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -257,27 +261,41 @@ export default function App() {
         {session.state === "signed_in" && (
           <nav className="sidebar-nav" aria-label="Workspace">
             <p className="nav-label">Workspace</p>
-            <a className="nav-item nav-item--active" href="#today">
+            <button
+              type="button"
+              className={`nav-item nav-item--button${view === "today" ? " nav-item--active" : ""}`}
+              aria-current={view === "today" ? "page" : undefined}
+              onClick={() => setView("today")}
+            >
               <span aria-hidden="true">◫</span>Today
-            </a>
-            <a className="nav-item" href="#data">
-              <span aria-hidden="true">▦</span>Data
-            </a>
-            <a className="nav-item" href="#schedules">
-              <span aria-hidden="true">◷</span>Schedules
-            </a>
-            <a className="nav-item" href="#diagnostics">
-              <span aria-hidden="true">⌁</span>Diagnostics
-            </a>
+            </button>
+            {view === "today" && (
+              <>
+                <a className="nav-item nav-item--nested" href="#data">
+                  <span aria-hidden="true">▦</span>Data
+                </a>
+                <a className="nav-item nav-item--nested" href="#schedules">
+                  <span aria-hidden="true">◷</span>Schedules
+                </a>
+                <a className="nav-item nav-item--nested" href="#diagnostics">
+                  <span aria-hidden="true">⌁</span>Diagnostics
+                </a>
+              </>
+            )}
+            <button
+              type="button"
+              className={`nav-item nav-item--button${view === "settings" ? " nav-item--active" : ""}`}
+              aria-current={view === "settings" ? "page" : undefined}
+              onClick={() => setView("settings")}
+            >
+              <span aria-hidden="true">⚙</span>Settings
+            </button>
             <p className="nav-label nav-label--secondary">Not available yet</p>
             <span className="nav-item nav-item--muted" aria-disabled="true">
               <span aria-hidden="true">◇</span>Trade
             </span>
             <span className="nav-item nav-item--muted" aria-disabled="true">
               <span aria-hidden="true">◈</span>Agent Lab
-            </span>
-            <span className="nav-item nav-item--muted" aria-disabled="true">
-              <span aria-hidden="true">⚙</span>Settings
             </span>
           </nav>
         )}
@@ -294,7 +312,7 @@ export default function App() {
       <div className="workspace">
         <header className="status-strip" aria-label="System status">
           <div className="status-strip__identity">
-            <span className="breadcrumb">Today</span>
+            <span className="breadcrumb">{view === "settings" ? "Settings" : "Today"}</span>
             <span className="mode-label">PAPER ONLY</span>
           </div>
           <div className={`service-status service-status--${serviceState}`}>
@@ -435,7 +453,7 @@ export default function App() {
           </section>
         )}
 
-        {serviceState === "online" && session.state === "signed_in" && (
+        {serviceState === "online" && session.state === "signed_in" && view === "today" && (
           <section className="dashboard" id="today" aria-labelledby="today-title">
             <header className="page-header">
               <div>
@@ -468,6 +486,41 @@ export default function App() {
             <div className="dashboard-grid dashboard-grid--diagnostics" id="diagnostics">
               <SnapshotFreshness />
               <CalendarCoverage />
+              <UsageStatus />
+            </div>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "settings" && (
+          <section className="dashboard" id="settings" aria-labelledby="settings-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">SETTINGS</p>
+                <h1 id="settings-title">Settings</h1>
+                <p className="intro">
+                  Everything configurable in one place: models and tasks, schedules,
+                  API keys and agents.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">FOUNDATION</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Settings scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Read-only in this build</strong>
+                <p>
+                  This page shows the current configuration. Editing models, API
+                  keys, schedules and agents from here is not implemented yet; use
+                  the command line where a capability already exists.
+                </p>
+              </div>
+            </section>
+
+            <SettingsOverviewPanel />
+
+            <div className="dashboard-grid dashboard-grid--settings" id="settings-schedules">
+              <ScheduleStatus />
               <UsageStatus />
             </div>
           </section>
