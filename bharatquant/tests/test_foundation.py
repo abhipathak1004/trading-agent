@@ -37,7 +37,7 @@ def test_init_preserves_existing_state_and_doctor_passes(
         ]
         assert connection.execute(
             "SELECT version FROM schema_migrations"
-        ).fetchall() == [(version,) for version in range(1, 14)]
+        ).fetchall() == [(version,) for version in range(1, 22)]
 
 
 def test_init_refuses_a_database_owned_by_another_application(tmp_path: Path) -> None:
@@ -57,8 +57,8 @@ def test_failed_migration_rolls_back_its_schema_and_history(
     migrations = database.packaged_migrations()
     migrations.append(
         database.Migration(
-            14,
-            "014_example.sql",
+            22,
+            "022_example.sql",
             b"CREATE TABLE example (id INTEGER); INSERT INTO absent VALUES (1);",
         )
     )
@@ -72,7 +72,7 @@ def test_failed_migration_rolls_back_its_schema_and_history(
         ).fetchall()
         assert connection.execute(
             "SELECT version FROM schema_migrations"
-        ).fetchall() == [(version,) for version in range(1, 14)]
+        ).fetchall() == [(version,) for version in range(1, 22)]
 
 
 def test_owner_migration_preserves_existing_database(
@@ -88,7 +88,7 @@ def test_owner_migration_preserves_existing_database(
             ("event-1", "2026-11-21T12:00:00Z", "TEST"),
         )
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert database.migrate(path) == 12
+    assert database.migrate(path) == 20
     database.check_database(path)
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute("SELECT event_id FROM system_events").fetchall() == [
@@ -112,7 +112,7 @@ def test_schedule_migration_preserves_existing_job_runs(
         max_attempts=1,
     )
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert database.migrate(path) == 7
+    assert database.migrate(path) == 15
     assert store.get(run.run_id) == run
     database.check_database(path)
 

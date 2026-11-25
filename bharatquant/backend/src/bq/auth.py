@@ -50,6 +50,18 @@ def validate_password(password: str) -> None:
             f"Password must contain {PASSWORD_MIN_LENGTH} to "
             f"{PASSWORD_MAX_LENGTH} characters."
         )
+    lowered = password.lower()
+    common = {
+        "password",
+        "password123",
+        "admin",
+        "qwerty",
+        "letmein",
+        "changeme",
+        "welcome",
+    }
+    if lowered in common or len(set(password)) == 1:
+        raise ValueError("Password is too common or repetitive.")
 
 
 class OwnerAuth:
@@ -77,7 +89,9 @@ class OwnerAuth:
                 is not None
             )
 
-    def setup(self, password: str) -> None:
+    def setup(self, password: str, *, source: str = "cli") -> None:
+        if source not in ("cli", "web"):
+            raise ValueError("Invalid password setup source.")
         validate_password(password)
         if self.is_configured():
             raise OwnerAlreadyConfigured("Owner password is already configured.")
@@ -102,7 +116,7 @@ class OwnerAuth:
                     action="owner.password.configured",
                     object_type="owner",
                     object_id="owner:1",
-                    payload={"source": "cli"},
+                    payload={"source": source},
                 )
 
     def login(self, password: str) -> AuthenticatedSession:

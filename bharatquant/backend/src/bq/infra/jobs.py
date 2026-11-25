@@ -312,6 +312,20 @@ class JobRunStore:
         with closing(self._connect()) as connection:
             return self._get(connection, run_id)
 
+    def find(self, job_id: str, occurrence_key: str) -> JobRun | None:
+        """Return an existing occurrence, or ``None`` if it is not enqueued."""
+        _validate_identifier(job_id, "job identifier")
+        _validate_identifier(occurrence_key, "occurrence key")
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT run_id FROM job_runs "
+                "WHERE job_id = ? AND occurrence_key = ?",
+                (job_id, occurrence_key),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._get(connection, str(row[0]))
+
     def events_for(self, run_id: str) -> tuple[JobRunEvent, ...]:
         _validate_opaque_identifier(run_id, "run identifier")
         with closing(self._connect()) as connection:

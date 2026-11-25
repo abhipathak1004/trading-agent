@@ -6,6 +6,7 @@ import CalendarCoverage from "./CalendarCoverage";
 import SnapshotFreshness from "./SnapshotFreshness";
 import ScheduleStatus from "./ScheduleStatus";
 import UsageStatus from "./UsageStatus";
+import PaperAccountStatus from "./PaperAccountStatus";
 
 type ServiceState = "checking" | "online" | "offline";
 type SessionState =
@@ -19,6 +20,25 @@ function isHealthyResponse(value: unknown): value is { status: "ok" } {
     "status" in value &&
     value.status === "ok"
   );
+}
+
+function passwordStrength(value: string): "weak" | "fair" | "strong" {
+  if (value.length < 12) {
+    return "weak";
+  }
+  const classes = [
+    /[a-z]/.test(value),
+    /[A-Z]/.test(value),
+    /\d/.test(value),
+    /[^A-Za-z0-9]/.test(value),
+  ].filter(Boolean).length;
+  if (value.length >= 16 && classes >= 3) {
+    return "strong";
+  }
+  if (classes >= 2) {
+    return "fair";
+  }
+  return "weak";
 }
 
 function parseSession(value: unknown): SessionState {
@@ -45,6 +65,7 @@ export default function App() {
   const [session, setSession] = useState<SessionState>({ state: "checking" });
   const [sessionRetry, setSessionRetry] = useState(0);
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
@@ -103,6 +124,52 @@ export default function App() {
     void checkSession();
     return () => controller.abort();
   }, [serviceState, sessionRetry]);
+
+  async function setOwnerPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError("");
+    const submittedPassword = password;
+    const submittedConfirmation = confirmation;
+    setPassword("");
+    setConfirmation("");
+    if (submittedPassword !== submittedConfirmation) {
+      setError("Passwords do not match.");
+      setPending(false);
+      return;
+    }
+    try {
+      const response = await fetch("/api/v1/auth/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password: submittedPassword,
+          confirmation: submittedConfirmation,
+        }),
+      });
+      if (!response.ok) {
+        let message = "Password setup failed.";
+        try {
+          const body = await response.json() as { detail?: unknown };
+          if (typeof body.detail === "string") {
+            message = body.detail;
+          }
+        } catch {
+          // Keep the generic setup error.
+        }
+        setError(message);
+        if (response.status === 409) {
+          setSession({ state: "signed_out" });
+        }
+        return;
+      }
+      setSession({ state: "signed_out" });
+    } catch {
+      setError("Password setup failed. Check the local service and try again.");
+    } finally {
+      setPending(false);
+    }
+  }
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -223,21 +290,49 @@ export default function App() {
             <h2 id="auth-title">Owner access</h2>
             {session.state === "checking" && <p>Checking owner access...</p>}
             {session.state === "setup_required" && (
-              <p>
-                Set the owner password in a terminal with{" "}
-                <code>uv run --locked bq auth setup</code>, then{" "}
+              <form className="login-form setup-form" onSubmit={(event) => void setOwnerPassword(event)}>
+                <label htmlFor="setup-password">Create owner password</label>
+                <input
+                  id="setup-password"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={12}
+                  maxLength={256}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  disabled={pending}
+                  required
+                />
+                <label htmlFor="setup-confirmation">Confirm password</label>
+                <input
+                  id="setup-confirmation"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={12}
+                  maxLength={256}
+                  value={confirmation}
+                  onChange={(event) => setConfirmation(event.target.value)}
+                  disabled={pending}
+                  required
+                />
+                <p className={`password-strength password-strength--${passwordStrength(password)}`}>
+                  Strength: {passwordStrength(password)}
+                </p>
+                {confirmation && password !== confirmation && (
+                  <p className="password-match">Passwords do not match.</p>
+                )}
                 <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => {
-                    setSession({ state: "checking" });
-                    setSessionRetry((value) => value + 1);
-                  }}
+                  type="submit"
+                  className="auth-button"
+                  disabled={
+                    pending ||
+                    password.length < 12 ||
+                    password !== confirmation
+                  }
                 >
-                  check again
+                  {pending ? "Setting up..." : "Set owner password"}
                 </button>
-                .
-              </p>
+              </form>
             )}
             {session.state === "unavailable" && (
               <p>
@@ -298,6 +393,7 @@ export default function App() {
         {serviceState === "online" && session.state === "signed_in" && <SnapshotFreshness />}
         {serviceState === "online" && session.state === "signed_in" && <CalendarCoverage />}
         {serviceState === "online" && session.state === "signed_in" && <ScheduleStatus />}
+        {serviceState === "online" && session.state === "signed_in" && <PaperAccountStatus />}
         {serviceState === "online" && session.state === "signed_in" && <UsageStatus />}
       </section>
 

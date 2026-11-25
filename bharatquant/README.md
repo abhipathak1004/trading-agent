@@ -32,11 +32,16 @@ development hosts, set `BQ_HOME` to a dedicated local data directory before
 running `bq init`; macOS uses the BharatQuant Application Support directory by
 default.
 
-Run `bq auth setup` interactively once to create the owner password; it must
-contain 12–256 characters. Password entry is refused if the terminal cannot
-disable echo. Existing databases must run `uv run --locked bq db migrate`
-before the new authentication setup. Setup refuses to overwrite an existing
-owner password; password reset and recovery are not implemented.
+While the server is running, its 30-second scheduler discovery loop records due
+wake decisions and durably enqueues `RUN` decisions as job occurrences. It does
+not execute job handlers or create an operational trading workflow.
+
+On a new database, open the local app and use the first-run owner setup wizard.
+The wizard requires password confirmation and rejects common, repetitive or
+short passwords; setup is allowed only from the loopback origin and is
+recorded in the append-only audit chain. The CLI fallback is
+`bq auth setup`; it uses the same server-side password rules and requires a
+terminal that can disable echo. Password reset and recovery are not implemented.
 
 Authentication setup, successful sign-ins, lockouts and sign-outs are written
 to an append-only, hash-chained local audit log. `bq doctor` verifies the

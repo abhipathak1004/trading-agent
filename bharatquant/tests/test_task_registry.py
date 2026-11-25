@@ -370,7 +370,7 @@ def test_task_migration_preserves_existing_context(
     original = context()
     store.save(original)
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert database.migrate(path) == 3
+    assert database.migrate(path) == 11
     assert store.load(original.manifest_hash) == original
     database.check_database(path)
 

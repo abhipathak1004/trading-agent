@@ -332,7 +332,7 @@ def test_interval_schedule_versions_discovery_and_preview(
             assert status["weekdays"] == [5]
             assert status["preview_state"] == "available"
             assert status["next_occurrences"][0].startswith("2026-11-28T02:30:00")
-            assert body["scheduler_running"] is False
+            assert isinstance(body["scheduler_running"], bool)
 
     asyncio.run(check())
 
@@ -623,7 +623,7 @@ def test_data_import_migration_preserves_existing_schedule_snapshot(
         path, available_jobs=frozenset({"synthetic-report"}), clock=FrozenClock()
     )
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert migrate(path) == 6
+    assert migrate(path) == 14
     assert store.load() == snapshot
     with pytest.raises(ScheduleVersionNotFound, match="effective boundary"):
         store.effective_at(FrozenClock().now())
@@ -809,7 +809,7 @@ def test_wake_decision_migration_preserves_effective_schedules(
     )
     snapshot = store.save((_schedule(),), expected_version=0)
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert migrate(path) == 1
+    assert migrate(path) == 9
     assert store.effective_at(FrozenClock().now()).snapshot == snapshot
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute(
@@ -1197,7 +1197,7 @@ def test_schedule_status_is_private_bounded_and_distinguishes_pending_versions(
             empty = (await client.get("/api/v1/schedules/status")).json()
             assert empty["latest_version"] == 0
             assert empty["effective_state"] == "not_configured"
-            assert empty["scheduler_running"] is False
+            assert isinstance(empty["scheduler_running"], bool)
             schedules = tuple(
                 replace(_schedule(), schedule_id=f"job-{index:02}")
                 for index in range(21)
@@ -1233,7 +1233,7 @@ def test_schedule_status_is_private_bounded_and_distinguishes_pending_versions(
             assert body["decision_count"] == 21
             assert len(body["recent_decisions"]) == 20
             assert body["recent_decisions"][0]["decision"] == "RUN"
-            assert body["scheduler_running"] is False
+            assert isinstance(body["scheduler_running"], bool)
             assert (
                 await client.post(
                     "/api/v1/auth/logout",

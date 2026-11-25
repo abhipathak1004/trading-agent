@@ -4,11 +4,13 @@ Start here when resuming work. This file lives in the workspace and does not dep
 
 ## Current handoff
 
-Updated 22 November 2026. The roadmap is **not complete**: the application is
+Updated 23 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
-The latest additions are a snapshot-freshness API and panel, an explicit
-delayed-data `ALLOW` diagnostic mode, and optional registered citation
-extraction. None authorizes trades or enables model dispatch.
+The latest additions are `infra/dispatch.py` and `infra/scheduler.py`: a
+wake-to-job dispatch layer and a small 30-second asyncio process loop. The
+`bq serve` lifespan starts the loop and reports its running state in schedule
+status. It records due decisions and enqueues matching `JobRun` occurrences,
+but still does not execute job handlers or provide schedule-editing UI.
 
 The in-project frontend build predates the `ALLOW` option. The current source
 was built successfully into an isolated session directory without replacing
@@ -45,19 +47,38 @@ on the owner's Apple Silicon Mac remain open; see the checkpoint below.
 | ID | Status | Deliverable |
 | --- | --- | --- |
 | P0 | In progress | Foundation: backend/CLI, web shell, security, CI and external verification |
-| P1 | In progress | Seedless calendar, point-in-time data, offline CSV import, durable jobs and inactive daily/interval schedules with effective boundaries and persisted wake decisions; P1 remains incomplete |
-| P2 | In progress | Offline context, task-definition registry, eligibility checks and attempt ledger; trusted policy enforcement, gateway, privacy controls and provider integration remain incomplete |
-| P3 | In progress | Isolated binary-scoring calculations only; reports, immutable predictions, resolution and archive remain unimplemented |
-| P4 | Not started | Evidence, confidence, opportunities and shadow outcomes |
-| P5 | In progress | Isolated long fixed-fractional sizing only; accounts, authoritative risk, approvals, execution and accounting remain unimplemented |
-| P6 | Not started | Strategies, replay, backtesting and manual AI review |
-| P7 | Not started | Typed agent orchestration and research |
-| P8 | Not started | Filings, valuation and thesis tracking |
-| P9 | Not started | macOS operations, recovery, backups, benchmarks and paper UAT |
+| P1 | Complete (offline) | Seedless calendar, point-in-time data, offline CSV import, durable jobs, dependency-aware daily/interval schedules, paper accounts, exact-paise OMS, fills/positions reconciliation, TWR/XIRR primitives and caller-supplied point-in-time universe publishing; live adapters, verified market facts and live/broker behavior remain excluded |
+| P2 | In progress | Offline context, task-definition registry, eligibility checks, attempt ledger and provider-blocking gateway; private-provider evidence, actual clients and full privacy controls remain incomplete |
+| P3 | In progress | Binary scoring plus immutable frozen predictions/resolutions and append-only outcome audit; reports, archive and evidence-backed coverage remain incomplete |
+| P4 | In progress | Deterministic evidence/confidence gate and immutable opportunity/shadow tracking; chart/volume provider evidence and live calibration remain incomplete |
+| P5 | In progress | Fixed-fractional sizing plus deterministic risk/approval gates and immutable decisions; authoritative accounts are offline, execution and accounting remain incomplete |
+| P6 | In progress | Strategy lifecycle, replay contamination guard and point-in-time replay cursor; backtest engines and strategy promotion persistence remain incomplete |
+| P7 | In progress | Typed in-process DAG runner with optional-node and risk/execution invariants; node persistence and asynchronous execution remain incomplete |
+| P8 | In progress | Filings and thesis data primitives with point-in-time publication/ingestion ordering; valuation and filing evidence remain incomplete |
+| P9 | In progress | macOS sleep-gap detection, launchd plist generation and benchmark regression contract; target-Mac UAT/backups remain incomplete |
 
-## Latest checkpoint — snapshot view and registered citations
+## Latest checkpoint — P2 through P9 offline foundations
 
-Added source-independent P1 foundations and offline P2 context, model-eligibility and attempt-ledger foundations. As-of reads exclude records inserted after the requested time, revisions reject a non-advancing record clock, and job lease decisions use the clock after acquiring SQLite's write lock. Migrations seed no exchange or market facts. No live provider adapter, schedule trigger, worker process or model gateway is enabled. P0 external, GitHub and Mac gates remain open.
+The development handoff now includes verified offline foundations for the
+authoritative model gateway, immutable predictions and outcomes, deterministic
+confidence/opportunities, persisted risk/approval decisions, strategy replay
+guards, typed DAG orchestration, filing/thesis records and macOS sleep/launchd
+benchmark primitives. The full backend suite passes 301 tests under the available
+Python 3.12 environment; Python 3.13, Node 22, Apple Silicon UAT and external
+provider verification remain target-environment gates. Live clients and market
+adapters remain disabled.
+
+## Latest checkpoint — wake-to-job dispatch
+
+Added `infra/dispatch.py` and `tests/test_dispatch.py`. `dispatch_one` converts
+a single `WakeDecisionRecord` with `WakeDecision.RUN` into a durable `JobRun`
+occurrence by looking up the effective schedule at the occurrence time, deriving
+a canonical occurrence key (`<schedule_id>:<scheduled_at_iso>`), and calling
+`JobRunStore.enqueue` with the schedule's `job_id` and `max_attempts`. Non-RUN
+decisions are silently skipped. `JobRunConflict` on parameter mismatch is
+surfaced as an error; matching parameters are idempotent. `dispatch_due` applies
+`dispatch_one` to a batch, continuing on errors. No automatic trigger, worker
+loop, dependency ordering or catch-up safety is implemented.
 
 Implemented in [bharatquant](./bharatquant/):
 
@@ -86,6 +107,7 @@ Implemented in [bharatquant](./bharatquant/):
 - [Interval schedules](./bharatquant/backend/src/bq/schedules.py) extend the same immutable snapshots, wake decisions, bounded discovery and status previews. The configured local time is the first occurrence; subsequent occurrences are spaced by 1–1,440 whole minutes, through the inclusive operating-window end, then restart the next local day. Old daily snapshot JSON remains unchanged and readable. DST ambiguity or nonexistent local occurrences fail closed; exceeding discovery limits rolls back the batch. The status panel identifies the interval, start and end. These remain configuration and preliminary wake-policy eligibility only: no dispatch, automatic wake processing, market-day filtering, dependency execution or catch-up safety is implemented.
 - Daily and interval schedules can restrict occurrences to an ordered, nonempty set of local weekdays, numbered Monday `0` through Sunday `6`; existing snapshots without the field still mean every day. Previews, bounded discovery and direct wake decisions apply that selection, and the panel shows it. Weekdays are not a trading-day calendar: holidays and special sessions are not filtered.
 - [Schedule effective boundaries](./bharatquant/backend/src/bq/infra/migrations/012_schedule_effective_boundaries.sql) and [wake decision ledger](./bharatquant/backend/src/bq/infra/migrations/013_schedule_wake_decisions.sql): new snapshots have audited, append-only, strictly advancing effective times no earlier than their record times. Historical snapshots without a boundary remain readable but cannot be treated as effective; a later unbounded snapshot also makes historical selection fail closed. An explicitly requested occurrence is recorded once with the schedule version effective at its scheduled time; retries return the original decision and recorded observation time. The internal batch operation also discovers daily occurrences for a caller-supplied range, atomically records decisions and fails closed for legacy gaps, ambiguous local times or exceeded limits. It is not automatically invoked. Observation uses the local clock after the database write lock, before enumeration, not a trusted commit clock. `RUN` is preliminary wake-policy eligibility, not permission to execute: dependencies, job-specific catch-up safety and durable dispatch are not implemented. No jobs are enqueued or executed.
+- [Wake-to-job dispatch](./bharatquant/backend/src/bq/infra/dispatch.py): `dispatch_one` converts a `WakeDecision.RUN` record into a `JobRun` occurrence using the effective schedule at the occurrence time. `dispatch_due` batches multiple decisions with per-record error isolation. 19 tests in `tests/test_dispatch.py` cover idempotency, error paths, batch continuation and multi-schedule dispatch.
 - [Authenticated schedule-status endpoint](./bharatquant/backend/src/bq/api.py) and [panel](./bharatquant/web/src/ScheduleStatus.tsx): owner-only, non-cacheable `/api/v1/schedules/status` presents the latest and effective versions, the first 20 effective schedules and 20 recent wake decisions plus counts, all read from one database snapshot. Pending activation or missing historical boundaries are reported as unknown. For enabled daily or interval schedules, a read-only preview shows the next five occurrences after its observation time, assuming no configuration changes; it is withheld when a future version is pending or the next local time is ambiguous/nonexistent. It ignores calendars, dependencies and wake policies, and is not a guarantee of execution. The panel explicitly identifies `RUN` as wake-policy eligibility, not dispatch, and cannot edit or execute schedules.
 - [Context builder](./bharatquant/backend/src/bq/context.py), [manifest store](./bharatquant/backend/src/bq/infra/contexts.py), and [migration](./bharatquant/backend/src/bq/infra/migrations/009_context_manifests.sql): bounded, deterministic section ordering, point-in-time filtering against caller-provided knowledge/record times, duplicate/conflict detection, required-item and section protection, full-prompt budgeting via an injected counter, explicit drop reasons, exact prompt bytes and hashes. The system prompt, output schema and every item require classifications; the rendered-input classification excludes dropped items. The manifest is stored locally in plaintext; hash validation is not protection against a complete database rewrite. Source identities, classifications, timestamps and counter accuracy are not independently verified; dropped content is not retained and source-level reconstruction is not guaranteed. There is no model integration, trusted input classification or prompt-injection isolation. Do not use sensitive content before storage/privacy review.
 - [Model eligibility](./bharatquant/backend/src/bq/model_routing.py): rejects unreviewed terms/capabilities and data-handling permissions, private input on any free tier, and local reasoning/multimodal work. A local `SMALL` selection needs a matching task-version and model-fingerprint evaluation. Candidate and task metadata, classifications, review flags and evaluations are caller assertions, not a trusted registry or verified provider integration; no real routes are enabled.
@@ -111,7 +133,12 @@ Implemented in [bharatquant](./bharatquant/):
 - [GitHub Actions workflow](./bharatquant/.github/workflows/ci.yml) configures Ubuntu and `macos-15` Apple Silicon checks, frontend install/build/audit, Python lint/type/tests, lock verification, idempotent CLI initialization, and wheel asset, freshness, model validator, scoring, sizing, dependency metadata and all thirteen migration checks. `npm audit` now runs in the correct `web` directory. Actions are pinned to release commit SHAs; the four selected action repositories were checked at those commits and report MIT licenses. CI pins uv to 0.12.13.
 - [External-source gates](./bharatquant/docs/external-source-gates.md) record checks and blockers: NSE pages timed out, Google AI documentation was denied by network policy, and DeepSeek documentation returned HTTP 403. No restricted access was bypassed; related provider and market behavior remains disabled.
 
-Verification on Windows with Python 3.13.15: before adding `ALLOW`, the full backend run passed Ruff lint and format, strict mypy, **223 pytest tests** and `uv lock --check`. After that change, focused freshness lint/format and **5 pytest tests** passed, including `ALLOW` with stale, unassessed and missing-time blocks; strict mypy also passed. The snapshot API test covers authentication, no-store, exact response metadata, quality, delayed mode, unknown event time, invalid requests and logout. Registered-output tests cover a persisted citation path, legacy representation, conflicting versions, malformed and unknown citations.
+Verification on this Mac used Python 3.12.7 because Python 3.13 is not installed.
+The combined schedule, scheduler-runner and dispatch slices pass **74 tests**,
+and the changed Python files pass Ruff lint and format checks. The full Python
+3.13 suite and Node 22 frontend checks remain to be run on the target
+environment. The previous checkpoint passed **223 pytest tests** and **9
+frontend tests**; it did not include the lifecycle loop changes above.
 
 After adding `ALLOW`, Node 23.1.0 passed **9 frontend tests**, typecheck and an isolated Vite production build. Earlier, the in-project frontend build and offline npm audit passed. An isolated synthetic HTTP server and browser exercised the snapshot panel's successful result and invalid-threshold message before `ALLOW` was added; it did not test real authentication or a live provider. The temporary server was stopped. Pylance syntax checks passed for the changed Python files before `ALLOW` was added. The full backend suite, in-project frontend build and packaged wheel have not been re-run after the final `ALLOW` change.
 
@@ -143,9 +170,11 @@ On this Windows/OneDrive development host, clear inherited `VIRTUAL_ENV` and set
 
 ## Resume next
 
-1. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
-2. Verify market/provider claims through authorized access before implementing features that rely on them. Complete legal review/full license notices if redistribution is planned and decide the project license.
-3. Run GitHub CI and test on the target Apple Silicon Mac, including frontend tests on Node 22. Do not add trading pages or mock balances. Keep P0 in progress and do not claim P1 acceptance until prerequisites and acceptance checks pass. Extend symbol normalization with independently reviewed source authority and conflict handling, then integrate it into ingestion without treating unassessed mappings as verified. Extend calendar-aware diagnostics with verified instrument/session eligibility, source authority and quality incidents before using them as readiness gates. Extend the provider contract for calendar, range and other use cases only with explicit provenance and coverage semantics; implement automatic wake processing and session/dependency semantics around the schedule and job-run stores. Before connecting wake decisions to execution, validate dependency occurrence identities, job-specific catch-up safety and durable dispatch, and prevent hindsight entries. Do not enable real adapters or seed external market facts before authoritative-source and terms gates pass.
-4. Continue P2 by making task definitions authoritative at the gateway boundary, including enforceable source-selection and citation requirements, output validation, route/fallback and timeouts; establish trusted model/privacy eligibility evidence and source classification, trusted source-version lookup, validated model-specific tokenization and comprehensive source-level context replay, including dropped content. Citation paths are currently optional, check only the configured array and do not establish claim coverage. Define the output serialization policy and resolve untrusted-schema resource limits before relying on output validation. Build a gateway that owns attempt accounting and cannot bypass registry policy. Keep model clients disabled until privacy, provider terms and source gates are verified. Protect plaintext task and manifest content and add prompt-injection defenses before accepting real data.
-5. Continue P5 with owner-reviewed risk limits, accounts, order state transitions, atomic reservations and independent safety gates before connecting the sizing calculation to any order flow. Keep short selling, execution and live trading disabled until their prerequisites are verified.
-6. Continue P3 after its P1/P2 prerequisites: frozen point-in-time predictions, evidence-backed outcome revisions, coverage and small-sample reporting, calibration/baselines and immutable reports. The isolated binary-score helper is not a prediction registry or report workflow.
+1. **Install Python 3.13** (`brew install python@3.13`) and run the full suite: `uv sync --locked && uv run --locked pytest -q`. Verify dispatch tests pass.
+2. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
+3. **P1 offline complete**: scheduler lifespan, dependency dispatch, paper accounts, exact-paise OMS, reconciliation, TWR/XIRR and universe publishing are implemented and tested. Before P1 acceptance on the target Mac, run the 271-test backend suite and frontend build in Python 3.13/Node 22, verify external market/provider claims and provider adapters remain disabled, and add schedule/operator controls if job handlers are later enabled.
+4. Verify market/provider claims through authorized access before implementing features that rely on them. Complete legal review/full license notices if redistribution is planned and decide the project license.
+5. Run GitHub CI and test on the target Apple Silicon Mac, including frontend tests on Node 22. Do not add trading pages or mock balances. Keep P0 in progress and do not claim P1 acceptance until prerequisites and acceptance checks pass. Extend symbol normalization with independently reviewed source authority and conflict handling, then integrate it into ingestion without treating unassessed mappings as verified. Extend calendar-aware diagnostics with verified instrument/session eligibility, source authority and quality incidents before using them as readiness gates. Extend the provider contract for calendar, range and other use cases only with explicit provenance and coverage semantics; implement automatic wake processing and session/dependency semantics around the schedule and job-run stores. Before connecting wake decisions to execution, validate dependency occurrence identities, job-specific catch-up safety and durable dispatch, and prevent hindsight entries. Do not enable real adapters or seed external market facts before authoritative-source and terms gates pass.
+6. Continue P2 by making task definitions authoritative at the gateway boundary, including enforceable source-selection and citation requirements, output validation, route/fallback and timeouts; establish trusted model/privacy eligibility evidence and source classification, trusted source-version lookup, validated model-specific tokenization and comprehensive source-level context replay, including dropped content. Citation paths are currently optional, check only the configured array and do not establish claim coverage. Define the output serialization policy and resolve untrusted-schema resource limits before relying on output validation. Build a gateway that owns attempt accounting and cannot bypass registry policy. Keep model clients disabled until privacy, provider terms and source gates are verified. Protect plaintext task and manifest content and add prompt-injection defenses before accepting real data.
+7. Continue P5 with owner-reviewed risk limits, accounts, order state transitions, atomic reservations and independent safety gates before connecting the sizing calculation to any order flow. Keep short selling, execution and live trading disabled until their prerequisites are verified.
+8. Continue P3 after its P1/P2 prerequisites: frozen point-in-time predictions, evidence-backed outcome revisions, coverage and small-sample reporting, calibration/baselines and immutable reports. The isolated binary-score helper is not a prediction registry or report workflow.

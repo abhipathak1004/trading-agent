@@ -154,6 +154,61 @@ def test_login_session_csrf_logout_and_origin_checks(tmp_path: Path) -> None:
     asyncio.run(check())
 
 
+def test_web_owner_setup_is_origin_protected_confirmed_and_audited(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bq.db"
+    migrate(path, create=True)
+    app = create_app(database_path=path)
+
+    async def check() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://127.0.0.1:8000",
+        ) as client:
+            origin = {"Origin": ALLOWED_ORIGIN}
+            without_origin = await client.post(
+                "/api/v1/auth/setup",
+                json={"password": PASSWORD, "confirmation": PASSWORD},
+            )
+            assert without_origin.status_code == 403
+
+            mismatch = await client.post(
+                "/api/v1/auth/setup",
+                headers=origin,
+                json={"password": PASSWORD, "confirmation": "Different password 123"},
+            )
+            assert mismatch.status_code == 422
+
+            weak = await client.post(
+                "/api/v1/auth/setup",
+                headers=origin,
+                json={"password": "xxxxxxxxxxxx", "confirmation": "xxxxxxxxxxxx"},
+            )
+            assert weak.status_code == 422
+            assert "common or repetitive" in weak.json()["detail"]
+
+            setup = await client.post(
+                "/api/v1/auth/setup",
+                headers=origin,
+                json={"password": PASSWORD, "confirmation": PASSWORD},
+            )
+            assert setup.status_code == 200
+            assert setup.json()["state"] == "signed_out"
+
+            duplicate = await client.post(
+                "/api/v1/auth/setup",
+                headers=origin,
+                json={
+                    "password": "Another strong password",
+                    "confirmation": "Another strong password",
+                },
+            )
+            assert duplicate.status_code == 409
+
+    asyncio.run(check())
+
+
 def test_auth_audit_is_redacted_append_only_and_verified(tmp_path: Path) -> None:
     path = tmp_path / "bq.db"
     migrate(path, create=True)

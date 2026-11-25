@@ -27,6 +27,7 @@ type Wake = {
 type Summary = {
   latest_version: number;
   observed_at: string;
+  scheduler_running: boolean;
   schedules: Schedule[];
   decision_count: number;
   recent_decisions: Wake[];
@@ -94,7 +95,7 @@ function parseWake(value: unknown): Wake {
 function parseSummary(value: unknown): Summary {
   if (
     !isRecord(value) || !isCount(value.latest_version) || !isTimestamp(value.observed_at) ||
-    value.scheduler_running !== false ||
+    typeof value.scheduler_running !== "boolean" ||
     (value.effective_state !== "not_configured" && value.effective_state !== "available" &&
       value.effective_state !== "unknown") ||
     !Array.isArray(value.schedules) || value.schedules.length > 20 ||
@@ -106,6 +107,7 @@ function parseSummary(value: unknown): Summary {
   const common = {
     latest_version: value.latest_version,
     observed_at: value.observed_at,
+    scheduler_running: value.scheduler_running,
     schedules: value.schedules.map(parseSchedule),
     decision_count: value.decision_count,
     recent_decisions: value.recent_decisions.map(parseWake),
@@ -199,7 +201,12 @@ export default function ScheduleStatus() {
       )}
       {status.state === "ready" && (
         <>
-          <p>No scheduler or jobs are running. Wake decisions do not dispatch jobs.</p>
+          <p>
+            {status.summary.scheduler_running
+              ? "Scheduler discovery loop is running."
+              : "Scheduler discovery loop is stopped."}{" "}
+            Wake decisions do not execute jobs; no job handlers are registered.
+          </p>
           {status.summary.effective_state === "not_configured" && <p>No schedules configured.</p>}
           {status.summary.effective_state === "unknown" && (
             <p>The effective schedule is unavailable: activation may be pending or a historical boundary may be missing.</p>

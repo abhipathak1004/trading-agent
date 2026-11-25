@@ -1,5 +1,6 @@
 import re
-from collections.abc import AsyncIterable, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from hmac import compare_digest
 from pathlib import Path
@@ -18,6 +19,7 @@ from bq.auth import (
     SESSION_SECONDS,
     InvalidCredentials,
     LoginLocked,
+    OwnerAlreadyConfigured,
     OwnerAuth,
     OwnerNotConfigured,
 )
@@ -34,8 +36,14 @@ from bq.data.freshness import (
     inspect_snapshot_freshness,
 )
 from bq.data.records import DataRecordStore, MissingDataRecord, QualityStatus
+from bq.infra.jobs import JobRunStore
 from bq.infra.model_attempts import ModelAttemptStore, TokenUsage
+from bq.infra.scheduler import SchedulerLoop, SchedulerRunner
 from bq.infra.schedules import ScheduleStore
+from bq.paper_accounts import (
+    PaperAccountStatus,
+    PaperAccountStore,
+)
 from bq.schedules import (
     DailySchedule,
     IntervalSchedule,
@@ -56,6 +64,11 @@ class Health(BaseModel):
 
 class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256, strict=True)
+
+
+class SetupRequest(BaseModel):
+    password: str = Field(min_length=12, max_length=256, strict=True)
+    confirmation: str = Field(min_length=12, max_length=256, strict=True)
 
 
 class SessionStatus(BaseModel):
@@ -136,6 +149,16 @@ class UsageStatus(BaseModel):
     provider_connected: Literal[False]
 
 
+class PaperAccountStatusResponse(BaseModel):
+    account_id: str
+    name: str
+    status: PaperAccountStatus
+    opening_balance_paise: str
+    deposited_paise: str
+    withdrawn_paise: str
+    balance_paise: str
+
+
 class DailyScheduleStatus(BaseModel):
     schedule_id: str
     job_id: str
@@ -167,7 +190,7 @@ class ScheduleStatus(BaseModel):
     schedules: list[DailyScheduleStatus]
     decision_count: int
     recent_decisions: list[WakeStatus]
-    scheduler_running: Literal[False]
+    scheduler_running: bool
 
 
 def _daily_schedule_status(
@@ -226,7 +249,20 @@ class StreamingResponseLike(Protocol):
 def create_app(
     web_root: Path | None = None, *, database_path: Path | None = None
 ) -> FastAPI:
-    app = FastAPI(title="BharatQuant")
+    scheduler: SchedulerLoop | None = None
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        del app
+        if scheduler is not None:
+            scheduler.start()
+        try:
+            yield
+        finally:
+            if scheduler is not None:
+                await scheduler.stop()
+
+    app = FastAPI(title="BharatQuant", lifespan=lifespan)
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=["127.0.0.1"], www_redirect=False
     )
@@ -255,6 +291,7 @@ def create_app(
                 "/api/v1/data/",
                 "/api/v1/llm/",
                 "/api/v1/schedules/",
+                "/api/v1/paper/",
             )
         ):
             response.headers["Cache-Control"] = "no-store"
@@ -298,12 +335,24 @@ def create_app(
     def health() -> Health:
         return Health(status="ok")
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)
+
     if database_path is not None:
         auth = OwnerAuth(database_path)
         calendar = ExchangeCalendar(database_path)
         records = DataRecordStore(database_path)
         attempts = ModelAttemptStore(database_path)
         schedules = ScheduleStore(database_path, available_jobs=frozenset())
+        paper_accounts = PaperAccountStore(database_path)
+        scheduler = SchedulerLoop(
+            SchedulerRunner(
+                database_path,
+                schedule_store=schedules,
+                job_store=JobRunStore(database_path),
+            )
+        )
 
         def verify_origin(request: Request) -> None:
             if request.headers.get("origin") != ALLOWED_ORIGIN:
@@ -456,6 +505,29 @@ def create_app(
                 provider_connected=False,
             )
 
+        @app.get("/api/v1/paper/accounts/{account_id}")
+        def paper_account_status(
+            request: Request, account_id: str
+        ) -> PaperAccountStatusResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                balance = paper_accounts.get_balance(account_id)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=404, detail="Paper account unavailable"
+                ) from exc
+            account = balance.account
+            return PaperAccountStatusResponse(
+                account_id=account.account_id,
+                name=account.name,
+                status=account.status,
+                opening_balance_paise=str(account.opening_balance_paise),
+                deposited_paise=str(balance.deposited_paise),
+                withdrawn_paise=str(balance.withdrawn_paise),
+                balance_paise=str(balance.balance_paise),
+            )
+
         @app.get("/api/v1/schedules/status")
         def schedule_status(request: Request) -> ScheduleStatus:
             if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
@@ -490,7 +562,7 @@ def create_app(
                     )
                     for item in overview.recent_decisions
                 ],
-                scheduler_running=False,
+                scheduler_running=scheduler.running,
             )
 
         @app.get("/api/v1/auth/session")
@@ -530,6 +602,25 @@ def create_app(
                 path="/",
             )
             return SessionStatus(state="signed_in", csrf_token=session.csrf_token)
+
+        @app.post("/api/v1/auth/setup")
+        def setup_owner(request: Request, body: SetupRequest) -> SessionStatus:
+            verify_origin(request)
+            if auth.is_configured():
+                raise HTTPException(
+                    status_code=409, detail="Owner password is already configured"
+                )
+            if body.password != body.confirmation:
+                raise HTTPException(status_code=422, detail="Passwords do not match")
+            try:
+                auth.setup(body.password, source="web")
+            except OwnerAlreadyConfigured as exc:
+                raise HTTPException(
+                    status_code=409, detail="Owner password is already configured"
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return SessionStatus(state="signed_out")
 
         @app.post("/api/v1/auth/logout", status_code=204)
         def logout(request: Request) -> Response:

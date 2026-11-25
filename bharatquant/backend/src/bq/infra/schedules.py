@@ -334,6 +334,8 @@ class ScheduleStore:
                 now = _utc(self.clock.now())
                 if end > now:
                     raise ScheduleError("Discovery cannot include future occurrences.")
+                if self._load(connection).version == 0:
+                    return ()
                 first = self._effective_at(connection, start_text)
                 uncertain = connection.execute(
                     "SELECT 1 FROM schedule_versions AS s "

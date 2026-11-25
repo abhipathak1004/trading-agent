@@ -262,6 +262,41 @@ h1 span {
   font: inherit;
 }
 
+.setup-form {
+  display: grid;
+  gap: 10px;
+}
+
+.setup-form label {
+  margin: 4px 0 0;
+}
+
+.setup-form .auth-button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.password-strength,
+.password-match {
+  font-size: 12px;
+}
+
+.password-strength--weak {
+  color: #eea396;
+}
+
+.password-strength--fair {
+  color: #dccb91;
+}
+
+.password-strength--strong {
+  color: var(--accent);
+}
+
+.password-match {
+  color: #eea396;
+}
+
 .auth-button {
   padding: 10px 14px;
   border: 1px solid #536443;
