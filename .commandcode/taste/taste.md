@@ -1,1 +1,6 @@
-- Uses `just` as the task runner; wants a single `just run` command that chains the full pipeline (build → init → doctor → serve) so the app comes up with one invocation. Confidence: 0.6
+- Uses `just` as the task runner; wants a single `just run` command that chains the full pipeline (build → init → doctor → serve) so the app comes up with one invocation. Confidence: 0.8
+- Wants configuration surfaces (schedules, API keys, agent configuration, models to use, etc.) consolidated into a single settings tab rather than split across pages. Confidence: 0.7
+- When revising plan/design docs, preserves prior invariants and decisions, documents changes with an explicit changelog/version table, and cites where each change lands (sections/tables). Confidence: 0.7
+- Wants token consumption kept low: expects the agent to prefer installed efficiency tooling (`graphify` graph queries to navigate code instead of dumping files, `tokeneconomizer` when available) over brute-force exploration. Confidence: 0.75
+- Insists features/agents be designed for maximum cost efficiency: bound the size of stored/fetched content, avoid unnecessary model (LLM) calls, and prefer deterministic logic where it removes token spend. Confidence: 0.65
+- Before starting a new task, wants the working context compacted into a durable handoff/summary document so the next task doesn't depend on the full chat history. Confidence: 0.6
