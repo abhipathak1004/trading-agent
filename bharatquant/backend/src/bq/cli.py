@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import uvicorn
 
 from bq.analysis.debate import Debate
+from bq.analysis.decision import trade_plan_from_json
 from bq.analysis.pipeline import AnalysisPipeline
 from bq.analysis.risk_team import RiskAnalyst
 from bq.analysis.wiring import build_analysis_router
@@ -44,11 +45,13 @@ from bq.data.records import DataRecordStore, MissingDataImport, MissingDataRecor
 from bq.data.symbols import resolve as resolve_symbol
 from bq.data.vendors import DataDomain
 from bq.data.yahoo import YahooDataClient
+from bq.execution.paper_executor import ExecutionContext, PaperExecutor
 from bq.infra.database import DatabaseError, check_database, migrate
 from bq.infra.model_attempts import ModelAttemptStore
 from bq.llm_service import LLMService
 from bq.news import NewsError
 from bq.news_agent import NewsResearchAgent
+from bq.risk.policy import KillSwitchLevel, RiskLimits
 from bq.settings import SettingsStore
 
 
@@ -162,6 +165,40 @@ def main(argv: list[str] | None = None) -> int:
         "--cash-paise", type=int, required=True, help="Available cash in paise."
     )
     analyze_action.add_argument("--risk-bps", type=int, default=100)
+    paper_actions = actions.add_parser("paper").add_subparsers(
+        dest="paper_action", required=True
+    )
+    paper_execute = paper_actions.add_parser(
+        "execute",
+        help="Gate a trade-plan JSON through the risk engine and place a paper order.",
+    )
+    paper_execute.add_argument(
+        "plan",
+        help="Path to a trade-plan JSON file, or '-' for stdin.",
+    )
+    paper_execute.add_argument("--account-id", required=True)
+    paper_execute.add_argument("--available-cash-paise", type=int, required=True)
+    paper_execute.add_argument("--open-positions", type=int, required=True)
+    paper_execute.add_argument("--symbol-exposure-paise", type=int, required=True)
+    paper_execute.add_argument("--daily-loss-paise", type=int, required=True)
+    paper_execute.add_argument("--weekly-loss-paise", type=int, required=True)
+    paper_execute.add_argument("--monthly-loss-paise", type=int, required=True)
+    paper_execute.add_argument("--orders-this-minute", type=int, default=0)
+    paper_execute.add_argument(
+        "--session-open",
+        choices=["true", "false"],
+        required=True,
+        help="Whether the request falls inside a known-open trading session.",
+    )
+    for limit_name in (
+        "max-symbol-exposure-paise",
+        "max-open-positions",
+        "max-daily-loss-paise",
+        "max-weekly-loss-paise",
+        "max-monthly-loss-paise",
+        "max-order-rate-per-minute",
+    ):
+        paper_execute.add_argument(f"--{limit_name}", type=int, required=True)
     data_actions = actions.add_parser("data").add_subparsers(
         dest="data_action", required=True
     )
@@ -269,7 +306,10 @@ def main(argv: list[str] | None = None) -> int:
                     print(
                         "Development host only; Apple Silicon macOS target not verified."
                     )
-                print("Live market data, LLMs and paper trading are not implemented.")
+                print(
+                    "Market data: Yahoo (delayed) available; Kite read-only when "
+                    "enabled. Execution: paper only — no live broker."
+                )
             elif args.action == "auth":
                 auth = OwnerAuth(path)
                 if auth.is_configured():
@@ -619,6 +659,65 @@ def main(argv: list[str] | None = None) -> int:
                     risk_basis_points=args.risk_bps,
                 )
                 print(json.dumps(analysis.to_dict(), sort_keys=True, default=str))
+            elif args.action == "paper" and args.paper_action == "execute":
+                raw = (
+                    sys.stdin.read()
+                    if args.plan == "-"
+                    else Path(args.plan).read_text("utf-8")
+                )
+                plan = trade_plan_from_json(json.loads(raw))
+                limits = RiskLimits(
+                    max_symbol_exposure_paise=args.max_symbol_exposure_paise,
+                    max_open_positions=args.max_open_positions,
+                    max_daily_loss_paise=args.max_daily_loss_paise,
+                    max_weekly_loss_paise=args.max_weekly_loss_paise,
+                    max_monthly_loss_paise=args.max_monthly_loss_paise,
+                    max_order_rate_per_minute=args.max_order_rate_per_minute,
+                )
+                executor = PaperExecutor(path, limits=limits)
+                execution = executor.execute(
+                    plan,
+                    context=ExecutionContext(
+                        account_id=args.account_id,
+                        available_cash_paise=args.available_cash_paise,
+                        open_positions=args.open_positions,
+                        symbol_exposure_paise=args.symbol_exposure_paise,
+                        daily_loss_paise=args.daily_loss_paise,
+                        weekly_loss_paise=args.weekly_loss_paise,
+                        monthly_loss_paise=args.monthly_loss_paise,
+                        orders_this_minute=args.orders_this_minute,
+                        kill_switch=KillSwitchLevel.NONE,
+                        instrument_valid=True,
+                        session_open=args.session_open == "true",
+                    ),
+                    # A deterministic id makes re-running the same plan
+                    # idempotent. The paper engine allows only
+                    # [A-Za-z0-9._:-], so the timestamp's "+offset" is
+                    # rendered as a trailing Z instead.
+                    client_order_id=(
+                        f"paper-{plan.symbol}-{plan.as_of.strftime('%Y%m%dT%H%M%SZ')}"
+                    ),
+                )
+                print(
+                    json.dumps(
+                        {
+                            "state": execution.decision.state.value,
+                            "vetoes": list(execution.decision.vetoes),
+                            "data_freshness": execution.freshness.label,
+                            "order": (
+                                None
+                                if execution.order is None
+                                else {
+                                    "order_id": execution.order.order_id,
+                                    "status": execution.order.status.value,
+                                    "quantity": execution.order.quantity,
+                                    "limit_price_paise": execution.order.limit_price_paise,
+                                }
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                )
             else:
                 if not (WEB_ROOT / "index.html").is_file():
                     raise ValueError(

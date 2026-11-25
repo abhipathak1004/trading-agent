@@ -300,6 +300,67 @@ def verify_quantity_matches_sizing(
         )
 
 
+def trade_plan_from_json(payload: object) -> TradePlan:
+    """Reconstruct a plan from its ``to_dict`` representation.
+
+    The plan contract re-validates on construction, so a hand-edited JSON cannot
+    smuggle in a different signal, an out-of-range confidence or a quantity that
+    does not match the stop distance. This is the boundary the paper executor
+    uses to accept a persisted plan without trusting it wholesale.
+    """
+    if not isinstance(payload, dict):
+        raise TradePlanError("A trade-plan JSON object is required.")
+    try:
+        as_of = datetime.fromisoformat(str(payload["as_of"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError) as exc:
+        raise TradePlanError("A valid as_of timestamp is required.") from exc
+    try:
+        signal = Signal(str(payload["signal"]))
+        product = Product(str(payload["product"]))
+        order_type = OrderType(str(payload["order_type"]))
+        freshness = DataFreshness(str(payload["data_freshness"]))
+    except KeyError as exc:
+        raise TradePlanError(f"Plan is missing the field {exc}.") from exc
+    except ValueError as exc:
+        # Name the JSON field, since that is what the caller can actually fix.
+        for field_name, enum_type in (
+            ("signal", Signal),
+            ("product", Product),
+            ("order_type", OrderType),
+            ("data_freshness", DataFreshness),
+        ):
+            try:
+                enum_type(str(payload.get(field_name)))
+            except ValueError:
+                raise TradePlanError(
+                    f"Plan field '{field_name}' has an invalid value "
+                    f"{payload.get(field_name)!r}."
+                ) from exc
+        raise TradePlanError(f"A plan field has an invalid value: {exc}") from exc
+    try:
+        return TradePlan(
+            signal=signal,
+            symbol=str(payload["symbol"]),
+            exchange=str(payload["exchange"]),
+            product=product,
+            order_type=order_type,
+            entry_price=Decimal(str(payload["entry_price"])),
+            stop_loss=Decimal(str(payload["stop_loss"])),
+            target_price=Decimal(str(payload["target_price"])),
+            suggested_quantity=int(str(payload["suggested_quantity"])),
+            confidence=float(str(payload["confidence"])),
+            timeframe=str(payload["timeframe"]),
+            invalidation_reason=str(payload["invalidation_reason"]),
+            data_freshness=freshness,
+            as_of=as_of,
+            min_reward_risk_bps=int(
+                str(payload.get("min_reward_risk_bps", DEFAULT_MIN_REWARD_RISK_BPS))
+            ),
+        )
+    except (KeyError, ValueError, ArithmeticError) as exc:
+        raise TradePlanError(str(exc)) from exc
+
+
 __all__ = [
     "BASIS_POINTS",
     "DEFAULT_MIN_REWARD_RISK_BPS",
@@ -310,5 +371,6 @@ __all__ = [
     "TradePlan",
     "TradePlanError",
     "build_plan",
+    "trade_plan_from_json",
     "verify_quantity_matches_sizing",
 ]

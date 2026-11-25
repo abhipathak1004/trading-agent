@@ -9,6 +9,7 @@ import UsageStatus from "./UsageStatus";
 import PaperAccountStatus from "./PaperAccountStatus";
 import ResearchPanel from "./ResearchPanel";
 import AgentConsole from "./AgentConsole";
+import AnalysisPanel from "./AnalysisPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
 
@@ -532,6 +533,10 @@ export default function App() {
 
             <div className="dashboard-grid dashboard-grid--research">
               <AgentConsole csrfToken={session.csrfToken} />
+            </div>
+
+            <div className="dashboard-grid dashboard-grid--research">
+              <AnalysisPanel csrfToken={session.csrfToken} />
             </div>
 
             <div className="dashboard-grid dashboard-grid--research">

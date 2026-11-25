@@ -38,6 +38,20 @@ web-dev:
 news:
     cd bharatquant && uv run --locked bq news ingest
 
+# Analyse one Indian equity and print the structured run as JSON.
+# Example: just analyze NSE:RELIANCE --equity-paise 100000000 --cash-paise 50000000
+analyze symbol *ARGS:
+    cd bharatquant && uv run --locked bq analyze {{symbol}} {{ARGS}}
+
+# Show which market-data vendor serves each domain (Kite disabled by default).
+vendors:
+    cd bharatquant && uv run --locked bq data vendors
+
+# Gate a trade-plan JSON through the risk engine; paper order only.
+# Example: just paper-execute plan.json --account-id paper-main ...
+paper-execute plan *ARGS:
+    cd bharatquant && uv run --locked bq paper execute {{plan}} {{ARGS}}
+
 test:
     cd bharatquant && uv run --locked pytest -q
     cd bharatquant/web && npm test

@@ -330,3 +330,52 @@ accepted here. `ADR-010`'s discipline still applies: the guard test decides
 whether a declaration is correct, and the notices file must stay in step. If the
 numeric workload later grows into frame-scale analytics, plan §6.1's Polars path
 remains open without changing the indicator module's public functions.
+
+## ADR-015: Delayed data is usable for paper execution, blocking only when stale
+
+**Status:** Accepted. Elaborates ADR-004 for the execution path.
+
+**Context:** ADR-004 already says delayed intraday data defaults to `WARN`, not
+`BLOCK`, and that critically stale data blocks new entries. The execution layer
+had to turn that policy into one boolean — `evaluate_pretrade`'s `data_usable` —
+and the obvious question was whether a `delayed_yfinance` price should set it
+false.
+
+For **paper** execution it should not. A paper fill is a simulation: a delayed
+price is a legitimate input, and refusing every plan that came from Yahoo would
+make the paper engine unusable on a free data source, which is the whole point of
+the default configuration. The real risk that matters for a paper run is *stale*
+data — a price from days ago — not a price from fifteen minutes ago.
+
+**Decision:** `bq/execution/paper_executor.py` maps freshness as follows.
+
+| Plan label | Within its freshness budget | `data_usable` | Reported as |
+|---|---|---|---|
+| `realtime_kite` | yes | `True` | `realtime` |
+| `delayed_yfinance` | yes | `True` | `delayed_warn` |
+| either | no | `False` | `stale_block` |
+
+**The two timeframes use different clocks, deliberately.**
+
+- **Intraday** is measured in wall-clock seconds (15 minutes). A 15-minute candle
+  really does lose value in 15 minutes.
+- **Swing** is measured in **weekday sessions missed** (budget: 2), and age starts
+  from the bar's **close**, not its open — a daily bar carries the session open
+  stamp but is not settled until the close.
+
+A calendar-seconds threshold is actively wrong for daily bars: it blocks every
+Monday morning for a plan built on Friday's close, even though no session has
+traded in between and Friday is the freshest data that can exist. Live testing
+found exactly that false block. Public holidays are not modelled yet, so a holiday
+week counts one extra missed session — erring toward blocking, which is the safe
+direction, with the existing trading calendar as the future fix.
+
+All thresholds are **unvalidated starting points**, recorded as such rather than
+presented as a verified rule.
+
+**Consequences:** The paper engine works on free delayed data while still
+refusing history that is too old to be meaningful, and every run records which
+case applied. This mapping is **specifically for paper** and must not be copied
+into a live path: for a live order, delayed data has to be a hard block. Because
+ADR-001 forbids live execution entirely, that is a future decision, not a flag to
+flip — and this ADR exists so the difference is visible rather than implicit.

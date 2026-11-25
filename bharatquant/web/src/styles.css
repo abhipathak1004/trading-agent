@@ -1349,3 +1349,85 @@ a.nav-item:hover,
     max-width: 100%;
   }
 }
+
+/* Analysis panel: a form plus a structured, evidence-first result card. */
+.analysis-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.analysis-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.analysis-form input,
+.analysis-form select {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.analysis-form button {
+  align-self: end;
+  padding: 8px 14px;
+}
+
+.analysis-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-scores,
+.analysis-plan dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.analysis-scores div,
+.analysis-plan dl div {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.analysis-scores dt,
+.analysis-plan dl dt {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.analysis-scores dd,
+.analysis-plan dl dd {
+  margin: 2px 0 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 14px;
+}
+
+.analysis-plan h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.analysis-invalidation {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted-strong);
+}

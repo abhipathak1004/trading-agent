@@ -7,7 +7,96 @@ Start here when resuming work. This file lives in the workspace and does not dep
 Updated 25 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
 
-**Latest slice — the research agent is live and playable in the UI.**
+**Latest slice — Phase 4: the deterministic risk gate is wired to paper execution.**
+A validated `TradePlan` now runs through the existing pre-trade gate and, only on
+`ALLOW`, becomes a **paper** order. Nothing touches a broker; ADR-001 stands.
+
+- `bq/execution/paper_executor.py` — `PaperExecutor`. It maps data freshness to
+  the gate's `data_usable` flag (delayed → `WARN` and still usable for paper;
+  critically stale → `BLOCK`), calls `evaluate_pretrade` with every limit, and
+  places a paper order only when the decision is `ALLOW`. It refuses `SELL`/
+  `HOLD` plans (no short-margin model) and relays the plan's quantity unchanged.
+  **Swing freshness counts weekday sessions missed, not calendar seconds**, and
+  measures from the bar's close rather than its open stamp; a calendar threshold
+  had blocked every Monday for a plan built on Friday's close (ADR-015).
+- `bq/analysis/decision.py` — added `trade_plan_from_json`, a re-validating
+  boundary so a persisted or hand-edited plan is checked on the way back in. An
+  invalid enum field now names the offending JSON field instead of saying
+  "invalid".
+- CLI: `bq paper execute <plan.json|-> --account-id … --session-open …` plus
+  explicit `--max-*` risk limits (there are **no** invented defaults for risk).
+  `just paper-execute`. `bq doctor` no longer claims market data and paper
+  trading are unimplemented.
+
+Live verification: `bq analyze NSE:RELIANCE` produced a real plan (449 shares,
+entry 1351.00 / stop 1306.47 / target 1417.80, R:R 1.50), and executing it against
+a funded paper account returned `ALLOW`, `delayed_warn`, and placed a 449-share
+LIMIT paper order at 135100 paise.
+Testing also confirmed the negative case: `NSE:TCS` scored a negative composite
+and correctly produced `HOLD` with `no_deterministic_long_case` instead of a
+forced BUY.
+
+Verification: **647 backend tests** pass (31 new), **31 frontend tests** pass,
+ruff clean, format clean. mypy is unchanged at 47 pre-existing errors in the same
+8 untouched files.
+
+**Previous slice — Indian market-data layer + technical analysis agents.**
+A dual-vendor data layer (Zerodha Kite read-only + Yahoo) behind a per-domain
+router, plus a deterministic technical analyst, a bull/bear debate, and a
+validated trade-plan contract. Stages 1–3 of
+[the porting plan](./bharatquant/docs/migration-tradingagents.md).
+
+- `bq/data/symbols.py` — `SymbolResolver`. One canonical identity
+  (`NSE:RELIANCE`) mapped to Yahoo (`.NS`/`.BO`, indices as `^NSEI`/`^NSEBANK`/
+  `^BSESN`/`^INDIAVIX`) and Kite (`("NSE", "RELIANCE")`). Indices resolve but are
+  marked non-tradeable.
+- `bq/data/vendors/` — the market-data layer. `base.py` defines the `Bar`/
+  `Quote`/`MarketDataVendor` contract; `router.py` holds ordered per-domain chains
+  with a public `register_vendor(domain, vendor, priority)` hook (adding a vendor
+  needs no core edit); `errors.py` distinguishes `VendorUnavailableError` (try the
+  next vendor) from `NoMarketDataError` (there is genuinely no data).
+  `yahoo_vendor.py` wraps the existing bounded Yahoo parser and adds an intraday
+  window; `kite_vendor.py` is **read-only** — quote, ohlc, historical_data,
+  instruments, and nothing else.
+- `bq/data/instrument_master.py` — per-trading-day Kite instrument cache with
+  equity-only filtering. A failed refresh leaves the prior day readable and
+  raises, rather than silently serving stale tokens.
+- `bq/data/broker_credentials.py` — Kite credentials in their own table,
+  separate from `provider_api_keys`, following the existing masked-secret rules.
+  `kite_enabled` defaults **off**; with it off the chain is Yahoo-only.
+- `bq/compute/indicators.py` — pandas/numpy indicators (SMA, EMA, RSI-Wilder,
+  MACD, Bollinger, ATR-Wilder, VWAP, ADX, drawdown, volume, swing levels).
+  Explicit warm-up: an unfilled window returns `None`, never a seeded number.
+- `bq/analysis/` — `technical.py` (four bounded sub-scores with stated
+  evidence), `debate.py` (bull/bear + judge, where the judge's confidence is
+  **clamped** to a deterministic ceiling and can never exceed it), `risk_team.py`
+  (advisory only — it cannot veto), `decision.py` (a `TradePlan` that rejects any
+  quantity the sizer did not produce), `pipeline.py` (the DAG, reusing
+  `bq/agents.py`), `run_settings.py` (append-only run audit), `wiring.py`.
+- Interfaces: owner-only, `no-store` `GET /api/v1/analysis/vendors`,
+  `POST /api/v1/analysis/run`, `GET /api/v1/analysis/runs[/{id}]`; CLI
+  `bq analyze NSE:RELIANCE --timeframe swing --equity-paise ... --cash-paise ...`
+  and `bq data vendors`; `just analyze`, `just vendors`.
+- UI: new `AnalysisPanel.tsx` on the Research tab, showing sub-scores, the
+  fact list, the plan and the data-provenance line. `analysisContract.ts` parses
+  and bounds every response, and refuses a non-`LIMIT` plan.
+
+**Kite is a data vendor, not a broker.** ADR-013 reaffirms ADR-001: no order
+placement, no sandbox, no `LIVE_AUTO`. A test asserts `kite_vendor.py` exposes no
+order-placing method.
+
+Live verification on this Mac: `bq analyze NSE:RELIANCE --timeframe swing`
+fetched real Yahoo data, computed all four dimensions over 246 daily bars, and
+produced `entry 1351.00 / stop 1306.47 / target 1417.80`, `R:R 1.50`, 224 shares,
+labelled `delayed_yfinance` and `RULES_ONLY` (no model key configured). Two real
+bugs were found and fixed by that run: prices carried 16 decimals, and
+support/resistance could be reported *inverted* (price outside its own range).
+
+Verification: **616 backend tests** pass (114 new), **31 frontend tests** pass
+(8 new), ruff clean, frontend typecheck + build clean. mypy reports the same 47
+pre-existing errors in 8 untouched files; every new module is clean.
+
+**Previous slice — the research agent is live and playable in the UI.**
 A real LLM drives a bounded tool loop end to end; the Research tab is now an
 interactive console that shows every tool call.
 
@@ -481,9 +570,9 @@ true. Kept for history; read these instead:
 | Earlier claim | Current state |
 |---|---|
 | "Python 3.13 is not installed"; suite verified on 3.12.7 | 3.13.18 is installed and the suite runs on it |
-| "previous checkpoint passed 223 pytest tests" | **330** backend tests pass |
-| "9 frontend tests" | **13** frontend tests pass |
-| "thirteen migrations" | **22** migrations; the count is now derived in tests rather than hardcoded |
+| "previous checkpoint passed 223 pytest tests" | **616** backend tests pass |
+| "9 frontend tests" | **31** frontend tests pass |
+| "thirteen migrations" | **25** migrations; the count is now derived in tests rather than hardcoded |
 | "CI builds with `--no-build-isolation`"; workflow pinned to SHAs | **No CI workflow file exists** in this repository snapshot; recreate before relying on hosted checks |
 | "the workspace has no Git repository" | It is a Git repository on branch `dev` |
 | Dependencies: no `httpx` at runtime | `httpx`, `pydantic` and `starlette` are **runtime** dependencies; a production install previously could not start `bq` |
@@ -491,19 +580,33 @@ true. Kept for history; read these instead:
 
 ## Resume next
 
-1. **Next functional step: wire the news agent into the schedule.** `bq news
-   ingest` runs standalone; it is not yet a registered job or a schedule entry.
-   Add it to the job catalogue and a daily schedule so ingest happens in the
-   operating window, then expose long-term memories to the morning report.
-   Consider a bounded dedupe window so old items stop consuming the item cap.
-2. **Improve news classification only with an explicit budget.** `OTHER` is the
+1. **Give the paper executor an account snapshot reader.** Right now the caller
+   supplies `ExecutionContext` by hand (CLI flags, tests). It should be derived
+   from `PaperAccountStore.get_balance`, `paper_positions`, today's realised loss
+   and the calendar's session state, so `bq paper execute` needs only the plan
+   and an account id. That also removes the chance of an operator mis-typing a
+   limit. Keep the limits themselves explicit and owner-reviewed.
+2. **Wire the news stage into the analysis pipeline.** `_news_context` in
+   `bq/analysis/pipeline.py` is a deliberate placeholder that produces no facts.
+   It should read `agent_memories` filtered to `as_of`, so the debate sees
+   point-in-time news rather than nothing.
+3. **Make the news agent a scheduled job.** `bq news ingest` runs standalone; it
+   is not a registered job or schedule entry. Add it to the job catalogue and a
+   daily schedule so ingest happens in the operating window, then expose
+   long-term memories to the morning report.
+4. **Review the swing/stop heuristics against real outcomes.** The 1.5×ATR stop
+   and the ATR-bounded support logic are plausible but unvalidated. They are
+   deterministic and reviewable by design; treat them as a starting point, not a
+   proven rule. The freshness thresholds (`SWING_CRITICAL_AFTER_SECONDS`,
+   `INTRADAY_CRITICAL_AFTER_SECONDS`) are likewise unvalidated starting points.
+5. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
+6. **Improve news classification only with an explicit budget.** `OTHER` is the
    largest bucket and first-match labelling mislabels headlines that mention two
    topics. Any model pass must be opt-in, capped by tokens, and applied to the
    ambiguous subset — never a per-article call during ingest.
-3. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
-4. **P1 offline complete**: scheduler lifespan, dependency dispatch, paper accounts, exact-paise OMS, reconciliation, TWR/XIRR and universe publishing are implemented and tested. Before P1 acceptance on the target Mac, run the full backend suite and frontend build in Python 3.13/Node 22, verify external market/provider claims and provider adapters remain disabled, and add schedule/operator controls if job handlers are later enabled.
-5. Verify market/provider claims through authorized access before implementing features that rely on them. Complete legal review/full license notices if redistribution is planned and decide the project license.
-6. Run GitHub CI and test on the target Apple Silicon Mac, including frontend tests on Node 22. The CI workflow referenced in earlier checkpoints is **not present in this repository snapshot**; recreate it before relying on hosted checks. Do not add trading pages or mock balances. Keep P0 in progress and do not claim P1 acceptance until prerequisites and acceptance checks pass. Extend symbol normalization with independently reviewed source authority and conflict handling, then integrate it into ingestion without treating unassessed mappings as verified. Extend calendar-aware diagnostics with verified instrument/session eligibility, source authority and quality incidents before using them as readiness gates. Extend the provider contract for calendar, range and other use cases only with explicit provenance and coverage semantics; implement automatic wake processing and session/dependency semantics around the schedule and job-run stores. Before connecting wake decisions to execution, validate dependency occurrence identities, job-specific catch-up safety and durable dispatch, and prevent hindsight entries. Do not enable real adapters or seed external market facts before authoritative-source and terms gates pass.
-7. Continue P2 by making task definitions authoritative at the gateway boundary, including enforceable source-selection and citation requirements, output validation, route/fallback and timeouts; establish trusted model/privacy eligibility evidence and source classification, trusted source-version lookup, validated model-specific tokenization and comprehensive source-level context replay, including dropped content. Citation paths are currently optional, check only the configured array and do not establish claim coverage. Define the output serialization policy and resolve untrusted-schema resource limits before relying on output validation. Build a gateway that owns attempt accounting and cannot bypass registry policy. Keep model clients disabled until privacy, provider terms and source gates are verified. Protect plaintext task and manifest content and add prompt-injection defenses before accepting real data.
-8. Continue P5 with owner-reviewed risk limits, accounts, order state transitions, atomic reservations and independent safety gates before connecting the sizing calculation to any order flow. Keep short selling, execution and live trading disabled until their prerequisites are verified.
-9. Continue P3 after its P1/P2 prerequisites: frozen point-in-time predictions, evidence-backed outcome revisions, coverage and small-sample reporting, calibration/baselines and immutable reports. The isolated binary-score helper is not a prediction registry or report workflow.
+7. **P1 offline complete**: scheduler lifespan, dependency dispatch, paper accounts, exact-paise OMS, reconciliation, TWR/XIRR and universe publishing are implemented and tested. Before P1 acceptance on the target Mac, run the full backend suite and frontend build in Python 3.13/Node 22, verify external market/provider claims and provider adapters remain disabled, and add schedule/operator controls if job handlers are later enabled.
+8. Verify market/provider claims through authorized access before implementing features that rely on them. Complete legal review/full license notices if redistribution is planned and decide the project license.
+9. Run GitHub CI and test on the target Apple Silicon Mac, including frontend tests on Node 22. The CI workflow referenced in earlier checkpoints is **not present in this repository snapshot**; recreate it before relying on hosted checks. Do not add trading pages or mock balances. Keep P0 in progress and do not claim P1 acceptance until prerequisites and acceptance checks pass. Extend symbol normalization with independently reviewed source authority and conflict handling, then integrate it into ingestion without treating unassessed mappings as verified. Extend calendar-aware diagnostics with verified instrument/session eligibility, source authority and quality incidents before using them as readiness gates. Extend the provider contract for calendar, range and other use cases only with explicit provenance and coverage semantics; implement automatic wake processing and session/dependency semantics around the schedule and job-run stores. Before connecting wake decisions to execution, validate dependency occurrence identities, job-specific catch-up safety and durable dispatch, and prevent hindsight entries. Do not enable real adapters or seed external market facts before authoritative-source and terms gates pass.
+10. Continue P2 by making task definitions authoritative at the gateway boundary, including enforceable source-selection and citation requirements, output validation, route/fallback and timeouts; establish trusted model/privacy eligibility evidence and source classification, trusted source-version lookup, validated model-specific tokenization and comprehensive source-level context replay, including dropped content. Citation paths are currently optional, check only the configured array and do not establish claim coverage. Define the output serialization policy and resolve untrusted-schema resource limits before relying on output validation. Build a gateway that owns attempt accounting and cannot bypass registry policy. Keep model clients disabled until privacy, provider terms and source gates are verified. Protect plaintext task and manifest content and add prompt-injection defenses before accepting real data.
+11. Continue P5 with owner-reviewed risk limits, accounts, order state transitions, atomic reservations and independent safety gates before connecting the sizing calculation to any order flow. Keep short selling, execution and live trading disabled until their prerequisites are verified.
+12. Continue P3 after its P1/P2 prerequisites: frozen point-in-time predictions, evidence-backed outcome revisions, coverage and small-sample reporting, calibration/baselines and immutable reports. The isolated binary-score helper is not a prediction registry or report workflow.
