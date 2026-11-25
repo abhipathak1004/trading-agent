@@ -39,6 +39,8 @@ from bq.data.instruments import compare_symbol_sources
 from bq.data.records import DataRecordStore, MissingDataImport, MissingDataRecord
 from bq.infra.database import DatabaseError, check_database, migrate
 from bq.infra.model_attempts import ModelAttemptStore
+from bq.news import PULSE_FEED_URL, NewsError
+from bq.news_agent import NewsResearchAgent
 
 
 def _default_home() -> Path:
@@ -96,6 +98,21 @@ def main(argv: list[str] | None = None) -> int:
         dest="llm_action", required=True
     )
     llm_actions.add_parser("usage", help="Show local attempt usage summaries as JSON.")
+    news_actions = actions.add_parser("news").add_subparsers(
+        dest="news_action", required=True
+    )
+    news_ingest = news_actions.add_parser(
+        "ingest", help="Fetch the news feed, store new items and long-term memory."
+    )
+    news_ingest.add_argument(
+        "--source-url",
+        default=PULSE_FEED_URL,
+        help="HTTPS RSS feed URL (default: Pulse by Zerodha).",
+    )
+    news_digest = news_actions.add_parser(
+        "digest", help="Print long-term-impact news memories as JSON."
+    )
+    news_digest.add_argument("--limit", type=int, default=20)
     data_actions = actions.add_parser("data").add_subparsers(
         dest="data_action", required=True
     )
@@ -385,6 +402,37 @@ def main(argv: list[str] | None = None) -> int:
                         {"tasks": [asdict(item) for item in summaries]}, sort_keys=True
                     )
                 )
+            elif args.action == "news" and args.news_action == "ingest":
+                report = NewsResearchAgent(path, feed_url=args.source_url).run()
+                print(
+                    json.dumps(
+                        {
+                            "source_id": report.source_id,
+                            "fetched": report.fetched,
+                            "stored": report.stored,
+                            "duplicates": report.duplicates,
+                            "long_term_memories": report.long_term_memories,
+                        },
+                        sort_keys=True,
+                    )
+                )
+            elif args.action == "news" and args.news_action == "digest":
+                memories = NewsResearchAgent(path).digest(limit=args.limit)
+                print(
+                    json.dumps(
+                        [
+                            {
+                                "memory_id": item.memory_id,
+                                "category": item.category.value,
+                                "title": item.title,
+                                "body": item.body,
+                                "known_at": item.known_at.isoformat(),
+                            }
+                            for item in memories
+                        ],
+                        sort_keys=True,
+                    )
+                )
             else:
                 if not (WEB_ROOT / "index.html").is_file():
                     raise ValueError(
@@ -401,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         DatabaseError,
         MissingDataImport,
         MissingDataRecord,
+        NewsError,
         OSError,
         OwnerAlreadyConfigured,
         sqlite3.Error,

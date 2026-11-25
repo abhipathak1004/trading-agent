@@ -31,13 +31,14 @@ def test_init_preserves_existing_state_and_doctor_passes(
 
     assert main(["init"]) == 0
     assert main(["doctor"]) == 0
+    expected = len(database.packaged_migrations())
     with closing(sqlite3.connect(home / "bq.db")) as connection:
         assert connection.execute("SELECT event_id FROM system_events").fetchall() == [
             ("event-1",)
         ]
         assert connection.execute(
             "SELECT version FROM schema_migrations"
-        ).fetchall() == [(version,) for version in range(1, 22)]
+        ).fetchall() == [(version,) for version in range(1, expected + 1)]
 
 
 def test_init_refuses_a_database_owned_by_another_application(tmp_path: Path) -> None:
@@ -55,10 +56,11 @@ def test_failed_migration_rolls_back_its_schema_and_history(
     path = tmp_path / "bq.db"
     database.migrate(path, create=True)
     migrations = database.packaged_migrations()
+    applied = len(migrations)
     migrations.append(
         database.Migration(
-            22,
-            "022_example.sql",
+            applied + 1,
+            f"{applied + 1:03d}_example.sql",
             b"CREATE TABLE example (id INTEGER); INSERT INTO absent VALUES (1);",
         )
     )
@@ -72,7 +74,7 @@ def test_failed_migration_rolls_back_its_schema_and_history(
         ).fetchall()
         assert connection.execute(
             "SELECT version FROM schema_migrations"
-        ).fetchall() == [(version,) for version in range(1, 22)]
+        ).fetchall() == [(version,) for version in range(1, applied + 1)]
 
 
 def test_owner_migration_preserves_existing_database(
@@ -88,7 +90,7 @@ def test_owner_migration_preserves_existing_database(
             ("event-1", "2026-11-21T12:00:00Z", "TEST"),
         )
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert database.migrate(path) == 20
+    assert database.migrate(path) == len(migrations) - 1
     database.check_database(path)
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute("SELECT event_id FROM system_events").fetchall() == [
@@ -112,7 +114,7 @@ def test_schedule_migration_preserves_existing_job_runs(
         max_attempts=1,
     )
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert database.migrate(path) == 15
+    assert database.migrate(path) == len(migrations) - 6
     assert store.get(run.run_id) == run
     database.check_database(path)
 

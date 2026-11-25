@@ -41,6 +41,7 @@ from bq.infra.model_attempts import ModelAttemptStore, TokenUsage
 from bq.infra.scheduler import SchedulerLoop, SchedulerRunner
 from bq.infra.schedules import ScheduleStore
 from bq.infra.task_registry import TaskRegistry
+from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsStore
 from bq.paper_accounts import (
     PaperAccountStatus,
     PaperAccountStore,
@@ -204,6 +205,33 @@ class ConfiguredTask(BaseModel):
     spec_version: str
 
 
+class NewsItemStatus(BaseModel):
+    news_id: str
+    source_id: str
+    url: str
+    title: str
+    summary: str
+    category: str
+    long_term_impact: bool
+    published_at: datetime
+
+
+class NewsMemoryStatus(BaseModel):
+    memory_id: str
+    category: str
+    title: str
+    body: str
+    known_at: datetime
+
+
+class NewsDigest(BaseModel):
+    source_id: str
+    item_count: int
+    items: list[NewsItemStatus]
+    memory_count: int
+    memories: list[NewsMemoryStatus]
+
+
 class SettingsOverview(BaseModel):
     """Read-only settings surface: what is configured, and what is not."""
 
@@ -314,6 +342,7 @@ def create_app(
                 "/api/v1/calendar/",
                 "/api/v1/data/",
                 "/api/v1/llm/",
+                "/api/v1/news/",
                 "/api/v1/schedules/",
                 "/api/v1/settings/",
                 "/api/v1/paper/",
@@ -623,6 +652,42 @@ def create_app(
                 provider_connected=False,
                 api_keys_configured=False,
                 agent_configuration_state="not_configured",
+            )
+
+        @app.get("/api/v1/news/digest")
+        def news_digest(request: Request) -> NewsDigest:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            store = NewsStore(database_path)
+            items = store.recent(limit=20)
+            memories = store.memories(kind=MemoryKind.NEWS_LONG_TERM, limit=20)
+            return NewsDigest(
+                source_id=PULSE_SOURCE_ID,
+                item_count=len(items),
+                items=[
+                    NewsItemStatus(
+                        news_id=item.news_id,
+                        source_id=item.source_id,
+                        url=item.url,
+                        title=item.title,
+                        summary=item.summary,
+                        category=item.category.value,
+                        long_term_impact=item.long_term_impact,
+                        published_at=item.published_at,
+                    )
+                    for item in items
+                ],
+                memory_count=len(memories),
+                memories=[
+                    NewsMemoryStatus(
+                        memory_id=item.memory_id,
+                        category=item.category.value,
+                        title=item.title,
+                        body=item.body,
+                        known_at=item.known_at,
+                    )
+                    for item in memories
+                ],
             )
 
         @app.get("/api/v1/auth/session")

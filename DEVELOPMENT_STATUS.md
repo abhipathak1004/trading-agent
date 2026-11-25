@@ -215,6 +215,57 @@ uv run --locked pytest -q
 
 On this Windows/OneDrive development host, clear inherited `VIRTUAL_ENV` and set `UV_LINK_MODE=copy`. The project-local `bharatquant\.venv\Scripts\bq.exe` was locked by another process, so dependency synchronization and checks used the isolated environment `C:\Users\apatha08\.copilot\session-state\6ccb5309-4c8d-4c32-a97f-865ae2c68ffa\files\schema-validation-env` via `UV_PROJECT_ENVIRONMENT`. Do not stop or interfere with the process holding the executable. Resync the project environment when it is safe; it does not yet include the new validator dependencies. Do not touch the unrelated `databricks_test` environment.
 
+## Latest checkpoint — news research agent (first agent)
+
+Added the first agent, a **news research agent** backed by **Pulse by Zerodha**
+(`https://pulse.zerodha.com/feed.xml`). Designed for cost, not cleverness:
+**zero model calls** — ingest, deduplication and classification are all
+deterministic.
+
+- **Source**: `bq/infra/news_feed.py` fetches the RSS feed over HTTPS with a
+  2 MB byte cap, a 15 s timeout and no redirects beyond httpx defaults. Verified
+  live: one feed is ~107 KB carrying 156 stories, each with a title and a
+  one-line summary — so **full articles are never fetched**.
+- **Parsing** (`bq/news.py`): stdlib `ElementTree`. Bounded to 500 items, 512
+  title chars and 1,024 summary chars. A feed claiming a future `pubDate` is
+  clamped to ingest time rather than trusted.
+- **Deduplication, no LLM**: every item is keyed by `url_hash` (normalised
+  HTTPS URL) and `shingle_hash` (order-insensitive title fingerprint). A second
+  ingest of the same feed stored 0 items and reported all 156 as duplicates.
+- **Classification, no LLM**: whole-word keyword rules map each item to
+  `INDIA_MARKET`, `GLOBAL_MARKET`, `GEOPOLITICAL`, `COMMODITY`, `RATES`,
+  `CORPORATE`, `REGULATORY` or `OTHER`. Whole-word matching matters: earlier
+  substring matching classified "celebrated" as a rate story.
+- **Agent memory**: `agent_memories` keeps **long-term-impact** items only.
+  Structural categories (geopolitical, regulatory) qualify outright; rate items
+  qualify only on structural words (repo, policy rate, rate cut/hike, inflation)
+  so routine RBI notices do not flood memory; other categories need an explicit
+  marker. Live run: **15 memories from 156 items**. Memories carry `known_at`
+  and `expires_at`, are filtered point-in-time, and track `hit_count` for later
+  frecency pruning.
+- **Storage** (`022_news_agent.sql`): `news_items` and `agent_memories`, both
+  `STRICT`, with immutability triggers. Measured: 156 rows / 31 KB of text and
+  15 memories / 4.5 KB in a 598 KB database.
+- **Interfaces**: `bq news ingest` and `bq news digest --limit N` on the CLI;
+  owner-only, non-cacheable `GET /api/v1/news/digest` in the API.
+
+Verification: **329 backend tests** pass (26 new in `tests/test_news.py`),
+**13 frontend tests**, ruff clean, frontend build clean. Live ingest and digest
+were exercised against the real Pulse feed, then local state was removed.
+
+Tests that hardcoded a migration count now derive it from
+`packaged_migrations()`, so adding a migration no longer breaks unrelated
+suites.
+
+### Environment note: hidden `.pth` files
+
+The recurring `ModuleNotFoundError: No module named 'bq'` is now understood.
+Python's `site.py` skips `.pth` files carrying the macOS **hidden file flag**
+(`st_flags & UF_HIDDEN`), and uv's editable-install `.pth` picks that flag up on
+this machine. `chflags nohidden` fixes it until uv rewrites the file. Until that
+is addressed, run Python through:
+`PYTHONPATH=$PWD/backend/src env -u VIRTUAL_ENV UV_CACHE_DIR=/tmp/uv-cache uv run --locked …`
+
 ## Resume next
 
 1. **Install Python 3.13** (`brew install python@3.13`) and run the full suite: `uv sync --locked && uv run --locked pytest -q`. Verify dispatch tests pass.
