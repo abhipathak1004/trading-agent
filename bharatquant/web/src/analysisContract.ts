@@ -1,4 +1,4 @@
-import { isRecord } from "./contracts.ts";
+import { isCount, isRecord } from "./contracts.ts";
 export type AnalysisSubScores = {
   trend: number | null;
   momentum: number | null;
@@ -54,6 +54,24 @@ export type SpecialistBrief = {
   source: string;
 };
 
+export type FinalGate = {
+  action: string;
+  execute: boolean;
+  size_scale: number;
+  reason: string;
+  conviction: number;
+  source: string;
+  provider: string;
+  model: string;
+  tier: string;
+  fallback_used: boolean;
+  fallback_from: string | null;
+  latency_ms: number | null;
+  request_id: string | null;
+  model_mismatch: boolean;
+  state_hash: string | null;
+};
+
 export type AnalysisRun = {
   /** Absent when the payload has not been persisted to the run store yet. */
   run_id?: string;
@@ -70,6 +88,7 @@ export type AnalysisRun = {
   notes: string[];
   agents: AgentTraceEntry[];
   specialists: SpecialistBrief[];
+  final_gate: FinalGate | null;
 };
 
 function isNumberOrNull(value: unknown): value is number | null {
@@ -202,6 +221,54 @@ function parseSpecialistBriefs(value: unknown): SpecialistBrief[] {
   });
 }
 
+function parseFinalGate(value: unknown): FinalGate | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    throw new Error("Invalid final gate");
+  }
+  const conviction = value.conviction;
+  if (
+    typeof value.action !== "string" ||
+    value.action.length === 0 ||
+    typeof value.execute !== "boolean" ||
+    typeof value.size_scale !== "number" ||
+    typeof value.reason !== "string" ||
+    !isCount(conviction) ||
+    typeof value.source !== "string" ||
+    typeof value.provider !== "string" ||
+    typeof value.model !== "string" ||
+    typeof value.tier !== "string" ||
+    typeof value.fallback_used !== "boolean" ||
+    (value.fallback_from !== null && typeof value.fallback_from !== "string") ||
+    (value.latency_ms !== null &&
+      (typeof value.latency_ms !== "number" || value.latency_ms < 0)) ||
+    (value.request_id !== null && typeof value.request_id !== "string") ||
+    typeof value.model_mismatch !== "boolean" ||
+    (value.state_hash !== null && typeof value.state_hash !== "string")
+  ) {
+    throw new Error("Invalid final gate");
+  }
+  return {
+    action: value.action,
+    execute: value.execute,
+    size_scale: value.size_scale,
+    reason: value.reason,
+    conviction,
+    source: value.source,
+    provider: value.provider,
+    model: value.model,
+    tier: value.tier,
+    fallback_used: value.fallback_used,
+    fallback_from: value.fallback_from as string | null,
+    latency_ms: value.latency_ms as number | null,
+    request_id: value.request_id as string | null,
+    model_mismatch: value.model_mismatch,
+    state_hash: value.state_hash as string | null,
+  };
+}
+
 export function parseAnalysisRun(value: unknown): AnalysisRun {
   if (
     !isRecord(value) ||
@@ -266,6 +333,7 @@ export function parseAnalysisRun(value: unknown): AnalysisRun {
     notes: parseStringArray(value.notes, "analysis notes"),
     agents: parseAgents(value.agents),
     specialists: parseSpecialistBriefs(value.specialists),
+    final_gate: parseFinalGate(value.final_gate),
   };
 }
 

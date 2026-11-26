@@ -225,6 +225,9 @@ class SymbolOutcome:
             "vetoes": list(analysis.vetoes),
             "notes": list(analysis.notes),
             "model_routing": [use.to_dict() for use in analysis.model_routing],
+            "final_gate": (
+                None if analysis.final_gate is None else analysis.final_gate.to_dict()
+            ),
         }
 
 
@@ -490,6 +493,16 @@ class SuperAgent:
                         outcome.symbol,
                         plan.signal.value,
                         f"Deterministic signal is {plan.signal.value}.",
+                    )
+                )
+                continue
+            gate = analysis.final_gate
+            if gate is not None and not gate.decision.execute:
+                rejected.append(
+                    RejectedPlan(
+                        outcome.symbol,
+                        "BUY",
+                        f"Final gate: {gate.decision.reason}",
                     )
                 )
                 continue

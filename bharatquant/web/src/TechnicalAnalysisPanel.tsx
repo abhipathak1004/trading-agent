@@ -141,6 +141,19 @@ function SymbolResult({ item }: { item: BatchAnalysisItem }) {
         </p>
       )}
 
+      {run.final_gate !== null && (
+        <p
+          className={`batch-gate ${
+            run.final_gate.execute ? "batch-gate--allow" : "batch-gate--blocked"
+          }`}
+        >
+          Final gate: <strong>{run.final_gate.action}</strong>{" "}
+          {run.final_gate.execute ? "execute" : "blocked"} ·{" "}
+          {run.final_gate.reason} ({run.final_gate.source} /{" "}
+          {run.final_gate.model})
+        </p>
+      )}
+
       <p className="batch-provenance">
         {run.data_provenance.is_realtime ? "real-time" : "delayed"} ·{" "}
         {run.mode === "RULES_ONLY" ? "rules only" : "with model debate"} ·{" "}

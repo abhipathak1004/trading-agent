@@ -7,7 +7,20 @@ Start here when resuming work. This file lives in the workspace and does not dep
 Updated 26 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
 
-**Latest slice — Phase 3A: real news context, market regime and corporate-event specialists.**
+**Latest slice — Phase 3B: Jev final gate and episodic memory with Brier calibration.**
+The per-symbol pipeline now ends in a typed final gate, and every analysed decision is recorded as an immutable shadow episode for later calibration.
+
+- **Final gate** — `bq/analysis/final_gate.py` builds a `DecisionState` that includes the plan (action, entry, stop, target, R:R, quantity, notional), runs the `final_gate` battery through the Jev-preferred ladder, and applies `DecisionPolicy`. It can downgrade a BUY to no-execute; it cannot create one. The node is recorded in the trace and `AnalysisResult.final_gate`; a blocked gate adds a `final_gate:` veto. The Strategy desk excludes gate-blocked plans.
+- **Episodic memory** — migration `028_episodic_memory.sql` adds immutable `episodic_memory` episodes and append-only `episode_outcomes`. `bq/memory/episodic.py` records shadow trades (symbol, as_of, action, decision source, model, regime, plan prices/quantity, predicted p_exec, bounded JSON detail), resolves outcomes once, and computes Brier/log-loss/ECE buckets by `decision_source` + `model`.
+- **No look-ahead** — both the episode and its outcome are filtered against the requested `as_of`, so a later resolution cannot leak into an earlier calibration view.
+- **Wiring** — single and batch analysis runs record a shadow episode after persistence; a Strategy run records one per analysed symbol. Memory failures never break an analysis response. New owner-only `GET /api/v1/memory/calibration` and a Today-tab **Memory calibration** panel show the buckets.
+- **Honesty** — episodes are decisions, not fills. Body/quantity come from the deterministic plan; `predicted_probability` is the gate's `execute_trade` noul when available. Outcome resolution is a store operation today; the scheduled resolver is still pending.
+
+Verification: **764 backend tests** (9 new: 3 final gate, 5 episodic memory, 1 memory API), **58 frontend tests** (4 new: final gate + calibration contracts), ruff and format clean, frontend typecheck and build clean. mypy remains at the same 25 pre-existing errors in untouched files.
+
+Next: semantic memory with FTS5 + fallback, procedural playbooks, and the scheduled outcome resolver, then the evidence verifier.
+
+**Previous slice — Phase 3A: real news context, market regime and corporate-event specialists.**
 The analysis DAG now runs three Stage 1 specialists before the debate, and their facts reach the bull, bear, judge and risk prompts.
 
 - **News context** — `bq/analysis/news_context.py` replaces the placeholder. It reads the deterministic news store point-in-time (`NewsStore.recent(..., as_of=...)` plus active long-term memories), matches the symbol's trading name, and emits a typed `SpecialistBrief` with source ids. No model call and no article fetch. `NewsStore.recent` gained an `as_of` filter.

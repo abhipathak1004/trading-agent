@@ -44,6 +44,7 @@ from bq.analysis.decision import (
     TradePlanError,
     build_plan,
 )
+from bq.analysis.final_gate import FinalGate, FinalGateResult
 from bq.analysis.fundamental import FundamentalEventsAgent
 from bq.analysis.news_context import NewsContextAgent
 from bq.analysis.regime import MarketRegimeAgent
@@ -94,6 +95,7 @@ class PipelineContext:
     debate_attempted: bool = False
     mode: str = "FULL"
     plan: TradePlan | None = None
+    final_gate: FinalGateResult | None = None
     vetoes: tuple[str, ...] = ()
     notes: list[str] = field(default_factory=list)
     degraded: list[str] = field(default_factory=list)
@@ -160,6 +162,7 @@ AGENT_ROLES: dict[str, str] = {
     "risk_team": "Risk analyst",
     "size": "Position sizer",
     "decision": "Decision",
+    "final_gate": "Final gate",
 }
 
 # The order agents appear in the UI. This is the graph order, not DAG sort order,
@@ -176,6 +179,7 @@ AGENT_ORDER: tuple[str, ...] = (
     "risk_team",
     "size",
     "decision",
+    "final_gate",
 )
 
 
@@ -205,6 +209,7 @@ class AnalysisResult:
     trace: tuple[AgentTrace, ...] = ()
     model_routing: tuple[RouteUse, ...] = ()
     specialists: tuple[SpecialistBrief, ...] = ()
+    final_gate: FinalGateResult | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -237,6 +242,9 @@ class AnalysisResult:
             "agents": [entry.to_dict() for entry in self.trace],
             "model_routing": [use.to_dict() for use in self.model_routing],
             "specialists": [brief.to_dict() for brief in self.specialists],
+            "final_gate": (
+                None if self.final_gate is None else self.final_gate.to_dict()
+            ),
         }
 
 
@@ -315,6 +323,7 @@ class AnalysisPipeline:
         news: NewsContextAgent | None = None,
         regime: MarketRegimeAgent | None = None,
         fundamental: FundamentalEventsAgent | None = None,
+        final_gate: FinalGate | None = None,
     ) -> None:
         self.router = router
         self.debate = debate
@@ -325,6 +334,7 @@ class AnalysisPipeline:
         self.news = news
         self.regime = regime
         self.fundamental = fundamental
+        self.final_gate = final_gate
 
     # -- nodes ------------------------------------------------------------
 
@@ -430,6 +440,47 @@ class AnalysisPipeline:
             "degraded" if brief.degraded else "ok",
             f"{len(brief.facts)} fact(s) from {brief.source or 'news'}",
         )
+
+    def _final_gate(self, ctx: PipelineContext) -> None:
+        if self.final_gate is None:
+            self._record(ctx, "final_gate", "degraded", "not configured")
+            return
+        if ctx.report is None or ctx.plan is None:
+            self._record(ctx, "final_gate", "degraded", "skipped: no plan")
+            return
+        try:
+            gate = self.final_gate.evaluate(
+                ctx.report,
+                ctx.plan,
+                data_freshness=(
+                    "realtime_kite" if ctx.is_realtime else "delayed_yfinance"
+                ),
+            )
+        except Exception as exc:
+            ctx.notes.append(f"final gate: unavailable ({type(exc).__name__})")
+            self._record(
+                ctx,
+                "final_gate",
+                "degraded",
+                f"gate unavailable ({type(exc).__name__})",
+            )
+            return
+        ctx.final_gate = gate
+        execute = gate.outcome.judgments.answer("execute_trade")
+        probability = execute.noul if execute.noul is not None else 0.0
+        self._record(
+            ctx,
+            "final_gate",
+            "ok",
+            f"{gate.decision.verdict.value} p_exec {probability:.2f} "
+            f"({gate.outcome.source})",
+        )
+        if not gate.decision.execute:
+            ctx.vetoes = (
+                *ctx.vetoes,
+                f"final_gate:{gate.decision.reason}",
+            )
+            ctx.notes.append(f"final gate: {gate.decision.reason}")
 
     def _technical(self, ctx: PipelineContext) -> None:
         if not ctx.bars:
@@ -692,6 +743,7 @@ class AnalysisPipeline:
                 ),
             ),
             AgentNode("decision", ("size",), self._decision),
+            AgentNode("final_gate", ("decision",), self._final_gate),
         )
         dag: AgentDAG[PipelineContext, object] = AgentDAG(nodes)
         try:
@@ -748,6 +800,7 @@ class AnalysisPipeline:
                 for name in SPECIALIST_ORDER
                 if name in ctx.specialists
             ),
+            final_gate=ctx.final_gate,
         )
 
 

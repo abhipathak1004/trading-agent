@@ -363,3 +363,43 @@ test("malformed specialist briefs are rejected", () => {
     }),
   );
 });
+
+const finalGate = {
+  action: "BUY",
+  execute: true,
+  size_scale: 0.75,
+  reason: "p_exec 0.78",
+  conviction: 4,
+  source: "llm_fallback",
+  provider: "GEMINI",
+  model: "gemini-2.5-flash",
+  tier: "flash",
+  fallback_used: true,
+  fallback_from: "JevUnavailable",
+  latency_ms: 120.5,
+  request_id: null,
+  model_mismatch: false,
+  state_hash: "abc",
+};
+
+test("the final gate is parsed and optional", () => {
+  assert.equal(parseAnalysisRun(run).final_gate, null);
+  const parsed = parseAnalysisRun({ ...run, final_gate: finalGate });
+  assert.equal(parsed.final_gate?.execute, true);
+  assert.equal(parsed.final_gate?.action, "BUY");
+  assert.equal(parsed.final_gate?.source, "llm_fallback");
+});
+
+test("malformed final gates are rejected", () => {
+  for (const override of [
+    { execute: "yes" },
+    { action: "" },
+    { conviction: -1 },
+    { latency_ms: -1 },
+    { fallback_from: 3 },
+  ]) {
+    assert.throws(() =>
+      parseAnalysisRun({ ...run, final_gate: { ...finalGate, ...override } }),
+    );
+  }
+});

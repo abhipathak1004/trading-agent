@@ -1943,3 +1943,24 @@ a.nav-item:hover,
   gap: 8px;
   margin-bottom: 6px;
 }
+
+/* Final gate --------------------------------------------------------- */
+
+.batch-gate {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.batch-gate--allow {
+  border-color: rgb(34 197 94 / 35%);
+  background: rgb(34 197 94 / 8%);
+}
+
+.batch-gate--blocked {
+  border-color: rgb(239 68 68 / 35%);
+  background: rgb(239 68 68 / 8%);
+}

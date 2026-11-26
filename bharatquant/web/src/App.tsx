@@ -6,6 +6,7 @@ import CalendarCoverage from "./CalendarCoverage";
 import SnapshotFreshness from "./SnapshotFreshness";
 import ScheduleStatus from "./ScheduleStatus";
 import UsageStatus from "./UsageStatus";
+import MemoryCalibrationPanel from "./MemoryCalibrationPanel";
 import PaperAccountStatus from "./PaperAccountStatus";
 import ResearchPanel from "./ResearchPanel";
 import AgentConsole from "./AgentConsole";
@@ -554,6 +555,7 @@ export default function App() {
               <SnapshotFreshness />
               <CalendarCoverage />
               <UsageStatus />
+              <MemoryCalibrationPanel />
             </div>
           </section>
         )}

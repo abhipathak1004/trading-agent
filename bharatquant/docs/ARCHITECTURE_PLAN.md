@@ -1,6 +1,6 @@
 # Architecture plan: 3-tier model routing and the multi-agent system
 
-**Version:** 1.5 · **Date:** 2026-11-26 · **Status:** approved for Phase 2
+**Version:** 1.6 · **Date:** 2026-11-26 · **Status:** approved for Phase 2
 **Scope:** audit of the existing BharatQuant analysis stack and the target
 architecture for a config-driven three-tier model router, Jev-preferred decision
 layer, specialist agents, four-layer memory and a deterministic execution seam.
@@ -14,6 +14,7 @@ any external provider capability is verified; see
 
 | Version | Date | Change |
 |---|---|---|
+| 1.6 | 2026-11-26 | Phase 3B: final gate node (Jev-preferred, downgrade-only) and episodic memory with shadow trades, append-only outcomes and point-in-time Brier/ECE buckets. |
 | 1.5 | 2026-11-26 | Phase 3A: real point-in-time news context, deterministic market regime, corporate-event briefs, and specialist facts flowing into the debate/risk prompts and the Technical tab. |
 | 1.4 | 2026-11-26 | Added the Strategy desk: a deterministic Super Agent coordinator runs the per-symbol agents, enforces cash/position limits, and asks the reasoning tier only to rank and comment. It can downgrade, never create, a BUY. |
 | 1.3 | 2026-11-26 | Added Agent Lab: a decision-preview surface and append-only, template-validated prompt versions for the active text agents plus the decision fallback. Question sets, options, thresholds and risk rules stay code-owned. |
@@ -37,6 +38,8 @@ any external provider capability is verified; see
 | Run audit | `bq/analysis/run_settings.py`, migration `025` | Immutable per-run record with plan hash and `detail_json` (64 KiB). |
 | News | `bq/news.py`, `bq/news_agent.py`, migration `022` | Deterministic RSS ingest, dedupe, keyword classification, `agent_memories` with `known_at/expires_at`. |
 | Market data | `bq/data/vendors/*`, `bq/data/symbols.py` | Per-domain chains; Yahoo default; Kite read-only when enabled (ADR-013). |
+| Final gate | `bq/analysis/final_gate.py` | Typed battery after the plan; can block execution, never create a BUY. |
+| Episodic memory | `bq/memory/episodic.py`, migration `028` | Immutable decisions, append-only outcomes, source/model Brier. |
 | Stage 1 specialists | `bq/analysis/news_context.py`, `regime.py`, `fundamental.py`, `briefs.py` | Optional, point-in-time briefs; failures degrade the node, not the run. |
 | Strategy coordinator | `bq/super_agent.py`, `POST /api/v1/strategy/run` | Per-symbol DAG → deterministic gate → reasoning synthesis (rules fallback). Never places an order. |
 | Prompt config | `bq/agent_prompts.py`, migration `027` | Append-only versions; code defaults; template placeholder validation. |

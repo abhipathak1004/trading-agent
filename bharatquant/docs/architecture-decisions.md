@@ -615,3 +615,61 @@ data dependency or a new model call for the deterministic parts. The cost is a
 wider prompt (bounded) and a shallow fundamentals specialist until a verified
 vendor is reviewed. The next memory slice can consume the same briefs for
 episodic and semantic storage.
+
+## ADR-022: The final gate can only block execution
+
+**Status:** Accepted; Phase 3B implements it.
+
+**Context:** The deterministic plan is the only source of prices and quantity.
+A final model review is useful, but if it could create a trade or change the
+plan it would move policy back into a prompt. The gate also needs to see the
+plan, not just the technical report, or it cannot judge execution.
+
+**Decision:** `bq/analysis/final_gate.py` runs the `final_gate` battery after the
+deterministic decision node.
+
+- `DecisionState` now carries the plan's action, entry, stop, target, reward-risk,
+  quantity and notional alongside the technical state.
+- The gate uses the same Jev → Flash → Reasoning → heuristic ladder and the
+  code-owned `DecisionPolicy`. It answers action, execute probability and
+  conviction tier.
+- A gate result can only block: when it does not execute, the pipeline adds a
+  `final_gate:` veto and leaves the original plan intact for inspection. It
+  cannot create a BUY, change a stop or quantity, or alter the sizer output.
+- `AnalysisResult.final_gate`, the trace and the Technical tab expose the gate
+  source, model, action, reason and probability. The Strategy desk excludes a
+  plan the gate blocked.
+- No order is placed by this node.
+
+**Consequences:** The final review becomes visible and auditable without
+weakening the sizer/risk ownership. The pipeline has one more optional node; a
+gate failure degrades to a trace and leaves the deterministic plan unchanged.
+
+## ADR-023: Episodic memory is immutable decisions plus append-only outcomes
+
+**Status:** Accepted; Phase 3B implements the store and shadow recording.
+
+**Context:** Calibration is only trustworthy if a later outcome cannot rewrite
+what the system believed at decision time. Shadow trades are also the only way
+to learn from skipped setups, not just executed ones.
+
+**Decision:** Migration `028` stores two append-only tables.
+
+- `episodic_memory` records the decision: symbol, as_of, recorded_at, source,
+  decision source, model, regime, action, status, plan prices/quantity,
+  predicted probability and bounded JSON detail. It is immutable by trigger.
+- `episode_outcomes` records one resolution per episode with `resolved_at`,
+  binary outcome, realized R, close price and source. It is append-only and
+  cannot be replaced.
+- The store records shadow episodes from analysis and strategy runs. A failed
+  memory write never breaks an analysis response.
+- `calibration(as_of=...)` joins episodes and outcomes, filters **both**
+  `episode.as_of` and `outcome.resolved_at` against the requested instant, and
+  buckets Brier/log-loss/ECE by `decision_source` and `model`. Unresolved
+  episodes are excluded; no predicted probability means no Brier sample.
+- The calibration view is owner-only and no-store; the Today panel displays it.
+
+**Consequences:** Jev-native, fallback and heuristic performance are measured
+separately and cannot leak future outcomes into historical evaluation. The
+scheduled resolver is still pending, so the buckets remain empty until outcomes
+are resolved; the store API is ready for that job.

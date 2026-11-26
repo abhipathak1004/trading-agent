@@ -363,4 +363,5 @@ def test_agents_are_ordered_as_the_pipeline_reads() -> None:
     nodes = [entry.node for entry in result.trace]
     assert nodes.index("bull") < nodes.index("bear")
     assert nodes.index("technical") < nodes.index("bull")
-    assert nodes[-1] == "decision"
+    assert nodes.index("decision") < nodes.index("final_gate")
+    assert nodes[-1] == "final_gate"

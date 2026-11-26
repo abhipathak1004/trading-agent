@@ -16,6 +16,7 @@ import uvicorn
 from bq.agent_prompts import PromptStore
 from bq.analysis.debate import Debate
 from bq.analysis.decision import trade_plan_from_json
+from bq.analysis.final_gate import FinalGate
 from bq.analysis.fundamental import FundamentalEventsAgent
 from bq.analysis.news_context import NewsContextAgent
 from bq.analysis.pipeline import AnalysisPipeline
@@ -53,7 +54,7 @@ from bq.execution.paper_executor import ExecutionContext, PaperExecutor
 from bq.infra.database import DatabaseError, check_database, migrate
 from bq.infra.model_attempts import ModelAttemptStore
 from bq.llm_service import LLMService
-from bq.model_router import ModelRouter, RoutedModelCaller
+from bq.model_router import ModelRouter, RoutedModelCaller, decision_policy_for
 from bq.news import NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
 from bq.risk.policy import KillSwitchLevel, RiskLimits
@@ -724,10 +725,10 @@ def main(argv: list[str] | None = None) -> int:
                 router = build_analysis_router(path, config)
                 prompts = PromptStore(path)
                 news_store = NewsStore(path)
+                model_router = ModelRouter(settings_store, prompts=prompts)
+                gate = FinalGate(model_router, decision_policy_for(config))
                 if config.any_tier_configured:
-                    caller = RoutedModelCaller(
-                        ModelRouter(settings_store, prompts=prompts)
-                    )
+                    caller = RoutedModelCaller(model_router)
                     pipeline = AnalysisPipeline(
                         router,
                         debate=Debate(caller, prompts=prompts),
@@ -736,6 +737,7 @@ def main(argv: list[str] | None = None) -> int:
                         news=NewsContextAgent(news_store),
                         regime=MarketRegimeAgent(router),
                         fundamental=FundamentalEventsAgent(news_store),
+                        final_gate=gate,
                     )
                 else:
                     service = (
@@ -758,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
                         news=NewsContextAgent(news_store),
                         regime=MarketRegimeAgent(router),
                         fundamental=FundamentalEventsAgent(news_store),
+                        final_gate=gate,
                     )
                 analysis = pipeline.run(
                     symbol=resolve_symbol(args.symbol),

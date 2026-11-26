@@ -126,6 +126,11 @@ export const GUIDE_SECTIONS: DocSection[] = [
         kind: "p",
         text: "Checks one exchange over an inclusive date range of 1 to 31 dates. Each date is reported as uncovered, or with its session state and session class plus open and close times when both are known. An uncovered date is unknown, not automatically open or closed, and owner review is not independent verification.",
       },
+      { kind: "subheading", text: "Memory calibration" },
+      {
+        kind: "p",
+        text: "Shows Brier score, expected calibration error and outcome rate for resolved shadow episodes, separated by decision source and model. A decision is recorded at as_of; an outcome is appended later. Both sides are filtered to the requested instant, so a later outcome cannot leak into an earlier view. Unresolved episodes and decisions without a predicted probability are not scored.",
+      },
       { kind: "subheading", text: "Diagnostics: model usage" },
       {
         kind: "p",
@@ -185,6 +190,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "Provenance: whether the data was real-time or delayed, and whether the run was rules-only or included model debate.",
           "Show agents expands the full trace: one row per pipeline node with its status (ok, degraded, failed) and a human-readable summary, followed by the evidence facts.",
           "Specialist briefs, when available: point-in-time news context, the deterministic market regime and matching corporate-event headlines, each with its source and status.",
+          "Final gate: the Jev-preferred battery reviews the completed plan and can block execution. A blocked gate is shown with its source, model and reason; it never creates a BUY or changes a number.",
           "A failed symbol is isolated: it is shown as not analysed with its error, and the other symbols still complete.",
         ],
       },
@@ -589,6 +595,26 @@ export const AGENT_DOCS: AgentDoc[] = [
       "Thresholds and answer types are code-owned, never prompt-owned.",
       "A decision cannot exceed the state it was given.",
       "Only the screener battery is reachable from the UI today.",
+    ],
+  },
+  {
+    id: "final-gate",
+    name: "Final gate",
+    role: "Decision tier, execution review",
+    summary:
+      "Reviews the completed deterministic plan with the final_gate battery: action, execute probability and conviction tier. It can block execution but cannot create a BUY or change a price, stop, target or quantity.",
+    inputs: [
+      "The technical state plus the plan's action, entry, stop, target, R:R, quantity and notional.",
+    ],
+    outputs: [
+      "A typed gate result with action, execute flag, size scale, reason, conviction, source, model, probability and state hash.",
+    ],
+    model: "The decision ladder: Jev, then the configured LLM fallbacks, then the heuristic.",
+    tools: ["No tools. It sees only the bounded decision state."],
+    limits: [
+      "Downgrade-only: a blocked gate adds a veto and leaves the plan intact for inspection.",
+      "No order is placed by the gate or the pipeline.",
+      "Thresholds and sizing remain code-owned.",
     ],
   },
   {

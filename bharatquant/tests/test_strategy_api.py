@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -38,6 +39,9 @@ async def _signed_in(client: httpx.AsyncClient) -> dict[str, str]:
 
 
 class FakeRun:
+    as_of = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
+    symbols: tuple[object, ...] = ()
+
     def to_dict(self) -> dict[str, object]:
         return {
             "strategy": BODY["strategy"],

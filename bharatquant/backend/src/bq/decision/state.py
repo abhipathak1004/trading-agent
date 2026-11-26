@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import Mapping
 
+from bq.analysis.decision import TradePlan
 from bq.analysis.technical import TechnicalReport
 from bq.core import canonical_digest
 from bq.llm_tokens import approximate_tokens
@@ -56,6 +57,13 @@ class DecisionState:
     support_distance_pct: float | None
     resistance_distance_pct: float | None
     data_freshness: str
+    has_plan: bool = False
+    proposed_action: str | None = None
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    target_price: float | None = None
+    reward_risk: float | None = None
+    notional_paise: int | None = None
 
     def __post_init__(self) -> None:
         if not self.as_of or not self.symbol or not self.timeframe:
@@ -85,6 +93,10 @@ class DecisionState:
             "macd_histogram": self.macd_histogram,
             "support_distance_pct": self.support_distance_pct,
             "resistance_distance_pct": self.resistance_distance_pct,
+            "entry_price": self.entry_price,
+            "stop_loss": self.stop_loss,
+            "target_price": self.target_price,
+            "reward_risk": self.reward_risk,
         }
         payload: dict[str, object] = {
             "schema_version": STATE_SCHEMA_VERSION,
@@ -94,7 +106,12 @@ class DecisionState:
             "last_close": _round(self.last_close),
             "bar_count": self.bar_count,
             "data_freshness": self.data_freshness,
+            "has_plan": self.has_plan,
         }
+        if self.proposed_action is not None:
+            payload["proposed_action"] = self.proposed_action
+        if self.notional_paise is not None:
+            payload["notional_paise"] = self.notional_paise
         for key, value in values.items():
             rounded = _round(value)
             if rounded is not None:
@@ -131,9 +148,12 @@ def _distance_pct(level: float | None, close: float) -> float | None:
 
 
 def build_decision_state(
-    report: TechnicalReport, *, data_freshness: str
+    report: TechnicalReport,
+    *,
+    data_freshness: str,
+    plan: TradePlan | None = None,
 ) -> DecisionState:
-    """Build the compact state from an already-computed technical report."""
+    """Build the compact state from an already-computed technical report and plan."""
     close = float(report.last_close)
     indicators = report.indicators
     swings = indicators.swings
@@ -163,6 +183,13 @@ def build_decision_state(
         support_distance_pct=_distance_pct(support, close),
         resistance_distance_pct=_distance_pct(resistance, close),
         data_freshness=data_freshness,
+        has_plan=plan is not None,
+        proposed_action=None if plan is None else plan.signal.value,
+        entry_price=None if plan is None else float(plan.entry_price),
+        stop_loss=None if plan is None else float(plan.stop_loss),
+        target_price=None if plan is None else float(plan.target_price),
+        reward_risk=None if plan is None else float(plan.reward_risk),
+        notional_paise=None if plan is None else plan.notional_paise().value,
     )
     state.to_state_dict()  # enforce the size/token budget at construction time
     return state

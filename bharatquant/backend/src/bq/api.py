@@ -23,9 +23,10 @@ from bq.agent_prompts import (
 )
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.debate import Debate
+from bq.analysis.final_gate import FinalGate
 from bq.analysis.fundamental import FundamentalEventsAgent
 from bq.analysis.news_context import NewsContextAgent
-from bq.analysis.pipeline import AnalysisPipeline, PipelineError
+from bq.analysis.pipeline import AnalysisPipeline, AnalysisResult, PipelineError
 from bq.analysis.regime import MarketRegimeAgent
 from bq.analysis.risk_team import RiskAnalyst
 from bq.analysis.run_settings import AnalysisRunError, AnalysisRunStore
@@ -39,6 +40,7 @@ from bq.auth import (
     OwnerAuth,
     OwnerNotConfigured,
 )
+from bq.core import canonical_digest
 from bq.data.calendar import (
     ExchangeCalendar,
     SessionClass,
@@ -65,6 +67,7 @@ from bq.infra.schedules import ScheduleStore
 from bq.infra.task_registry import TaskRegistry
 from bq.llm_client import LLMClientError, LLMNotConfigured
 from bq.llm_service import LLMService
+from bq.memory import EpisodicMemoryStore
 from bq.model_router import (
     DecisionUnavailable,
     ModelRouter,
@@ -494,6 +497,21 @@ class StrategyRunRequest(BaseModel):
     max_positions: int = Field(default=2, ge=1, le=10, strict=True)
 
 
+class MemoryCalibrationBucket(BaseModel):
+    decision_source: str
+    model: str
+    count: int
+    mean_brier: float | None
+    mean_log_loss: float | None
+    expected_calibration_error: float | None
+    outcome_rate: float | None
+
+
+class MemoryCalibrationResponse(BaseModel):
+    as_of: str
+    buckets: list[MemoryCalibrationBucket]
+
+
 class StrategyRunResponse(BaseModel):
     strategy: str
     timeframe: str
@@ -521,6 +539,7 @@ class AnalysisRunResponse(BaseModel):
     notes: list[str]
     skipped_nodes: list[str]
     specialists: list[dict[str, object]]
+    final_gate: dict[str, object] | None
 
 
 class AnalysisRunSummary(BaseModel):
@@ -829,8 +848,9 @@ def _analysis_pipeline(
     router = build_analysis_router(database_path, config)
     prompts = PromptStore(settings_store.path)
     news_store = NewsStore(settings_store.path)
+    model_router = ModelRouter(settings_store, prompts=prompts)
+    gate = FinalGate(model_router, decision_policy_for(config))
     if config.any_tier_configured:
-        model_router = ModelRouter(settings_store, prompts=prompts)
         caller = RoutedModelCaller(model_router)
         return AnalysisPipeline(
             router,
@@ -840,6 +860,7 @@ def _analysis_pipeline(
             news=NewsContextAgent(news_store),
             regime=MarketRegimeAgent(router),
             fundamental=FundamentalEventsAgent(news_store),
+            final_gate=gate,
         )
     service = LLMService(settings_store) if config.model_route_configured else None
     return AnalysisPipeline(
@@ -851,6 +872,7 @@ def _analysis_pipeline(
         news=NewsContextAgent(news_store),
         regime=MarketRegimeAgent(router),
         fundamental=FundamentalEventsAgent(news_store),
+        final_gate=gate,
     )
 
 
@@ -873,6 +895,63 @@ def _technical_report_for(
         result.vendor_quotes,
         tuple(result.notes),
     )
+
+
+def _regime_label(result: AnalysisResult) -> str | None:
+    for brief in result.specialists:
+        if brief.agent != "market_regime":
+            continue
+        for fact in brief.facts:
+            if fact.startswith("Regime:"):
+                value = fact[len("Regime:") :].strip().rstrip(".")
+                return value[:32] if value else None
+    return None
+
+
+def _record_analysis_episode(
+    database_path: Path, run_id: str, result: AnalysisResult, *, source: str
+) -> None:
+    """Record a shadow episode without letting memory break the response."""
+    plan = result.plan
+    gate = result.final_gate
+    routing = result.model_routing
+    action = "BUY" if plan is not None and plan.signal.value == "BUY" else "HOLD"
+    if gate is not None:
+        decision_source = gate.outcome.source
+        model = gate.outcome.model
+        execute = gate.outcome.judgments.answer("execute_trade")
+        probability = execute.noul
+    elif routing:
+        last = routing[-1]
+        decision_source = last.decision_source
+        model = last.model
+        probability = None
+    else:
+        decision_source = "rules_only" if result.mode == "RULES_ONLY" else "llm_direct"
+        model = "none"
+        probability = None
+    try:
+        EpisodicMemoryStore(database_path).record_shadow(
+            run_id=run_id,
+            symbol=result.symbol,
+            as_of=result.as_of,
+            source=source,
+            decision_source=decision_source,
+            model=model or "none",
+            action=action,
+            plan=plan,
+            predicted_probability=probability,
+            regime=_regime_label(result),
+            detail={
+                "mode": result.mode,
+                "signal": action,
+                "vetoes": list(result.vetoes),
+                "final_gate": None if gate is None else gate.to_dict(),
+                "source": source,
+            },
+        )
+    except Exception:  # memory is an audit layer, not a reason to fail a run
+        pass
 
 
 def _tool_spec_status(spec: ToolSpec) -> ToolSpecStatus:
@@ -942,6 +1021,7 @@ def create_app(
                 "/api/v1/analysis/",
                 "/api/v1/decision/",
                 "/api/v1/strategy/",
+                "/api/v1/memory/",
                 "/api/v1/prompts/",
             )
         ):
@@ -1569,7 +1649,49 @@ def create_app(
                 )
             except StrategyError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+            strategy_run_id = (
+                "strategy:"
+                + canonical_digest(
+                    {
+                        "strategy": body.strategy,
+                        "symbols": body.symbols,
+                        "as_of": run.as_of.isoformat(),
+                    }
+                )[:16]
+            )
+            for outcome in run.symbols:
+                if outcome.ok and outcome.result is not None:
+                    _record_analysis_episode(
+                        database_path,
+                        strategy_run_id,
+                        outcome.result,
+                        source="strategy",
+                    )
             return StrategyRunResponse.model_validate(run.to_dict())
+
+        @app.get("/api/v1/memory/calibration")
+        def memory_calibration(request: Request) -> MemoryCalibrationResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            observed_at = datetime.now(UTC)
+            buckets = EpisodicMemoryStore(database_path).calibration(as_of=observed_at)
+            return MemoryCalibrationResponse(
+                as_of=observed_at.isoformat(),
+                buckets=[
+                    MemoryCalibrationBucket(
+                        decision_source=bucket.decision_source,
+                        model=bucket.model,
+                        count=bucket.summary.count,
+                        mean_brier=bucket.summary.mean_brier,
+                        mean_log_loss=bucket.summary.mean_log_loss,
+                        expected_calibration_error=(
+                            bucket.summary.expected_calibration_error
+                        ),
+                        outcome_rate=bucket.summary.outcome_rate,
+                    )
+                    for bucket in buckets
+                ],
+            )
 
         @app.get("/api/v1/news/digest")
         def news_digest(request: Request) -> NewsDigest:
@@ -1862,6 +1984,9 @@ def create_app(
                 vetoes=result.vetoes,
                 detail=payload,
             )
+            _record_analysis_episode(
+                database_path, stored.run_id, result, source="analysis"
+            )
             return AnalysisRunResponse(
                 run_id=stored.run_id,
                 symbol=result.symbol,
@@ -1884,6 +2009,7 @@ def create_app(
                 notes=list(result.notes),
                 skipped_nodes=list(result.skipped_nodes),
                 specialists=payload["specialists"],  # type: ignore[arg-type]
+                final_gate=payload["final_gate"],  # type: ignore[arg-type]
             )
 
         @app.post("/api/v1/analysis/batch")
@@ -1966,6 +2092,9 @@ def create_app(
                         plan=None if result.plan is None else result.plan.to_dict(),
                         vetoes=result.vetoes,
                         detail=analysis,
+                    )
+                    _record_analysis_episode(
+                        database_path, stored.run_id, result, source="analysis"
                     )
                     # The pipeline's payload has no `run_id` — only the store
                     # mints one. Attach it so the batch item is the same shape
