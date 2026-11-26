@@ -36,7 +36,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       },
       {
         kind: "p",
-        text: "The product is organised around the workspace tabs: Today, Research, Technical, Agent Lab, Strategy, Trade, Settings and How to use. This guide documents each of them, then explains every agent in detail, and finishes with the model-routing rules, a glossary and the guardrails.",
+        text: "The product is organised around the workspace sidebar: Daily (Today, Opportunities, Trade), Analyze (Research, Technical, Reports), Build (Strategy, Agent Lab), Operate (Data, Schedules) and System (Settings, How to use). This guide documents each tab, then explains every agent in detail, and finishes with the model-routing rules, a glossary and the guardrails.",
       },
       {
         kind: "note",
@@ -89,24 +89,38 @@ export const GUIDE_SECTIONS: DocSection[] = [
     blocks: [
       {
         kind: "p",
-        text: "Today is the read-only command centre. It shows the paper account, the data pipelines, the schedule status and three diagnostics. None of the cards on this tab place orders or run agents.",
+        text: "Today is the read-only command centre. It answers one question: what needs attention now? It shows four overview cards and four shortcut links, and nothing on it changes state or runs an agent.",
       },
-      { kind: "subheading", text: "Paper account" },
+      { kind: "subheading", text: "Overview cards" },
+      {
+        kind: "list",
+        items: [
+          "Paper account: the paper-main balance after deposits and withdrawals, or a clear 'not configured' state that links to Trade.",
+          "Data: how many imports and records exist and which live provider is configured. Open Data for freshness and calendar checks.",
+          "Schedules: whether the discovery loop is running and how many schedules are effective. Open Schedules to edit, dry-run or run a job.",
+          "Runtime: the SQLite health label plus issue, stale-job and failed-job counts. Open Settings for storage and job detail.",
+        ],
+      },
+      {
+        kind: "note",
+        text: "Diagnostics that used to sit on Today now live where they belong: data readiness in Data, job configuration and history in Schedules, runtime and network in Settings, and memory calibration in Agent Lab. Today links to them instead of duplicating the controls.",
+      },
+    ],
+  },
+  {
+    id: "data",
+    title: "Data tab",
+    blocks: [
       {
         kind: "p",
-        text: "Shows the paper-main account: name, status (ACTIVE, PAUSED or ARCHIVED), opening balance, deposits, withdrawals and current balance. Amounts are shown in paise exactly as the service stores them. If no paper account exists yet, the card says it is not configured. This is paper simulation only; no broker connection or live order is enabled.",
+        text: "Data is the readiness surface: what has been imported, how fresh a retained snapshot is, and which dates a reviewed exchange calendar covers. It is read-only and cannot start an import.",
       },
       { kind: "subheading", text: "Data sources" },
       {
         kind: "p",
         text: "Summarises imported CSV data: how many imports and records exist, whether a live market-data provider is configured, and up to 20 recent imports. Imported data quality is explicitly unassessed. A provider being configured here does not mean its prices are tradable or real-time.",
       },
-      { kind: "subheading", text: "Schedules" },
-      {
-        kind: "p",
-        text: "Shows the schedule definitions, the last recorded wake decisions and recent job runs. Schedules are daily local times in an IANA timezone, with optional intraday intervals, weekday filters, an operating window and a wake policy. Scheduler discovery enqueues due occurrences; a bounded worker executes registered handlers. The only registered handler is memory.resolve, enabled by the owner as a daily schedule from Memory calibration. The previews do not apply market calendars, dependencies or wake policies.",
-      },
-      { kind: "subheading", text: "Diagnostics: snapshot freshness" },
+      { kind: "subheading", text: "Snapshot freshness" },
       {
         kind: "p",
         text: "Inspects one retained snapshot by record ID at a point in time. You supply a delayed-after threshold, a critical-after threshold and a delayed-data mode (Warn, Block or Allow). The result is a status, the source and quality, the age in seconds, and the event, known and recorded timestamps. The lookup is point-in-time: it uses the snapshot version visible as of the requested instant, not whatever was written last. Source, quality and timestamps are assertions made by the data pipeline, and this diagnostic is not trading readiness.",
@@ -121,20 +135,10 @@ export const GUIDE_SECTIONS: DocSection[] = [
           { label: "UNKNOWN_EVENT_TIME_BLOCK", value: "The snapshot has no event timestamp, so age cannot be computed." },
         ],
       },
-      { kind: "subheading", text: "Diagnostics: calendar coverage" },
+      { kind: "subheading", text: "Calendar coverage" },
       {
         kind: "p",
         text: "Checks one exchange over an inclusive date range of 1 to 31 dates. Each date is reported as uncovered, or with its session state and session class plus open and close times when both are known. An uncovered date is unknown, not automatically open or closed, and owner review is not independent verification.",
-      },
-      { kind: "subheading", text: "Memory calibration" },
-      {
-        kind: "p",
-        text: "Shows Brier score, expected calibration error and outcome rate for resolved shadow episodes, separated by decision source and model. A decision is recorded at as_of; an outcome is appended later. Both sides are filtered to the requested instant, so a later outcome cannot leak into an earlier view. Unresolved episodes and decisions without a predicted probability are not scored. Resolve due episodes runs the deterministic resolver: BUY plans use stop/target first-touch or the horizon close, and no-plan episodes use the forward return. The default horizon is five calendar days; the episode itself is never rewritten. The Daily resolver checkbox creates or enables the 18:00 IST memory.resolve schedule; fresh installs have no schedule.",
-      },
-      { kind: "subheading", text: "Diagnostics: model usage" },
-      {
-        kind: "p",
-        text: "Groups recorded model attempts by task, task version and model. For each group it shows attempt count, incomplete attempts, cache hits, and input/output tokens split into provider-reported, locally estimated and unknown. Incomplete attempts count as unknown usage; an absent figure is never treated as zero.",
       },
     ],
   },
@@ -225,6 +229,11 @@ export const GUIDE_SECTIONS: DocSection[] = [
         kind: "p",
         text: "Search stored research documents at a point in time. Results are filtered by published, known and recorded times, optionally by symbol. The service uses FTS5 when the local SQLite build supports it and the deterministic term index otherwise; both answer the same query contract. The panel shows the title, symbol, snippet, source and score. The Add research document form stores owner-supplied text only; it makes no web fetch and no model call, requires an HTTPS source, rejects future knowledge times, and returns the existing document for duplicate content.",
       },
+      { kind: "subheading", text: "Memory calibration" },
+      {
+        kind: "p",
+        text: "Shows Brier score, expected calibration error and outcome rate for resolved shadow episodes, separated by decision source and model. A decision is recorded at as_of; an outcome is appended later. Both sides are filtered to the requested instant, so a later outcome cannot leak into an earlier view. Unresolved episodes and decisions without a predicted probability are not scored. Resolve due episodes runs the deterministic resolver: BUY plans use stop/target first-touch or the horizon close, and no-plan episodes use the forward return. The default horizon is five calendar days; the episode itself is never rewritten. The Daily resolver checkbox creates or enables the 18:00 IST memory.resolve schedule, which is then editable in the Schedules tab; fresh installs have no schedule.",
+      },
       { kind: "subheading", text: "Procedural playbooks" },
       {
         kind: "p",
@@ -304,7 +313,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
     blocks: [
       {
         kind: "p",
-        text: "The Schedules tab is the owner-facing job configuration. The catalogue lists only jobs with registered handlers; each entry shows its class, job id and wake policy. A schedule can be created from the catalogue, edited, enabled, disabled, dry-run, run now, and inspected in history.",
+        text: "Schedules is the owner-facing job configuration, and it also shows live scheduler status. The catalogue lists only jobs with registered handlers; each entry shows its class, job id and wake policy. A schedule can be created from the catalogue, edited, enabled, disabled, dry-run, run now, and inspected in history. Below the editor, the status card reports the scheduler loop, effective schedule version, next occurrences, recorded wake decisions and recent job runs.",
       },
       {
         kind: "list",
@@ -373,7 +382,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
     blocks: [
       {
         kind: "p",
-        text: "Settings consolidates configuration: model and research defaults, provider API keys, the three model tiers and decision policy, per-agent routing, an overview, schedules and usage.",
+        text: "Settings is split into four sub-tabs: Overview, Models & keys, Risk & execution, and Runtime & network. Data imports and job schedules no longer live here; they have their own Data and Schedules tabs. Nothing on Settings places an order or runs an agent.",
       },
       { kind: "subheading", text: "Model & research configuration" },
       {
@@ -420,6 +429,16 @@ export const GUIDE_SECTIONS: DocSection[] = [
       {
         kind: "p",
         text: "A read-only summary of registered task definitions, schedules, model usage groups, the resolved model route, configured API-key count and the research-agent feed and retention. The task-definition list is empty unless tasks have been registered in the backend; choosing models for individual tasks is not implemented in this UI.",
+      },
+      { kind: "subheading", text: "Model usage" },
+      {
+        kind: "p",
+        text: "Groups recorded model attempts by task, task version and model. For each group it shows attempt count, incomplete attempts, cache hits, and input/output tokens split into provider-reported, locally estimated and unknown. Incomplete attempts count as unknown usage; an absent figure is never treated as zero.",
+      },
+      { kind: "subheading", text: "Runtime & network" },
+      {
+        kind: "p",
+        text: "Runtime reports SQLite and WAL health, free disk, integrity, migration count, pending/running/stale jobs and table counts, refreshed every 30 seconds. Network controls the optional Cloudflare tunnel used only for a private remote view of the loopback workspace; it does not expose a broker path or change the paper-only boundary.",
       },
     ],
   },
@@ -482,7 +501,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "It will not short sell or use margin; only long BUY plans are representable.",
           "It will not let a model compute or change a number: indicators, sizing, stops, targets and reward-to-risk are deterministic code.",
           "It will not let a model approve or veto risk: the risk analyst is advisory only and the real gate is the risk policy and sizer.",
-          "It will not execute scheduled jobs; no job handlers are registered.",
+          "It will not execute a scheduled job inside an HTTP request: Run now only enqueues a durable job for the worker.",
           "It will not treat missing values as zero; unknown stays unknown.",
           "It will not return API keys to the browser; only masked hints.",
           "It will not present delayed or unassessed data as real-time or verified.",
@@ -507,7 +526,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           { label: "Snapshot unavailable", value: "Check the record ID exists and was retained at the requested as-of time. Invalid thresholds or inconsistent timestamps return a validation error." },
           { label: "Decision preview falls back", value: "No Jev key, the decision route does not allow Jev, or the decision tier is not configured for Jev. The route panel names the source actually used." },
           { label: "Prompt save rejected", value: "A required placeholder is missing, the template does not format, or it contains control characters. Restore the required placeholders and try again." },
-          { label: "No schedules or usage", value: "Schedules are read-only and optional; usage is empty until a model-backed agent has actually run." },
+          { label: "No schedules or usage", value: "No schedule exists until you create one from the job catalogue in Schedules; usage is empty until a model-backed agent has actually run." },
           { label: "Paper account not configured", value: "The paper-main account has not been created in the local database yet." },
         ],
       },

@@ -13,6 +13,15 @@ task. History lives in git and
   Backup at `~/Library/Application Support/BharatQuant/bq.db.bak-*`. A fresh DB
   applies all 37 migrations cleanly. `_applied_count` now names the first
   divergent migration.
+- UI restructured (26 Nov 2026): sidebar groups are Daily (Today,
+  Opportunities, Trade), Analyze (Research, Technical, Reports), Build
+  (Strategy, Agent Lab), Operate (Data, Schedules) and System (Settings, How to
+  use). Data and Schedules are now top-level tabs; Settings narrowed to four
+  sub-tabs (Overview, Models & keys, Risk & execution, Runtime & network);
+  Today is a read-only command center of linked summary cards. `SchedulesPanel`
+  and `OpportunitiesPanel` were previously built but never mounted; both are
+  now wired. `PaperAccountStatus.tsx` was removed as redundant. Frontend
+  typecheck, 112 tests and the production build pass.
 - Single-owner, paper-only Indian equities system. **No broker order path**; Kite
   is read-only. Paper execution is the only execution path.
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
@@ -34,7 +43,8 @@ task. History lives in git and
   `bench`, `backup` and `restore`.
 - API: `GET /api/v1/system/status`, `GET /api/v1/system/metrics` and the
   owner-authenticated `WS /api/v1/events` runtime snapshot feed.
-- Today page: Runtime card for health, storage, job leases and issues.
+- Runtime card for health, storage, job leases and issues; it now lives in
+  Settings → Runtime & network (v1.1), not Today.
 - `docs/runtime-operations.md`: launchd/caffeinate, sleep/wake, backup/restore,
   metrics and failure policy.
 - Tests: health/stale lease, backup/restore round-trip, metrics, WebSocket

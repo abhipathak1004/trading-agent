@@ -1,14 +1,14 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
 import DataStatus from "./DataStatus";
 import CalendarCoverage from "./CalendarCoverage";
 import SnapshotFreshness from "./SnapshotFreshness";
 import ScheduleStatus from "./ScheduleStatus";
+import SchedulesPanel from "./SchedulesPanel";
 import UsageStatus from "./UsageStatus";
 import MemoryCalibrationPanel from "./MemoryCalibrationPanel";
 import RuntimePanel from "./RuntimePanel";
-import PaperAccountStatus from "./PaperAccountStatus";
 import ResearchPanel from "./ResearchPanel";
 import ReportsPanel from "./ReportsPanel";
 import ResearchDossierPanel from "./ResearchDossierPanel";
@@ -16,6 +16,7 @@ import AgentConsole from "./AgentConsole";
 import AnalysisPanel from "./AnalysisPanel";
 import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
 import AgentLabPanel from "./AgentLabPanel";
+import OpportunitiesPanel from "./OpportunitiesPanel";
 import StrategyPanel from "./StrategyPanel";
 import BacktestsPanel from "./BacktestsPanel";
 import TradePanel from "./TradePanel";
@@ -28,17 +29,81 @@ import RiskLimitsPanel from "./RiskLimitsPanel";
 import CloudflareTunnelPanel from "./CloudflareTunnelPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
 import HowToUsePanel from "./HowToUsePanel";
+import TodayOverview from "./TodayOverview";
 
 type WorkspaceView =
   | "today"
-  | "technical"
-  | "agents"
-  | "strategy"
-  | "reports"
+  | "opportunities"
   | "trade"
   | "research"
+  | "technical"
+  | "reports"
+  | "strategy"
+  | "agents"
+  | "data"
+  | "schedules"
   | "settings"
   | "guide";
+
+type SettingsTab = "overview" | "models" | "risk" | "runtime";
+
+const NAV_GROUPS: {
+  label: string;
+  items: { view: WorkspaceView; label: string; icon: string }[];
+}[] = [
+  {
+    label: "Daily",
+    items: [
+      { view: "today", label: "Today", icon: "◫" },
+      { view: "opportunities", label: "Opportunities", icon: "◉" },
+      { view: "trade", label: "Trade", icon: "◇" },
+    ],
+  },
+  {
+    label: "Analyze",
+    items: [
+      { view: "research", label: "Research", icon: "◎" },
+      { view: "technical", label: "Technical", icon: "◨" },
+      { view: "reports", label: "Reports", icon: "▤" },
+    ],
+  },
+  {
+    label: "Build",
+    items: [
+      { view: "strategy", label: "Strategy", icon: "⬡" },
+      { view: "agents", label: "Agent Lab", icon: "◈" },
+    ],
+  },
+  {
+    label: "Operate",
+    items: [
+      { view: "data", label: "Data", icon: "▦" },
+      { view: "schedules", label: "Schedules", icon: "◷" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { view: "settings", label: "Settings", icon: "⚙" },
+      { view: "guide", label: "How to use", icon: "?" },
+    ],
+  },
+];
+
+const VIEW_LABELS: Record<WorkspaceView, string> = {
+  today: "Today",
+  opportunities: "Opportunities",
+  trade: "Trade",
+  research: "Research",
+  technical: "Technical Analysis",
+  reports: "Reports",
+  strategy: "Strategy",
+  agents: "Agent Lab",
+  data: "Data",
+  schedules: "Schedules",
+  settings: "Settings",
+  guide: "How to use",
+};
 
 type ServiceState = "checking" | "online" | "offline";
 type SessionState =
@@ -101,6 +166,7 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [view, setView] = useState<WorkspaceView>("today");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("overview");
   const [stagedPlan, setStagedPlan] = useState<StrategyPlan | null>(null);
 
   useEffect(() => {
@@ -290,92 +356,27 @@ export default function App() {
 
         {session.state === "signed_in" && (
           <nav className="sidebar-nav" aria-label="Workspace">
-            <p className="nav-label">Workspace</p>
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "today" ? " nav-item--active" : ""}`}
-              aria-current={view === "today" ? "page" : undefined}
-              onClick={() => setView("today")}
-            >
-              <span aria-hidden="true">◫</span>Today
-            </button>
-            {view === "today" && (
-              <>
-                <a className="nav-item nav-item--nested" href="#data">
-                  <span aria-hidden="true">▦</span>Data
-                </a>
-                <a className="nav-item nav-item--nested" href="#schedules">
-                  <span aria-hidden="true">◷</span>Schedules
-                </a>
-                <a className="nav-item nav-item--nested" href="#diagnostics">
-                  <span aria-hidden="true">⌁</span>Diagnostics
-                </a>
-              </>
-            )}
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "research" ? " nav-item--active" : ""}`}
-              aria-current={view === "research" ? "page" : undefined}
-              onClick={() => setView("research")}
-            >
-              <span aria-hidden="true">◎</span>Research
-            </button>
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "technical" ? " nav-item--active" : ""}`}
-              aria-current={view === "technical" ? "page" : undefined}
-              onClick={() => setView("technical")}
-            >
-              <span aria-hidden="true">◨</span>Technical
-            </button>
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "agents" ? " nav-item--active" : ""}`}
-              aria-current={view === "agents" ? "page" : undefined}
-              onClick={() => setView("agents")}
-            >
-              <span aria-hidden="true">◈</span>Agent Lab
-            </button>
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "strategy" ? " nav-item--active" : ""}`}
-              aria-current={view === "strategy" ? "page" : undefined}
-              onClick={() => setView("strategy")}
-            >
-              <span aria-hidden="true">⬡</span>Strategy
-            </button>
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "reports" ? " nav-item--active" : ""}`}
-              aria-current={view === "reports" ? "page" : undefined}
-              onClick={() => setView("reports")}
-            >
-              <span aria-hidden="true">▤</span>Reports
-            </button>
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "trade" ? " nav-item--active" : ""}`}
-              aria-current={view === "trade" ? "page" : undefined}
-              onClick={() => setView("trade")}
-            >
-              <span aria-hidden="true">◇</span>Trade
-            </button>
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "settings" ? " nav-item--active" : ""}`}
-              aria-current={view === "settings" ? "page" : undefined}
-              onClick={() => setView("settings")}
-            >
-              <span aria-hidden="true">⚙</span>Settings
-            </button>
-            <button
-              type="button"
-              className={`nav-item nav-item--button${view === "guide" ? " nav-item--active" : ""}`}
-              aria-current={view === "guide" ? "page" : undefined}
-              onClick={() => setView("guide")}
-            >
-              <span aria-hidden="true">?</span>How to use
-            </button>
+            {NAV_GROUPS.map((group, index) => (
+              <Fragment key={group.label}>
+                <p
+                  className={`nav-label${index > 0 ? " nav-label--secondary" : ""}`}
+                >
+                  {group.label}
+                </p>
+                {group.items.map((item) => (
+                  <button
+                    key={item.view}
+                    type="button"
+                    className={`nav-item nav-item--button${view === item.view ? " nav-item--active" : ""}`}
+                    aria-current={view === item.view ? "page" : undefined}
+                    onClick={() => setView(item.view)}
+                  >
+                    <span aria-hidden="true">{item.icon}</span>
+                    {item.label}
+                  </button>
+                ))}
+              </Fragment>
+            ))}
           </nav>
         )}
 
@@ -391,25 +392,7 @@ export default function App() {
       <div className="workspace">
         <header className="status-strip" aria-label="System status">
           <div className="status-strip__identity">
-            <span className="breadcrumb">
-              {view === "settings"
-                  ? "Settings"
-                  : view === "technical"
-                    ? "Technical Analysis"
-                    : view === "agents"
-                      ? "Agent Lab"
-                      : view === "strategy"
-                        ? "Strategy"
-                        : view === "reports"
-                          ? "Reports"
-                        : view === "trade"
-                          ? "Trade"
-                        : view === "research"
-                          ? "Research"
-                          : view === "guide"
-                          ? "How to use"
-                          : "Today"}
-            </span>
+            <span className="breadcrumb">{VIEW_LABELS[view]}</span>
             <span className="mode-label">PAPER ONLY</span>
           </div>
           <div className={`service-status service-status--${serviceState}`}>
@@ -556,36 +539,152 @@ export default function App() {
               <div>
                 <p className="eyebrow">COMMAND CENTER</p>
                 <h1 id="today-title">Today</h1>
-                <p className="intro">Research with discipline. Your local paper-only workspace.</p>
+                <p className="intro">
+                  What needs your attention now. Every card links to the page that
+                  owns the work.
+                </p>
               </div>
-              <span className="status-badge status-badge--provisional">FOUNDATION</span>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
             </header>
 
             <section className="mode-banner" aria-label="Current mode">
               <span aria-hidden="true">i</span>
               <div>
-                <strong>Operating in paper-only foundation mode</strong>
+                <strong>Paper-only workspace</strong>
                 <p>
-                  Live trading is not enabled. Paper execution is available in the
-                  Trade tab after a plan passes the deterministic gate.
+                  No broker connection and no live order path. Paper execution runs
+                  in Trade after a plan passes the deterministic gate. Diagnostics
+                  live in Data, Schedules and Settings, so nothing here changes state.
                 </p>
               </div>
             </section>
 
-            <div className="dashboard-grid" id="data">
-              <PaperAccountStatus />
-              <DataStatus />
-              <div id="schedules">
-                <ScheduleStatus />
-              </div>
-            </div>
+            <TodayOverview onNavigate={setView} />
 
-            <div className="dashboard-grid dashboard-grid--diagnostics" id="diagnostics">
+            <section className="overview-next" aria-labelledby="today-next-title">
+              <h2 id="today-next-title">Start here</h2>
+              <div className="overview-links">
+                <button type="button" className="overview-link" onClick={() => setView("data")}>
+                  <strong>Check data readiness</strong>
+                  <span>Imports, snapshot freshness and calendar coverage.</span>
+                </button>
+                <button type="button" className="overview-link" onClick={() => setView("schedules")}>
+                  <strong>Review schedules</strong>
+                  <span>Job catalogue, run now, dry run and history.</span>
+                </button>
+                <button type="button" className="overview-link" onClick={() => setView("opportunities")}>
+                  <strong>Open opportunities</strong>
+                  <span>Confidence-ranked candidates and shadow outcomes.</span>
+                </button>
+                <button type="button" className="overview-link" onClick={() => setView("settings")}>
+                  <strong>Configure the system</strong>
+                  <span>Models, keys, risk limits, runtime and network.</span>
+                </button>
+              </div>
+            </section>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "opportunities" && (
+          <section className="dashboard" id="opportunities" aria-labelledby="opportunities-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">OPPORTUNITIES</p>
+                <h1 id="opportunities-page-title">Opportunity board</h1>
+                <p className="intro">
+                  Confidence decides what is suggested; the deterministic score only
+                  ranks the board. Nothing here places an order by itself.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Opportunities scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Suggestions, not instructions</strong>
+                <p>
+                  Watch or dismiss a candidate to append a lifecycle event; the frozen
+                  opportunity never changes. Every candidate is shadow-tracked, so the
+                  filter can be judged on resolved outcomes later.
+                </p>
+              </div>
+            </section>
+
+            <OpportunitiesPanel
+              csrfToken={session.csrfToken}
+              onStagePlan={(plan) => {
+                setStagedPlan(plan);
+                setView("trade");
+              }}
+            />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "data" && (
+          <section className="dashboard" id="data" aria-labelledby="data-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">DATA &amp; UNIVERSE</p>
+                <h1 id="data-page-title">Data</h1>
+                <p className="intro">
+                  What the workspace has imported, how fresh a snapshot is and which
+                  calendar dates are covered.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">UNASSESSED</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Data scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Assertions, not trading readiness</strong>
+                <p>
+                  Source, quality and timestamps are reported by the data pipeline.
+                  Imported data quality stays UNASSESSED, and an uncovered calendar
+                  date is unknown, not automatically open or closed.
+                </p>
+              </div>
+            </section>
+
+            <div className="dashboard-grid dashboard-grid--data">
+              <DataStatus />
               <SnapshotFreshness />
               <CalendarCoverage />
-              <UsageStatus />
-              <MemoryCalibrationPanel csrfToken={session.csrfToken} />
-              <RuntimePanel />
+            </div>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "schedules" && (
+          <section className="dashboard" id="schedules" aria-labelledby="schedules-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">OPERATIONS</p>
+                <h1 id="schedules-page-title">Schedules</h1>
+                <p className="intro">
+                  Every recurring job is configuration: create, edit, enable, dry-run,
+                  run now and inspect history.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Schedules scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Configuration now, execution later</strong>
+                <p>
+                  Saving writes a new immutable schedule version. Run now queues one
+                  durable job for the worker; it never executes inside the browser
+                  request. Disabled schedules do not dispatch.
+                </p>
+              </div>
+            </section>
+
+            <SchedulesPanel csrfToken={session.csrfToken} />
+
+            <div className="dashboard-grid dashboard-grid--single">
+              <ScheduleStatus />
             </div>
           </section>
         )}
@@ -655,6 +754,7 @@ export default function App() {
 
             <AgentLabPanel csrfToken={session.csrfToken} />
             <SemanticMemoryPanel csrfToken={session.csrfToken} />
+            <MemoryCalibrationPanel csrfToken={session.csrfToken} />
             <PlaybookPanel csrfToken={session.csrfToken} />
           </section>
         )}
@@ -775,35 +875,65 @@ export default function App() {
                 <p className="eyebrow">SETTINGS</p>
                 <h1 id="settings-title">Settings</h1>
                 <p className="intro">
-                  Everything configurable in one place: models and tasks, schedules,
-                  API keys and agents.
+                  Models and keys, risk limits, runtime health and network access.
+                  Data and Schedules have their own tabs.
                 </p>
               </div>
-              <span className="status-badge status-badge--provisional">FOUNDATION</span>
+              <span className="status-badge status-badge--provisional">OWNER</span>
             </header>
 
             <section className="mode-banner" aria-label="Settings scope">
               <span aria-hidden="true">i</span>
               <div>
-                <strong>Configure model, keys and research</strong>
+                <strong>Configuration, not execution</strong>
                 <p>
-                  Model provider, model name, provider API keys, the news feed and
-                  memory retention are editable here. No model provider is called by
-                  this build; task definitions and schedules remain read-only.
+                  Nothing on this page places an order or runs an agent. Provider
+                  keys are write-only: the browser only ever sees a masked hint.
+                  Data imports, diagnostics and job schedules live in their own tabs.
                 </p>
               </div>
             </section>
 
-            <SettingsConfigPanel csrfToken={session.csrfToken} />
-            <ModelsConfigPanel csrfToken={session.csrfToken} />
-            <RiskLimitsPanel csrfToken={session.csrfToken} />
-            <CloudflareTunnelPanel csrfToken={session.csrfToken} />
-            <SettingsOverviewPanel />
-
-            <div className="dashboard-grid dashboard-grid--settings" id="settings-schedules">
-              <ScheduleStatus />
-              <UsageStatus />
+            <div className="tab-bar" role="tablist" aria-label="Settings sections">
+              {(
+                [
+                  ["overview", "Overview"],
+                  ["models", "Models & keys"],
+                  ["risk", "Risk & execution"],
+                  ["runtime", "Runtime & network"],
+                ] as [SettingsTab, string][]
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === key}
+                  className={`tab-button${settingsTab === key ? " tab-button--active" : ""}`}
+                  onClick={() => setSettingsTab(key)}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
+
+            {settingsTab === "overview" && <SettingsOverviewPanel />}
+
+            {settingsTab === "models" && (
+              <>
+                <SettingsConfigPanel csrfToken={session.csrfToken} />
+                <ModelsConfigPanel csrfToken={session.csrfToken} />
+                <UsageStatus />
+              </>
+            )}
+
+            {settingsTab === "risk" && <RiskLimitsPanel csrfToken={session.csrfToken} />}
+
+            {settingsTab === "runtime" && (
+              <>
+                <RuntimePanel />
+                <CloudflareTunnelPanel csrfToken={session.csrfToken} />
+              </>
+            )}
           </section>
         )}
 
