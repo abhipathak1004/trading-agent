@@ -11,11 +11,12 @@ import ResearchPanel from "./ResearchPanel";
 import AgentConsole from "./AgentConsole";
 import AnalysisPanel from "./AnalysisPanel";
 import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
+import AgentLabPanel from "./AgentLabPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
 
-type WorkspaceView = "today" | "technical" | "research" | "settings";
+type WorkspaceView = "today" | "technical" | "agents" | "research" | "settings";
 
 type ServiceState = "checking" | "online" | "offline";
 type SessionState =
@@ -306,6 +307,14 @@ export default function App() {
             </button>
             <button
               type="button"
+              className={`nav-item nav-item--button${view === "agents" ? " nav-item--active" : ""}`}
+              aria-current={view === "agents" ? "page" : undefined}
+              onClick={() => setView("agents")}
+            >
+              <span aria-hidden="true">◈</span>Agent Lab
+            </button>
+            <button
+              type="button"
               className={`nav-item nav-item--button${view === "settings" ? " nav-item--active" : ""}`}
               aria-current={view === "settings" ? "page" : undefined}
               onClick={() => setView("settings")}
@@ -315,9 +324,6 @@ export default function App() {
             <p className="nav-label nav-label--secondary">Not available yet</p>
             <span className="nav-item nav-item--muted" aria-disabled="true">
               <span aria-hidden="true">◇</span>Trade
-            </span>
-            <span className="nav-item nav-item--muted" aria-disabled="true">
-              <span aria-hidden="true">◈</span>Agent Lab
             </span>
           </nav>
         )}
@@ -339,9 +345,11 @@ export default function App() {
                   ? "Settings"
                   : view === "technical"
                     ? "Technical Analysis"
-                    : view === "research"
-                      ? "Research"
-                      : "Today"}
+                    : view === "agents"
+                      ? "Agent Lab"
+                      : view === "research"
+                        ? "Research"
+                        : "Today"}
             </span>
             <span className="mode-label">PAPER ONLY</span>
           </div>
@@ -524,6 +532,37 @@ export default function App() {
         {serviceState === "online" && session.state === "signed_in" && view === "technical" && (
           <section className="dashboard" id="technical" aria-labelledby="ta-page-title">
             <TechnicalAnalysisPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "agents" && (
+          <section className="dashboard" id="agents" aria-labelledby="agents-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">AGENT LAB</p>
+                <h1 id="agents-page-title">Agent Lab</h1>
+                <p className="intro">
+                  Run the decision agent and refine the prompts used by every
+                  analysis agent. Every prompt save is versioned.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Agent Lab scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Test and refine, never trade</strong>
+                <p>
+                  The decision preview uses live cached data and the configured
+                  model ladder. Jev is optional: without it the deterministic
+                  heuristic answers. Prompt edits change instructions only; the
+                  JSON contracts, thresholds and risk gates stay in code.
+                </p>
+              </div>
+            </section>
+
+            <AgentLabPanel csrfToken={session.csrfToken} />
           </section>
         )}
 

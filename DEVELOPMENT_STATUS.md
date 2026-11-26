@@ -7,7 +7,19 @@ Start here when resuming work. This file lives in the workspace and does not dep
 Updated 26 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
 
-**Latest slice — Phase 1+2: config-driven three-tier routing and the Jev decision battery.**
+**Latest slice — Agent Lab: test the decision agent and edit every prompt from the UI.**
+The inert Agent Lab placeholder is now a working tab with two surfaces: a decision-agent runner and a versioned prompt editor.
+
+- **Decision agent runner** — `POST /api/v1/decision/preview` resolves the symbol, runs the deterministic front half of the pipeline, builds the dense `DecisionState`, runs the screener battery through the configured ladder (Jev → Flash → Reasoning → heuristic → rules-only), applies `DecisionPolicy`, and returns the state, judgments, policy verdict and exact route (source/model/latency/request id/state hash). It does not place an order.
+- **Prompt editor** — migration `027_agent_prompts.sql` adds an append-only `agent_prompts` table; `bq/agent_prompts.py` merges code defaults with saved versions and validates templates. Editable now: bull, bear, research judge, risk analyst, and the decision-screener LLM fallback system prompt. The decision question set, options, answer types, thresholds and risk rules stay code-owned.
+- **Injection** — `Debate`, `RiskAnalyst` and `ModelRouter` accept a `PromptSource`; the API and CLI pass `PromptStore`, so a saved prompt takes effect on the next run. A missing/broken store falls back to the code default rather than failing a run.
+- **API/UI** — `GET /api/v1/prompts`, `PUT /api/v1/prompts/{agent_id}`, `POST /api/v1/prompts/{agent_id}/reset` (owner-only, origin + CSRF, no-store). New **Agent Lab** nav tab with the runner, battery/route tables and a prompt editor showing version/default/updated and required placeholders. Contracts bound every response.
+- **CLI fix** — opaque record ids that start with `-` are parsed via a safe placeholder; the existing snapshot test was randomly failing when `secrets.token_urlsafe` produced a leading dash.
+- **Verification** — **739 backend tests** (11 new: 5 prompt store, 3 prompt API, 3 decision-preview API), **50 frontend tests** (4 new), ruff and format clean, frontend typecheck and build clean. mypy remains at the same 25 pre-existing errors in untouched files.
+
+Next: Phase 3 — wire news into `_news_context`, add the Fundamental/Events and Market Regime specialists, the four-layer memory, shadow trades and source/model-bucketed Brier, then the Super Agent and the Jev final gate.
+
+**Previous slice — Phase 1+2: config-driven three-tier routing and the Jev decision battery.**
 Analysis runs can now route each agent to a decision, reasoning or flash tier from Settings, with no code edit. The decision tier prefers TypeSafe Jev and degrades through the configured LLM tiers to a deterministic heuristic and, finally, `RULES_ONLY`.
 
 - **Reference studied:** `buberlo/jev-trader` (MIT, surveyed 2026-11-26) — deterministic dense state → one atomic Choice/Noul/Score battery → code-owned policy → hard risk vetoes → calibration triples. Architecture reused, original code only (ADR-018).

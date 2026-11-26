@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from bq.agent_prompts import DECISION_SYSTEM, PromptSource, resolve_prompt
 from bq.decision.battery import decision_prompt, decision_schema, questions_for
 from bq.decision.client import JevClient, JevError, parse_decisions
 from bq.decision.fallback import HeuristicJudge
@@ -129,11 +130,13 @@ class ModelRouter:
         clients: Mapping[Provider, ModelClient] | None = None,
         jev: JevClient | None = None,
         transport: httpx.BaseTransport | None = None,
+        prompts: PromptSource | None = None,
     ) -> None:
         self.store = store
         self._clients = dict(clients or {})
         self._jev = jev
         self._transport = transport
+        self._prompts = prompts
         self._routes: list[RouteUse] = []
 
     @property
@@ -365,13 +368,13 @@ class ModelRouter:
         prompt = decision_prompt(state.to_state_dict(), questions)
         schema = decision_schema(questions)
         completer = _TierCompleter(self, tier_name, agent_id)
+        system, _template = resolve_prompt(
+            self._prompts, "decision_screener", DECISION_SYSTEM, ""
+        )
         parsed, completion = complete_structured(
             completer,
             prompt=prompt,
-            system=(
-                "You are a typed decision component. Answer the supplied questions "
-                "about the supplied state. Do not explain."
-            ),
+            system=system,
             schema=schema,
             task_id=f"decision.{battery}",
             timeout=tier.timeout_ms / 1000.0,

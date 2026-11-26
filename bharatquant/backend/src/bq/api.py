@@ -15,11 +15,18 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 
+from bq.agent_prompts import (
+    MAX_PROMPT_CHARS,
+    PromptError,
+    PromptNotFound,
+    PromptStore,
+)
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.debate import Debate
 from bq.analysis.pipeline import AnalysisPipeline, PipelineError
 from bq.analysis.risk_team import RiskAnalyst
 from bq.analysis.run_settings import AnalysisRunError, AnalysisRunStore
+from bq.analysis.technical import TechnicalReport
 from bq.analysis.wiring import build_analysis_router
 from bq.auth import (
     SESSION_SECONDS,
@@ -42,10 +49,12 @@ from bq.data.freshness import (
     inspect_snapshot_freshness,
 )
 from bq.data.records import DataRecordStore, MissingDataRecord, QualityStatus
-from bq.data.symbols import SymbolError
+from bq.data.symbols import Symbol, SymbolError
 from bq.data.symbols import resolve as resolve_symbol
 from bq.data.vendors import DataDomain
 from bq.data.yahoo import YahooDataClient, YahooError
+from bq.decision.battery import SCREENER
+from bq.decision.state import build_decision_state
 from bq.infra.jobs import JobRunStore
 from bq.infra.model_attempts import ModelAttemptStore, TokenUsage
 from bq.infra.scheduler import SchedulerLoop, SchedulerRunner
@@ -53,7 +62,12 @@ from bq.infra.schedules import ScheduleStore
 from bq.infra.task_registry import TaskRegistry
 from bq.llm_client import LLMClientError, LLMNotConfigured
 from bq.llm_service import LLMService
-from bq.model_router import ModelRouter, RoutedModelCaller
+from bq.model_router import (
+    DecisionUnavailable,
+    ModelRouter,
+    RoutedModelCaller,
+    decision_policy_for,
+)
 from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
 from bq.paper_accounts import (
@@ -397,6 +411,75 @@ class AnalysisProvenance(BaseModel):
     data_freshness: str
 
 
+class DecisionPreviewRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32, strict=True)
+    timeframe: Literal["intraday", "swing"] = "swing"
+
+
+class DecisionJudgmentStatus(BaseModel):
+    name: str
+    kind: str
+    choice: str | None
+    score: int | None
+    noul: float | None
+    confidence: float | None
+
+
+class DecisionScreenerStatus(BaseModel):
+    verdict: str
+    reason: str
+    quality: float
+    worth: float
+    confidence: float
+
+
+class DecisionRouteStatus(BaseModel):
+    tier: str
+    provider: str
+    model: str
+    decision_source: str
+    fallback_used: bool
+    fallback_from: str | None
+    latency_ms: float | None
+    request_id: str | None
+    model_mismatch: bool
+    state_hash: str | None
+
+
+class DecisionPreviewResponse(BaseModel):
+    symbol: str
+    timeframe: str
+    as_of: str
+    decision_preview: str
+    data_provenance: AnalysisProvenance
+    state: dict[str, object]
+    judgments: list[DecisionJudgmentStatus]
+    screener: DecisionScreenerStatus
+    route: DecisionRouteStatus
+    notes: list[str]
+
+
+class PromptStatus(BaseModel):
+    agent_id: str
+    label: str
+    description: str
+    system: str
+    template: str
+    required_fields: list[str]
+    version: int
+    updated_at: str | None
+    is_default: bool
+
+
+class PromptList(BaseModel):
+    prompts: list[PromptStatus]
+
+
+class PromptUpdate(BaseModel):
+    system: str = Field(min_length=1, max_length=MAX_PROMPT_CHARS, strict=True)
+    template: str = Field(default="", max_length=MAX_PROMPT_CHARS, strict=True)
+
+
 class AnalysisRunResponse(BaseModel):
     run_id: str
     symbol: str
@@ -717,20 +800,44 @@ def _analysis_pipeline(
     wire the debate, or in whether they attach a model at all.
     """
     router = build_analysis_router(database_path, config)
+    prompts = PromptStore(settings_store.path)
     if config.any_tier_configured:
-        model_router = ModelRouter(settings_store)
+        model_router = ModelRouter(settings_store, prompts=prompts)
         caller = RoutedModelCaller(model_router)
         return AnalysisPipeline(
             router,
-            debate=Debate(caller),
-            risk_analyst=RiskAnalyst(caller),
+            debate=Debate(caller, prompts=prompts),
+            risk_analyst=RiskAnalyst(caller, prompts=prompts),
             routing=caller,
         )
     service = LLMService(settings_store) if config.model_route_configured else None
     return AnalysisPipeline(
         router,
-        debate=Debate(service) if service is not None else None,
-        risk_analyst=RiskAnalyst(service) if service is not None else None,
+        debate=Debate(service, prompts=prompts) if service is not None else None,
+        risk_analyst=(
+            RiskAnalyst(service, prompts=prompts) if service is not None else None
+        ),
+    )
+
+
+def _technical_report_for(
+    database_path: Path, config: AppConfig, symbol: Symbol, timeframe: str
+) -> tuple[TechnicalReport, bool, str, str, tuple[str, ...]]:
+    """Run only the deterministic front half of the pipeline for a preview."""
+    router = build_analysis_router(database_path, config)
+    result = AnalysisPipeline(router).run(
+        symbol=symbol,
+        timeframe=timeframe,
+        equity_paise=100_000_00,
+        available_cash_paise=50_000_00,
+        risk_basis_points=100,
+    )
+    return (
+        result.report,
+        result.is_realtime,
+        result.vendor_daily,
+        result.vendor_quotes,
+        tuple(result.notes),
     )
 
 
@@ -799,6 +906,8 @@ def create_app(
                 "/api/v1/tools/",
                 "/api/v1/agent/",
                 "/api/v1/analysis/",
+                "/api/v1/decision/",
+                "/api/v1/prompts/",
             )
         ):
             response.headers["Cache-Control"] = "no-store"
@@ -1242,6 +1351,154 @@ def create_app(
                 raise HTTPException(status_code=403, detail="Invalid CSRF token")
             settings.clear_api_key(provider)
             return _app_config_status(settings.load())
+
+        @app.get("/api/v1/prompts")
+        def list_agent_prompts(request: Request) -> PromptList:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            store = PromptStore(database_path)
+            return PromptList(
+                prompts=[
+                    PromptStatus.model_validate(prompt.to_dict())
+                    for prompt in store.list()
+                ]
+            )
+
+        @app.put("/api/v1/prompts/{agent_id}")
+        def update_agent_prompt(
+            request: Request, agent_id: str, body: PromptUpdate
+        ) -> PromptStatus:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            try:
+                prompt = PromptStore(database_path).save(
+                    agent_id, system=body.system, template=body.template
+                )
+            except PromptNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except PromptError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return PromptStatus.model_validate(prompt.to_dict())
+
+        @app.post("/api/v1/prompts/{agent_id}/reset")
+        def reset_agent_prompt(request: Request, agent_id: str) -> PromptStatus:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            try:
+                prompt = PromptStore(database_path).reset(agent_id)
+            except PromptNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except PromptError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return PromptStatus.model_validate(prompt.to_dict())
+
+        @app.post("/api/v1/decision/preview")
+        def decision_preview(
+            request: Request, body: DecisionPreviewRequest
+        ) -> DecisionPreviewResponse:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            config = settings.load()
+            try:
+                symbol = resolve_symbol(body.symbol)
+            except SymbolError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            if not symbol.tradeable:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Indices can be used as context but not decided on.",
+                )
+            try:
+                report, is_realtime, vendor_daily, vendor_quotes, notes = (
+                    _technical_report_for(database_path, config, symbol, body.timeframe)
+                )
+            except PipelineError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            freshness = "realtime_kite" if is_realtime else "delayed_yfinance"
+            state = build_decision_state(report, data_freshness=freshness)
+            model_router = ModelRouter(settings, prompts=PromptStore(database_path))
+            try:
+                outcome = model_router.decide(
+                    "watchlist_screener", state=state, battery=SCREENER
+                )
+            except DecisionUnavailable as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            screener = decision_policy_for(config).compose_screener(outcome.judgments)
+            use = model_router.routes_used[-1] if model_router.routes_used else None
+            route = DecisionRouteStatus(
+                tier=outcome.tier if use is None else use.tier,
+                provider=outcome.provider if use is None else use.provider,
+                model=outcome.model if use is None else use.model,
+                decision_source=outcome.source if use is None else use.decision_source,
+                fallback_used=(
+                    outcome.fallback_used if use is None else use.fallback_used
+                ),
+                fallback_from=(
+                    outcome.fallback_from if use is None else use.fallback_from
+                ),
+                latency_ms=None if use is None else use.latency_ms,
+                request_id=None if use is None else use.request_id,
+                model_mismatch=(
+                    outcome.judgments.model_mismatch
+                    if use is None
+                    else use.model_mismatch
+                ),
+                state_hash=outcome.state_hash if use is None else use.state_hash,
+            )
+            return DecisionPreviewResponse(
+                symbol=state.symbol,
+                timeframe=state.timeframe,
+                as_of=state.as_of,
+                decision_preview=config.decision_preview,
+                data_provenance=AnalysisProvenance(
+                    vendor_daily=vendor_daily,
+                    vendor_quotes=vendor_quotes,
+                    is_realtime=is_realtime,
+                    data_freshness=freshness,
+                ),
+                state=state.to_state_dict(),
+                judgments=[
+                    DecisionJudgmentStatus(
+                        name=name,
+                        kind=answer.kind.value,
+                        choice=answer.choice,
+                        score=answer.score,
+                        noul=answer.noul,
+                        confidence=answer.confidence,
+                    )
+                    for name, answer in outcome.judgments.answers
+                ],
+                screener=DecisionScreenerStatus(
+                    verdict=screener.verdict.value,
+                    reason=screener.reason,
+                    quality=screener.quality,
+                    worth=screener.worth,
+                    confidence=screener.confidence,
+                ),
+                route=route,
+                notes=list(notes),
+            )
 
         @app.get("/api/v1/news/digest")
         def news_digest(request: Request) -> NewsDigest:

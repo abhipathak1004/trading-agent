@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 import uvicorn
 
+from bq.agent_prompts import PromptStore
 from bq.analysis.debate import Debate
 from bq.analysis.decision import trade_plan_from_json
 from bq.analysis.pipeline import AnalysisPipeline
@@ -287,7 +288,23 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         choices=[item.value for item in DelayedDataMode],
     )
-    args = parser.parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    # Opaque record ids are URL-safe and may begin with "-", which argparse would
+    # read as an option. Parse a safe placeholder, then restore the real id, so
+    # options after the positional still parse normally.
+    dashed_record_id: str | None = None
+    if (
+        len(arguments) >= 3
+        and arguments[0] == "data"
+        and arguments[1] == "inspect-snapshot"
+        and arguments[2].startswith("-")
+        and arguments[2] != "--"
+    ):
+        dashed_record_id = arguments[2]
+        arguments[2] = "_pending_record_id"
+    args = parser.parse_args(arguments)
+    if dashed_record_id is not None:
+        args.record_id = dashed_record_id
 
     try:
         home = _default_home()
@@ -701,12 +718,15 @@ def main(argv: list[str] | None = None) -> int:
                 settings_store = SettingsStore(path)
                 config = settings_store.load()
                 router = build_analysis_router(path, config)
+                prompts = PromptStore(path)
                 if config.any_tier_configured:
-                    caller = RoutedModelCaller(ModelRouter(settings_store))
+                    caller = RoutedModelCaller(
+                        ModelRouter(settings_store, prompts=prompts)
+                    )
                     pipeline = AnalysisPipeline(
                         router,
-                        debate=Debate(caller),
-                        risk_analyst=RiskAnalyst(caller),
+                        debate=Debate(caller, prompts=prompts),
+                        risk_analyst=RiskAnalyst(caller, prompts=prompts),
                         routing=caller,
                     )
                 else:
@@ -717,10 +737,16 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     pipeline = AnalysisPipeline(
                         router,
-                        debate=Debate(service) if service is not None else None,
-                        risk_analyst=RiskAnalyst(service)
-                        if service is not None
-                        else None,
+                        debate=(
+                            Debate(service, prompts=prompts)
+                            if service is not None
+                            else None
+                        ),
+                        risk_analyst=(
+                            RiskAnalyst(service, prompts=prompts)
+                            if service is not None
+                            else None
+                        ),
                     )
                 analysis = pipeline.run(
                     symbol=resolve_symbol(args.symbol),

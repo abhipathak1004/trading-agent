@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from bq.agent_prompts import PromptSource, resolve_prompt
 from bq.analysis.debate import (
     DebateUnavailable,
     ModelCaller,
@@ -48,11 +49,17 @@ class RiskAssessment:
 class RiskAnalyst:
     """Describes what would invalidate a setup. Does not decide anything."""
 
-    def __init__(self, caller: ModelCaller) -> None:
+    def __init__(
+        self, caller: ModelCaller, *, prompts: PromptSource | None = None
+    ) -> None:
         self._caller = caller
+        self._prompts = prompts
 
     def assess(self, report: TechnicalReport) -> RiskAssessment:
-        prompt = RISK_TEMPLATE.format(
+        system, template = resolve_prompt(
+            self._prompts, "risk_analyst", RISK_SYSTEM, RISK_TEMPLATE
+        )
+        prompt = template.format(
             symbol=report.symbol,
             timeframe=report.timeframe,
             as_of=report.as_of.isoformat(),
@@ -61,7 +68,7 @@ class RiskAnalyst:
         try:
             outcome = self._caller.complete(
                 prompt=prompt,
-                system=RISK_SYSTEM,
+                system=system,
                 task_id="analysis.risk",
                 task_version="v1",
             )

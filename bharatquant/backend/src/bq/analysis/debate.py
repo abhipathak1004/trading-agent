@@ -23,6 +23,7 @@ import json
 from dataclasses import dataclass
 from typing import Protocol
 
+from bq.agent_prompts import PromptSource, resolve_prompt
 from bq.analysis.prompts import (
     BEAR_SYSTEM,
     BEAR_TEMPLATE,
@@ -146,8 +147,11 @@ def confidence_ceiling(report: TechnicalReport) -> float:
 class Debate:
     """Runs rounds of bull/bear adversarial review and a judge verdict."""
 
-    def __init__(self, caller: ModelCaller) -> None:
+    def __init__(
+        self, caller: ModelCaller, *, prompts: PromptSource | None = None
+    ) -> None:
         self._caller = caller
+        self._prompts = prompts
 
     def _call(self, *, prompt: str, system: str, task_id: str) -> str:
         try:
@@ -164,16 +168,27 @@ class Debate:
         return text
 
     def _side(
-        self, report: TechnicalReport, *, system: str, template: str, side: str
+        self,
+        report: TechnicalReport,
+        *,
+        agent_id: str,
+        system: str,
+        template: str,
+        side: str,
     ) -> Argument:
-        prompt = template.format(
+        resolved_system, resolved_template = resolve_prompt(
+            self._prompts, agent_id, system, template
+        )
+        prompt = resolved_template.format(
             symbol=report.symbol,
             timeframe=report.timeframe,
             as_of=report.as_of.isoformat(),
             facts="\n".join(report.facts()),
         )
         payload = _extract_json(
-            self._call(prompt=prompt, system=system, task_id=f"analysis.{side}")
+            self._call(
+                prompt=prompt, system=resolved_system, task_id=f"analysis.{side}"
+            )
         )
         return Argument(
             side=side,
@@ -185,12 +200,20 @@ class Debate:
 
     def bull(self, report: TechnicalReport) -> Argument:
         return self._side(
-            report, system=BULL_SYSTEM, template=BULL_TEMPLATE, side="bull"
+            report,
+            agent_id="bull_debater",
+            system=BULL_SYSTEM,
+            template=BULL_TEMPLATE,
+            side="bull",
         )
 
     def bear(self, report: TechnicalReport) -> Argument:
         return self._side(
-            report, system=BEAR_SYSTEM, template=BEAR_TEMPLATE, side="bear"
+            report,
+            agent_id="bear_debater",
+            system=BEAR_SYSTEM,
+            template=BEAR_TEMPLATE,
+            side="bear",
         )
 
     def judge(
@@ -201,7 +224,10 @@ class Debate:
         bear: Argument,
         ceiling: float,
     ) -> Verdict:
-        prompt = JUDGE_TEMPLATE.format(
+        judge_system, judge_template = resolve_prompt(
+            self._prompts, "research_judge", JUDGE_SYSTEM, JUDGE_TEMPLATE
+        )
+        prompt = judge_template.format(
             symbol=report.symbol,
             timeframe=report.timeframe,
             as_of=report.as_of.isoformat(),
@@ -211,7 +237,7 @@ class Debate:
             bear=json.dumps(bear.to_dict(), ensure_ascii=False),
         )
         payload = _extract_json(
-            self._call(prompt=prompt, system=JUDGE_SYSTEM, task_id="analysis.judge")
+            self._call(prompt=prompt, system=judge_system, task_id="analysis.judge")
         )
         verdict = _bounded(payload.get("verdict"), limit=8, label="verdict").upper()
         if verdict not in {"BUY", "HOLD"}:

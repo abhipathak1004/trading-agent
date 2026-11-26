@@ -39,7 +39,7 @@ def _tiers() -> dict[TierName, TierConfig]:
     return {
         TierName.DECISION: TierConfig(
             provider=Provider.TYPESAFE_JEV,
-            model="jev-1.14",
+            model="jev-1.14.0",
             temperature=0.0,
             max_tokens=1,
             timeout_ms=3000,
@@ -65,7 +65,7 @@ def _save(
     tiers = _tiers()
     tiers[TierName.DECISION] = TierConfig(
         provider=decision_provider,
-        model="jev-1.14",
+        model="jev-1.14.0",
         temperature=0.0,
         max_tokens=1,
         timeout_ms=3000,
@@ -86,7 +86,7 @@ def test_defaults_keep_the_legacy_route_and_preview_heuristic(tmp_path: Path) ->
     assert config.model_route_configured is False
     assert config.any_tier_configured is False
     assert config.tier(TierName.DECISION) is not None
-    assert config.tier(TierName.DECISION).model == "jev-1.14"  # type: ignore[union-attr]
+    assert config.tier(TierName.DECISION).model == "jev-1.14.0"  # type: ignore[union-attr]
     assert config.decision_preview == "heuristic"
     assert config.route_for("bull_debater").tier is TierName.REASONING
     assert config.route_for("unknown_agent").tier is TierName.REASONING
@@ -161,7 +161,7 @@ def test_legacy_config_rejects_typesafe_jev(tmp_path: Path) -> None:
     with pytest.raises(SettingsError, match="Models"):
         store.save_config(
             provider=Provider.TYPESAFE_JEV,
-            model_name="jev-1.14",
+            model_name="jev-1.14.0",
             news_feed_url="https://example.com/feed.xml",
             news_memory_ttl_days=30,
         )

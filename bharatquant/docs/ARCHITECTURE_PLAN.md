@@ -1,6 +1,6 @@
 # Architecture plan: 3-tier model routing and the multi-agent system
 
-**Version:** 1.1 · **Date:** 2026-11-26 · **Status:** approved for Phase 2
+**Version:** 1.3 · **Date:** 2026-11-26 · **Status:** approved for Phase 2
 **Scope:** audit of the existing BharatQuant analysis stack and the target
 architecture for a config-driven three-tier model router, Jev-preferred decision
 layer, specialist agents, four-layer memory and a deterministic execution seam.
@@ -14,6 +14,7 @@ any external provider capability is verified; see
 
 | Version | Date | Change |
 |---|---|---|
+| 1.3 | 2026-11-26 | Added Agent Lab: a decision-preview surface and append-only, template-validated prompt versions for the active text agents plus the decision fallback. Question sets, options, thresholds and risk rules stay code-owned. |
 | 1.2 | 2026-11-26 | Studied the production Jev reference `buberlo/jev-trader` (MIT) and adopted its separation: dense deterministic `DecisionState` → one atomic Choice/Noul/Score battery → code-owned `DecisionPolicy` → hard risk vetoes → calibration triples. Added a deterministic `HeuristicJudge` fallback, pinned-model/latency/request-id capture, deadline-aware no-retry, and ECE/reliability/Platt calibration. |
 | 1.1 | 2026-11-26 | Jev made optional: decision questions run on Jev when configured and reachable, otherwise on the configured Flash/Reasoning tier as validated JSON, otherwise deterministically (`RULES_ONLY`). Added the availability ladder and Brier bucketing by decision source. |
 | 1.0 | 2026-11-26 | Initial audit and target architecture. |
@@ -34,6 +35,7 @@ any external provider capability is verified; see
 | Run audit | `bq/analysis/run_settings.py`, migration `025` | Immutable per-run record with plan hash and `detail_json` (64 KiB). |
 | News | `bq/news.py`, `bq/news_agent.py`, migration `022` | Deterministic RSS ingest, dedupe, keyword classification, `agent_memories` with `known_at/expires_at`. |
 | Market data | `bq/data/vendors/*`, `bq/data/symbols.py` | Per-domain chains; Yahoo default; Kite read-only when enabled (ADR-013). |
+| Prompt config | `bq/agent_prompts.py`, migration `027` | Append-only versions; code defaults; template placeholder validation. |
 | Execution | `bq/execution/paper_executor.py` | Paper orders only, behind `evaluate_pretrade`. |
 | Scoring | `bq/reports/scoring.py` | Brier/log-loss/Wilson helpers; offline only, unwired. |
 
@@ -55,7 +57,7 @@ rather than kills a run.
 
 | Tier | Purpose | Default | Fallback |
 |---|---|---|---|
-| `decision` | Choice / Score / Noul answers | TypeSafe Jev `jev-1.14` | Flash → Reasoning → deterministic heuristic → `RULES_ONLY` |
+| `decision` | Choice / Score / Noul answers | TypeSafe Jev `jev-1.14.0` | Flash → Reasoning → deterministic heuristic → `RULES_ONLY` |
 | `reasoning` | Thesis synthesis, debate, reflection | `gemini-2.5-pro` | Flash |
 | `flash` | Extraction, summarisation, formatting | `gemini-2.5-flash` | Reasoning |
 

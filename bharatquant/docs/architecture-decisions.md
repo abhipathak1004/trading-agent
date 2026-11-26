@@ -501,3 +501,42 @@ losing the run. The cost is more modules and a calibration store, but each has a
 single responsibility and can be tested without a network or a model. Thresholds
 are reviewable in code/config rather than buried in prompts, and fallback quality
 is measured instead of assumed.
+
+## ADR-019: Prompts are versioned configuration; contracts and thresholds are code
+
+**Status:** Accepted; Agent Lab implements it.
+
+**Context:** The owner needs to refine agent wording without editing code, but the
+analysis agents depend on fixed JSON shapes and on deterministic numbers. A free
+text editor that can silently remove a placeholder would turn a prompt
+refinement into a runtime `KeyError`; letting a prompt change thresholds or the
+decision question set would move policy out of code. The Agent Lab also needs to
+be useful before Phase 3 adds the specialist agents.
+
+**Decision:** Prompts are editable configuration, with these boundaries.
+
+- Defaults live in `bq/agent_prompts.py` (imported from
+  `bq/analysis/prompts.py`), so the code remains the baseline.
+- Every save appends a version to `agent_prompts` (migration `027`). Rows are
+  immutable and cannot be deleted; "reset" writes the default text as a new
+  version. The save is audited with a content hash, never the prompt text.
+- A template must keep every required placeholder for its agent and must not
+  introduce unknown fields; it is format-checked with sample values before it is
+  stored. This is what keeps a refinement from breaking a live run.
+- `Debate`, `RiskAnalyst` and `ModelRouter` accept a `PromptSource`; the API and
+  CLI pass `PromptStore`. A missing or broken store falls back to the code
+  default rather than failing a run.
+- Editable today: bull, bear, research judge, risk analyst, and the
+  decision-screener LLM fallback system prompt. **Not editable:** the decision
+  question names, option labels, score levels, answer types, policy thresholds,
+  size scales and risk limits. Jev question text remains a code contract.
+- The new Agent Lab tab exposes both the decision preview and the prompt editor.
+  `POST /api/v1/decision/preview` is owner-only, origin- and CSRF-checked and
+  never places an order.
+
+**Consequences:** The owner can test the decision layer and refine wording from
+the browser, and every refinement is reviewable and reversible. The cost is a
+small store and injection surface; because defaults are code and the store is
+append-only, a bad prompt cannot erase the baseline. Phase 3 agents will add
+their prompt definitions to the same registry instead of inventing another
+configuration path.
