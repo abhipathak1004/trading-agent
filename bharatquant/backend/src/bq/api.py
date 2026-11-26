@@ -1,3 +1,4 @@
+import asyncio
 import re
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -8,7 +9,14 @@ from pathlib import Path
 from secrets import token_urlsafe
 from typing import Literal, Protocol, runtime_checkable
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
@@ -154,6 +162,7 @@ from bq.research_expansion import (
     ThesisEventRecord,
 )
 from bq.risk.policy import KillSwitchLevel, RiskLimits
+from bq.runtime import inspect_runtime, metrics_text
 from bq.schedules import (
     DailySchedule,
     IntervalSchedule,
@@ -204,6 +213,36 @@ ALLOWED_ORIGIN = "http://127.0.0.1:8000"
 
 class Health(BaseModel):
     status: str
+
+
+class RuntimeJobsStatus(BaseModel):
+    pending: int
+    running: int
+    failed: int
+    stale: int
+    failed_24h: int
+    last_event_at: str | None
+
+
+class RuntimeCountsStatus(BaseModel):
+    reports: int
+    research_notes: int
+    paper_orders: int
+    predictions: int
+
+
+class RuntimeStatus(BaseModel):
+    status: str
+    database: str
+    database_bytes: int
+    wal_bytes: int
+    free_disk_bytes: int
+    migration_count: int
+    integrity: str
+    jobs: RuntimeJobsStatus
+    counts: RuntimeCountsStatus
+    issues: list[str]
+    checked_at: datetime
 
 
 class LoginRequest(BaseModel):
@@ -1989,6 +2028,7 @@ def create_app(
                 "/api/v1/news/",
                 "/api/v1/schedules",
                 "/api/v1/settings/",
+                "/api/v1/system/",
                 "/api/v1/paper/",
                 "/api/v1/tools/",
                 "/api/v1/agent/",
@@ -2360,6 +2400,55 @@ def create_app(
                 ],
                 provider_connected=settings.load().api_keys_configured,
             )
+
+        @app.get("/api/v1/system/status")
+        def system_status(request: Request) -> RuntimeStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                payload = inspect_runtime(database_path)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return RuntimeStatus.model_validate(payload)
+
+        @app.get("/api/v1/system/metrics")
+        def system_metrics(request: Request) -> Response:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            payload = inspect_runtime(database_path)
+            return Response(
+                content=metrics_text(payload),
+                media_type="text/plain; version=0.0.4",
+            )
+
+        @app.websocket("/api/v1/events")
+        async def runtime_events(websocket: WebSocket) -> None:
+            if auth.csrf_for_session(websocket.cookies.get(COOKIE_NAME)) is None:
+                await websocket.close(code=1008)
+                return
+            await websocket.accept()
+            last_payload: dict[str, object] | None = None
+            last_sent: datetime | None = None
+            try:
+                while True:
+                    payload = await asyncio.to_thread(inspect_runtime, database_path)
+                    now = datetime.now(UTC)
+                    if (
+                        payload != last_payload
+                        or last_sent is None
+                        or now - last_sent >= timedelta(seconds=15)
+                    ):
+                        await websocket.send_json({"type": "runtime", "data": payload})
+                        last_payload = payload
+                        last_sent = now
+                    try:
+                        await asyncio.wait_for(websocket.receive_text(), timeout=5)
+                    except TimeoutError:
+                        continue
+            except WebSocketDisconnect:
+                return
+            except Exception:  # noqa: BLE001 - closing a broken socket is enough
+                await websocket.close(code=1011)
 
         @app.get("/api/v1/paper/accounts/{account_id}")
         def paper_account_status(

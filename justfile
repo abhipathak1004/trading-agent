@@ -29,6 +29,17 @@ doctor:
 serve:
     cd bharatquant && uv run --locked bq serve
 
+bench:
+    cd bharatquant && uv run --locked bq bench
+
+# Verified backup: just backup ~/Backups/bq-2026-11-26.db
+backup output:
+    cd bharatquant && uv run --locked bq db backup --output {{output}}
+
+# Restore is destructive: just restore ~/Backups/bq-2026-11-26.db
+restore backup:
+    cd bharatquant && uv run --locked bq db restore --backup {{backup}} --confirm
+
 run: build init doctor
     cd bharatquant && uv run --locked bq serve
 

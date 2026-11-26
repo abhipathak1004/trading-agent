@@ -59,6 +59,7 @@ from bq.model_router import ModelRouter, RoutedModelCaller, decision_policy_for
 from bq.news import NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
 from bq.risk.policy import KillSwitchLevel, RiskLimits
+from bq.runtime import backup_database, benchmark, restore_database
 from bq.settings import SettingsStore
 
 
@@ -86,6 +87,14 @@ def main(argv: list[str] | None = None) -> int:
         dest="db_action", required=True
     )
     db_actions.add_parser("migrate", help="Apply pending database migrations.")
+    db_backup = db_actions.add_parser("backup", help="Write a verified SQLite backup.")
+    db_backup.add_argument("--output", required=True, help="Backup file path.")
+    db_restore = db_actions.add_parser(
+        "restore", help="Restore a verified SQLite backup."
+    )
+    db_restore.add_argument("--backup", required=True, help="Backup file path.")
+    db_restore.add_argument("--confirm", action="store_true", required=True)
+    actions.add_parser("bench", help="Run deterministic operational benchmarks.")
     calendar_actions = actions.add_parser("calendar").add_subparsers(
         dest="calendar_action", required=True
     )
@@ -320,11 +329,22 @@ def main(argv: list[str] | None = None) -> int:
             count = migrate(path, create=True)
             print(f"Initialized {path} ({count} migration(s) applied).")
         elif args.action == "db":
-            count = migrate(path)
-            print(f"Applied {count} migration(s).")
+            if args.db_action == "backup":
+                backup_payload = backup_database(path, Path(args.output).expanduser())
+                print(json.dumps(backup_payload, indent=2, sort_keys=True))
+            elif args.db_action == "restore":
+                restore_payload = restore_database(
+                    Path(args.backup).expanduser(), path, confirm=args.confirm
+                )
+                print(json.dumps(restore_payload, indent=2, sort_keys=True))
+            else:
+                count = migrate(path)
+                print(f"Applied {count} migration(s).")
         else:
             check_database(path)
-            if args.action == "doctor":
+            if args.action == "bench":
+                print(json.dumps(benchmark(), indent=2, sort_keys=True))
+            elif args.action == "doctor":
                 print("SQLite migration history, WAL and integrity: OK")
                 if (sys.platform, platform.machine()) != ("darwin", "arm64"):
                     print(

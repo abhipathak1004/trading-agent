@@ -7,6 +7,7 @@ import SnapshotFreshness from "./SnapshotFreshness";
 import ScheduleStatus from "./ScheduleStatus";
 import UsageStatus from "./UsageStatus";
 import MemoryCalibrationPanel from "./MemoryCalibrationPanel";
+import RuntimePanel from "./RuntimePanel";
 import PaperAccountStatus from "./PaperAccountStatus";
 import ResearchPanel from "./ResearchPanel";
 import ReportsPanel from "./ReportsPanel";
@@ -584,6 +585,7 @@ export default function App() {
               <CalendarCoverage />
               <UsageStatus />
               <MemoryCalibrationPanel csrfToken={session.csrfToken} />
+              <RuntimePanel />
             </div>
           </section>
         )}

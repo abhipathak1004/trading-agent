@@ -6,45 +6,51 @@ task. History lives in git and
 
 ## Current state
 
+- Startup fixed (26 Nov 2026): the local dev DB had been initialised from a
+  pre-commit draft of `034_reports.sql` (its `prediction_details.kind` CHECK
+  lacked `STANCE`), so `bq init`/`doctor` aborted with "Migration history
+  differs". Repaired in place; owner password, Gemini key and settings preserved.
+  Backup at `~/Library/Application Support/BharatQuant/bq.db.bak-*`. A fresh DB
+  applies all 37 migrations cleanly. `_applied_count` now names the first
+  divergent migration.
 - Single-owner, paper-only Indian equities system. **No broker order path**; Kite
   is read-only. Paper execution is the only execution path.
-- Phases 1–18 are implemented and acceptance-tested: decision/Jev layer, agents,
-  Strategy desk, paper execution/realism, all four memory layers, confidence,
-  opportunities/shadows, scheduler, reports, backtests, and point-in-time
-  research dossiers with deterministic valuation and claim review.
-- **Verification:** 862 backend tests, 109 frontend tests; ruff/format clean;
+- Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
+  execution/realism, memory, confidence, opportunities/shadows, scheduler,
+  reports, backtests, research dossiers and runtime hardening.
+- **Verification:** 868 backend tests, 112 frontend tests; ruff/format clean;
   frontend typecheck/build clean; fresh DB applies **37 migrations**.
 - **mypy:** 25 pre-existing errors in `cli.py`, `paper_performance.py` and
-  `infra/scheduler.py`. Do not “fix” them as part of the next task.
-- **Next migration number:** `038`.
+  `infra/scheduler.py`. Do not “fix” them as part of maintenance.
+- **Next migration number:** `038` if a new migration is needed.
 
-## Phase 18 delivered
+## Phase 19 delivered
 
-- Migration `037_research_expansion.sql`: append-only `research_notes`,
-  `fundamental_snapshots`, `thesis_events`, `research_claims` and
-  `research_claim_reviews`.
-- `bq/research_expansion.py`: point-in-time notes (NEWS/YouTube/XBRL/FILING/OWNER)
-  with publication and known-at bounds; news-item import; thesis evidence and
-  invalidation events; owner claim review queue; dossier assembly.
-- `bq/fundamentals.py`: deterministic XBRL/owner fundamental snapshots, ratios
-  and integer-paise DCF. Model text never supplies these numbers.
-- `NewsStore.get` supports converting an ingested item into a research note.
-- API: notes, fundamentals, dossier, theses/events and claim review. Owner auth;
-  writes require CSRF; reads are `no-store`.
-- Research page: dossier lookup, point-in-time note form, XBRL/fundamental
-  snapshot form, thesis evidence display and claim accept/reject.
-- Tests: note point-in-time/future rejection, ratios/DCF determinism, thesis
-  evidence, claim review, dossier/API and UI contracts.
-- Fixed App restoration: Reports and Backtests page sections remain wired.
+- `bq/runtime.py`: owner runtime snapshot (DB/WAL/free disk, integrity,
+  migration count, job leases/stale jobs, table counts), Prometheus text metrics,
+  verified online SQLite backup with SHA-256 manifest, guarded restore with a
+  `bq.db.pre-restore` copy, and deterministic `bq bench` smoke timings.
+- CLI: `bq db backup`, `bq db restore --confirm`, `bq bench`; just targets
+  `bench`, `backup` and `restore`.
+- API: `GET /api/v1/system/status`, `GET /api/v1/system/metrics` and the
+  owner-authenticated `WS /api/v1/events` runtime snapshot feed.
+- Today page: Runtime card for health, storage, job leases and issues.
+- `docs/runtime-operations.md`: launchd/caffeinate, sleep/wake, backup/restore,
+  metrics and failure policy.
+- Tests: health/stale lease, backup/restore round-trip, metrics, WebSocket
+  snapshot, CLI commands and frontend contract.
 
-## Task 19 — hardening and runtime (next)
+## Remaining roadmap
 
-1. WebSocket/event feed for job, paper and research updates.
-2. Metrics/health endpoints and a lightweight benchmark suite.
-3. Backup/restore and retention checks for SQLite/WAL and report archives.
-4. Sleep/wake and launchd guidance without duplicate workers.
-5. Chaos/E2E checks for worker leases, restarts and stale schedules.
-6. Migration `038_*` if needed; update this handoff and add an ADR.
+The original phase roadmap ends here. There is no Phase 20. Future work is
+maintenance/optional breadth:
+
+1. Playwright browser E2E and longer chaos runs.
+2. Full XBRL/PDF ingestion and YouTube transcript extraction.
+3. Deeper walk-forward optimization and strategy-to-Trade promotion.
+4. Automated backup scheduling/retention and external alerting.
+5. Live broker integration only with a new explicit ADR; current boundary forbids
+   it.
 
 ## Invariants
 
@@ -57,18 +63,19 @@ task. History lives in git and
   immutable; reviews/events are append-only.
 - One lease/fencing job store; run handlers only in the worker.
 - Owner auth, origin + CSRF on writes, `no-store` private reads.
+- Backups are read-only snapshots; restore requires explicit confirmation.
 - Schedule times/windows are configuration, never UI hard-coding.
 
 ## Relevant module map
 
 | Area | Files |
 |---|---|
-| Research | `bq/research.py`, `bq/research_expansion.py`, migration `037` |
-| Fundamentals | `bq/fundamentals.py` |
-| Strategies/backtests | `bq/strategy_dsl.py`, `bq/strategy_store.py`, `bq/backtest.py` |
+| Runtime | `bq/runtime.py`, `bq/cli.py`, `web/src/RuntimePanel.tsx` |
+| Operations | `docs/runtime-operations.md`, `justfile` |
+| API/WS | `bq/api.py` system status/metrics/events |
+| Research | `bq/research_expansion.py`, `bq/fundamentals.py` |
+| Strategies | `bq/strategy_dsl.py`, `bq/backtest.py` |
 | Execution | `bq/paper_trading.py`, `bq/execution/` |
-| API/UI | `bq/api.py`, `web/src/ResearchDossierPanel.tsx` |
-| Tests | `tests/test_research_*.py`, `test_backtest*.py` |
 
 ## Commands
 
@@ -82,8 +89,7 @@ PYTHONPATH=backend/src uv run --locked mypy backend/src/bq
 cd web
 npm test && npm run typecheck && npm run build
 
-# fresh DB
-tmp=$(mktemp -d)
-BQ_HOME="$tmp" PYTHONPATH=backend/src uv run --locked bq init
-BQ_HOME="$tmp" PYTHONPATH=backend/src uv run --locked bq doctor
+# operations
+BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq bench
+BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq db backup --output "$HOME/Backups/bq.db"
 ```

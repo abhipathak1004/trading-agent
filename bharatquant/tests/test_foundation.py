@@ -125,8 +125,23 @@ def test_doctor_rejects_edited_migration_history(
     monkeypatch.setenv("BQ_HOME", str(tmp_path))
     assert main(["init"]) == 0
     with closing(sqlite3.connect(tmp_path / "bq.db")) as connection, connection:
-        connection.execute("UPDATE schema_migrations SET checksum = 'different'")
+        connection.execute(
+            "UPDATE schema_migrations SET checksum = 'different' WHERE version = 34"
+        )
     assert main(["doctor"]) == 1
+
+
+def test_migration_history_error_names_the_divergent_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "bq.db"
+    assert database.migrate(path, create=True) == len(database.packaged_migrations())
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute(
+            "UPDATE schema_migrations SET checksum = 'different' WHERE version = 34"
+        )
+    with pytest.raises(database.DatabaseError, match=r"at 034 034_reports\.sql"):
+        database.check_database(path)
 
 
 def test_loopback_health_does_not_claim_trading_readiness() -> None:

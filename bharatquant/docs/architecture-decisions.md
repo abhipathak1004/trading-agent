@@ -1380,3 +1380,34 @@ calculations are auditable. v1 accepts owner-supplied XBRL-shaped facts rather
 than parsing XBRL documents, supports YouTube metadata/notes rather than video
 transcription, and has no automatic thesis invalidation rule; each can be added
 without changing the immutable note/snapshot contracts.
+
+## ADR-046: Runtime status is read-only; restore is explicit
+
+**Status:** Accepted; Phase 19 implements it.
+
+**Context:** Operational checks must not become a second execution path. A backup
+or event feed that mutates accounting, or a restore that silently overwrites the
+live database, would invalidate the paper audit trail.
+
+**Decision:** Keep runtime tooling read-only except for the explicitly confirmed
+restore.
+
+- `bq/runtime.py` reads DB/WAL sizes, migration count, job counts, stale leases,
+  table counts and disk headroom. It never changes job state; lease recovery stays
+  in `JobRunStore`.
+- `/api/v1/system/status` and `/api/v1/system/metrics` are owner-only and
+  `no-store`. `/api/v1/events` is an owner-authenticated WebSocket carrying
+  bounded runtime snapshots, not a job queue or trading feed.
+- Backups use SQLite's online backup API into a new file, verify integrity and
+  write a SHA-256 manifest. Restore requires `--confirm`, validates the backup,
+  copies the current DB to `bq.db.pre-restore`, and re-runs integrity/migration
+  checks.
+- `bq bench` measures deterministic hashing/timestamp parsing only; it is an
+  operational smoke check, not a performance claim.
+- Operational guidance lives in `docs/runtime-operations.md`; launchd starts one
+  server/worker, and caffeinate does not create a second runtime.
+
+**Consequences:** Operators can inspect and recover the runtime without bypassing
+the lease or accounting contracts. v1 has no persisted WebSocket event log,
+automated backup retention, Playwright E2E or external alerting; those are
+maintenance extensions, not changes to the immutable data boundaries.
