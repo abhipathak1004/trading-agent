@@ -23,6 +23,7 @@ from bq.agent_prompts import (
 )
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.debate import Debate
+from bq.analysis.decision import TradePlan, TradePlanError, trade_plan_from_json
 from bq.analysis.evidence import EvidenceVerifier
 from bq.analysis.final_gate import FinalGate
 from bq.analysis.fundamental import FundamentalEventsAgent
@@ -41,7 +42,7 @@ from bq.auth import (
     OwnerAuth,
     OwnerNotConfigured,
 )
-from bq.core import canonical_digest
+from bq.core import CurrencyPaise, Quantity, canonical_digest
 from bq.data.calendar import (
     ExchangeCalendar,
     SessionClass,
@@ -61,6 +62,17 @@ from bq.data.vendors import DataDomain
 from bq.data.yahoo import YahooDataClient, YahooError
 from bq.decision.battery import SCREENER
 from bq.decision.state import build_decision_state
+from bq.execution import (
+    ExecutionAdapter,
+    ExecutionContextError,
+    ExecutionDisabled,
+    ExecutionMode,
+    ExecutionOutcome,
+    ExecutionSnapshot,
+    PaperExecutorError,
+    build_execution_adapter,
+    build_execution_context,
+)
 from bq.infra.jobs import JobRunStore
 from bq.infra.model_attempts import ModelAttemptStore, TokenUsage
 from bq.infra.scheduler import SchedulerLoop, SchedulerRunner
@@ -88,10 +100,20 @@ from bq.model_router import (
 from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
 from bq.paper_accounts import (
+    PaperAccountBalance,
+    PaperAccountError,
     PaperAccountStatus,
     PaperAccountStore,
 )
+from bq.paper_trading import (
+    PaperOrder,
+    PaperOrderType,
+    PaperSide,
+    PaperTradingError,
+    PaperTradingStore,
+)
 from bq.research_agent import ResearchAgent
+from bq.risk.policy import KillSwitchLevel, RiskLimits
 from bq.schedules import (
     DailySchedule,
     IntervalSchedule,
@@ -228,6 +250,140 @@ class PaperAccountStatusResponse(BaseModel):
     deposited_paise: str
     withdrawn_paise: str
     balance_paise: str
+
+
+class PaperAccountListResponse(BaseModel):
+    accounts: list[PaperAccountStatusResponse]
+
+
+class PaperAccountCreateRequest(BaseModel):
+    account_id: str = Field(min_length=1, max_length=128, strict=True)
+    name: str = Field(min_length=1, max_length=128, strict=True)
+    opening_balance_paise: int = Field(gt=0, le=10**13, strict=True)
+
+
+class PaperPositionStatus(BaseModel):
+    instrument_id: str
+    quantity: int
+
+
+class PaperOrderStatus(BaseModel):
+    order_id: str
+    account_id: str
+    instrument_id: str
+    client_order_id: str
+    side: str
+    order_type: str
+    quantity: int
+    limit_price_paise: str | None
+    status: str
+    filled_quantity: int
+    created_at: datetime
+
+
+class PaperBookResponse(BaseModel):
+    account: PaperAccountStatusResponse
+    positions: list[PaperPositionStatus]
+    orders: list[PaperOrderStatus]
+
+
+class PaperFillRequest(BaseModel):
+    quantity: int = Field(gt=0, le=10**9, strict=True)
+    price_paise: int = Field(gt=0, le=10**13, strict=True)
+    idempotency_key: str = Field(min_length=1, max_length=128, strict=True)
+
+
+class PaperExitRequest(BaseModel):
+    quantity: int = Field(gt=0, le=10**9, strict=True)
+    price_paise: int = Field(gt=0, le=10**13, strict=True)
+    client_order_id: str = Field(min_length=1, max_length=128, strict=True)
+
+
+class PaperFillStatus(BaseModel):
+    fill_id: str
+    order_id: str
+    quantity: int
+    price_paise: str
+    filled_at: datetime
+    idempotency_key: str
+
+
+class PaperFillResponse(BaseModel):
+    order: PaperOrderStatus
+    fill: PaperFillStatus
+
+
+class PaperReconciliationStatus(BaseModel):
+    account_id: str
+    order_count: int
+    fill_count: int
+    ledger_debit_paise: str
+    ledger_credit_paise: str
+    position_count: int
+
+
+class ExecutionLimitsRequest(BaseModel):
+    max_symbol_exposure_paise: int = Field(ge=0, le=10**13, strict=True)
+    max_open_positions: int = Field(ge=0, le=1_000, strict=True)
+    max_daily_loss_paise: int = Field(ge=0, le=10**13, strict=True)
+    max_weekly_loss_paise: int = Field(ge=0, le=10**13, strict=True)
+    max_monthly_loss_paise: int = Field(ge=0, le=10**13, strict=True)
+    max_order_rate_per_minute: int = Field(ge=1, le=1_000, strict=True)
+
+
+class ExecutionRequest(BaseModel):
+    account_id: str = Field(min_length=1, max_length=128, strict=True)
+    plan: dict[str, object]
+    mode: Literal["PAPER", "KITE_SANDBOX", "LIVE_APPROVAL"] = "PAPER"
+    limits: ExecutionLimitsRequest
+    kill_switch: Literal[
+        "NONE",
+        "PAUSE_STRATEGY",
+        "FLATTEN_STRATEGY",
+        "PAUSE_HORIZON",
+        "HALT_ACCOUNT",
+        "FLATTEN_ALL",
+    ] = "NONE"
+    session_open_override: bool | None = None
+
+
+class ExecutionPlaceRequest(ExecutionRequest):
+    client_order_id: str = Field(min_length=1, max_length=128, strict=True)
+
+
+class ExecutionFreshnessStatus(BaseModel):
+    usable: bool
+    label: str
+    age_seconds: float
+
+
+class ExecutionContextStatus(BaseModel):
+    account_id: str
+    account_name: str
+    available_cash_paise: str
+    balance_paise: str
+    open_positions: int
+    symbol_exposure_paise: str
+    daily_loss_paise: str
+    weekly_loss_paise: str
+    monthly_loss_paise: str
+    orders_this_minute: int
+    kill_switch: str
+    instrument_valid: bool
+    session_open: bool
+    session_state: str
+    session_source: str
+    notes: list[str]
+    positions: list[PaperPositionStatus]
+
+
+class ExecutionResponse(BaseModel):
+    mode: str
+    state: str
+    vetoes: list[str]
+    freshness: ExecutionFreshnessStatus
+    context: ExecutionContextStatus
+    order: PaperOrderStatus | None
 
 
 class DailyScheduleStatus(BaseModel):
@@ -772,6 +928,25 @@ class AppConfigUpdate(BaseModel):
     news_memory_ttl_days: int = Field(strict=True)
 
 
+class RiskLimitsStatus(BaseModel):
+    configured: bool
+    max_symbol_exposure_paise: int | None
+    max_open_positions: int | None
+    max_daily_loss_paise: int | None
+    max_weekly_loss_paise: int | None
+    max_monthly_loss_paise: int | None
+    max_order_rate_per_minute: int | None
+
+
+class RiskLimitsUpdate(BaseModel):
+    max_symbol_exposure_paise: int = Field(ge=0, le=10**13, strict=True)
+    max_open_positions: int = Field(ge=0, le=1_000, strict=True)
+    max_daily_loss_paise: int = Field(ge=0, le=10**13, strict=True)
+    max_weekly_loss_paise: int = Field(ge=0, le=10**13, strict=True)
+    max_monthly_loss_paise: int = Field(ge=0, le=10**13, strict=True)
+    max_order_rate_per_minute: int = Field(ge=1, le=1_000, strict=True)
+
+
 class ApiKeyUpdate(BaseModel):
     api_key: str = Field(min_length=1, max_length=MAX_API_KEY_CHARS, strict=True)
 
@@ -835,6 +1010,28 @@ def _token_usage_status(usage: TokenUsage) -> TokenUsageStatus:
         estimated_tokens=str(usage.estimated_tokens),
         estimated_count=usage.estimated_count,
         unknown_count=usage.unknown_count,
+    )
+
+
+def _risk_limits_status(limits: RiskLimits | None) -> RiskLimitsStatus:
+    if limits is None:
+        return RiskLimitsStatus(
+            configured=False,
+            max_symbol_exposure_paise=None,
+            max_open_positions=None,
+            max_daily_loss_paise=None,
+            max_weekly_loss_paise=None,
+            max_monthly_loss_paise=None,
+            max_order_rate_per_minute=None,
+        )
+    return RiskLimitsStatus(
+        configured=True,
+        max_symbol_exposure_paise=limits.max_symbol_exposure_paise,
+        max_open_positions=limits.max_open_positions,
+        max_daily_loss_paise=limits.max_daily_loss_paise,
+        max_weekly_loss_paise=limits.max_weekly_loss_paise,
+        max_monthly_loss_paise=limits.max_monthly_loss_paise,
+        max_order_rate_per_minute=limits.max_order_rate_per_minute,
     )
 
 
@@ -1141,6 +1338,7 @@ def create_app(
         attempts = ModelAttemptStore(database_path)
         schedules = ScheduleStore(database_path, available_jobs=frozenset())
         paper_accounts = PaperAccountStore(database_path)
+        paper_trading = PaperTradingStore(database_path)
         settings = SettingsStore(database_path)
         scheduler = SchedulerLoop(
             SchedulerRunner(
@@ -1153,6 +1351,128 @@ def create_app(
         def verify_origin(request: Request) -> None:
             if request.headers.get("origin") != ALLOWED_ORIGIN:
                 raise HTTPException(status_code=403, detail="Invalid request origin")
+
+        def require_write(request: Request) -> None:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+        def account_status(balance: PaperAccountBalance) -> PaperAccountStatusResponse:
+            account = balance.account
+            return PaperAccountStatusResponse(
+                account_id=account.account_id,
+                name=account.name,
+                status=account.status,
+                opening_balance_paise=str(account.opening_balance_paise),
+                deposited_paise=str(balance.deposited_paise),
+                withdrawn_paise=str(balance.withdrawn_paise),
+                balance_paise=str(balance.balance_paise),
+            )
+
+        def order_status(order: PaperOrder) -> PaperOrderStatus:
+            return PaperOrderStatus(
+                order_id=order.order_id,
+                account_id=order.account_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                side=order.side.value,
+                order_type=order.order_type.value,
+                quantity=order.quantity,
+                limit_price_paise=(
+                    str(order.limit_price_paise)
+                    if order.limit_price_paise is not None
+                    else None
+                ),
+                status=order.status.value,
+                filled_quantity=order.filled_quantity,
+                created_at=order.created_at,
+            )
+
+        def execution_context_status(
+            snapshot: ExecutionSnapshot,
+        ) -> ExecutionContextStatus:
+            return ExecutionContextStatus(
+                account_id=snapshot.context.account_id,
+                account_name=snapshot.account_name,
+                available_cash_paise=str(snapshot.context.available_cash_paise),
+                balance_paise=str(snapshot.balance_paise),
+                open_positions=snapshot.context.open_positions,
+                symbol_exposure_paise=str(snapshot.context.symbol_exposure_paise),
+                daily_loss_paise=str(snapshot.context.daily_loss_paise),
+                weekly_loss_paise=str(snapshot.context.weekly_loss_paise),
+                monthly_loss_paise=str(snapshot.context.monthly_loss_paise),
+                orders_this_minute=snapshot.context.orders_this_minute,
+                kill_switch=snapshot.context.kill_switch.value,
+                instrument_valid=snapshot.context.instrument_valid,
+                session_open=snapshot.context.session_open,
+                session_state=snapshot.session_state,
+                session_source=snapshot.session_source,
+                notes=list(snapshot.notes),
+                positions=[
+                    PaperPositionStatus(
+                        instrument_id=item.instrument_id, quantity=item.quantity
+                    )
+                    for item in snapshot.positions
+                ],
+            )
+
+        def execution_response(
+            outcome: ExecutionOutcome, snapshot: ExecutionSnapshot
+        ) -> ExecutionResponse:
+            execution = outcome.execution
+            return ExecutionResponse(
+                mode=outcome.mode.value,
+                state=execution.decision.state.value,
+                vetoes=list(execution.decision.vetoes),
+                freshness=ExecutionFreshnessStatus(
+                    usable=execution.freshness.usable,
+                    label=execution.freshness.label,
+                    age_seconds=execution.freshness.age_seconds,
+                ),
+                context=execution_context_status(snapshot),
+                order=order_status(execution.order) if execution.order else None,
+            )
+
+        def prepare_execution(
+            body: ExecutionRequest,
+        ) -> tuple[TradePlan, ExecutionAdapter, ExecutionSnapshot]:
+            try:
+                plan = trade_plan_from_json(body.plan)
+            except TradePlanError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            limits = RiskLimits(
+                max_symbol_exposure_paise=body.limits.max_symbol_exposure_paise,
+                max_open_positions=body.limits.max_open_positions,
+                max_daily_loss_paise=body.limits.max_daily_loss_paise,
+                max_weekly_loss_paise=body.limits.max_weekly_loss_paise,
+                max_monthly_loss_paise=body.limits.max_monthly_loss_paise,
+                max_order_rate_per_minute=body.limits.max_order_rate_per_minute,
+            )
+            kill_switch = KillSwitchLevel(body.kill_switch)
+            try:
+                snapshot = build_execution_context(
+                    database_path,
+                    plan,
+                    account_id=body.account_id,
+                    now=datetime.now(UTC),
+                    kill_switch=kill_switch,
+                    session_open_override=body.session_open_override,
+                )
+            except ExecutionContextError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            try:
+                adapter = build_execution_adapter(
+                    ExecutionMode(body.mode), database_path, limits=limits
+                )
+            except ExecutionDisabled as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return plan, adapter, snapshot
 
         @app.get("/api/v1/data/status")
         def data_status(request: Request) -> DataStatus:
@@ -1328,6 +1648,198 @@ def create_app(
                 balance_paise=str(balance.balance_paise),
             )
 
+        @app.get("/api/v1/paper/accounts")
+        def paper_account_list(request: Request) -> PaperAccountListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return PaperAccountListResponse(
+                accounts=[
+                    account_status(paper_accounts.get_balance(account.account_id))
+                    for account in paper_accounts.list_accounts()
+                ]
+            )
+
+        @app.post("/api/v1/paper/accounts")
+        def create_paper_account(
+            request: Request, body: PaperAccountCreateRequest
+        ) -> PaperAccountStatusResponse:
+            require_write(request)
+            try:
+                account = paper_accounts.create(
+                    account_id=body.account_id,
+                    name=body.name,
+                    opening_balance_paise=CurrencyPaise(body.opening_balance_paise),
+                )
+            except PaperAccountError as exc:
+                status = 409 if "already exists" in str(exc) else 422
+                raise HTTPException(status_code=status, detail=str(exc)) from exc
+            return account_status(paper_accounts.get_balance(account.account_id))
+
+        @app.get("/api/v1/paper/accounts/{account_id}/book")
+        def paper_account_book(request: Request, account_id: str) -> PaperBookResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                balance = paper_accounts.get_balance(account_id)
+                positions = paper_trading.positions(account_id)
+                orders = paper_trading.recent_orders(account_id, limit=20)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=404, detail="Paper account unavailable"
+                ) from exc
+            return PaperBookResponse(
+                account=account_status(balance),
+                positions=[
+                    PaperPositionStatus(
+                        instrument_id=item.instrument_id, quantity=item.quantity
+                    )
+                    for item in positions
+                ],
+                orders=[order_status(item) for item in orders],
+            )
+
+        @app.post("/api/v1/paper/orders/{order_id}/fill")
+        def fill_paper_order(
+            request: Request, order_id: str, body: PaperFillRequest
+        ) -> PaperFillResponse:
+            require_write(request)
+            try:
+                order, fill = paper_trading.fill(
+                    order_id,
+                    quantity=Quantity(body.quantity),
+                    price_paise=CurrencyPaise(body.price_paise),
+                    idempotency_key=body.idempotency_key,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return PaperFillResponse(
+                order=order_status(order),
+                fill=PaperFillStatus(
+                    fill_id=fill.fill_id,
+                    order_id=fill.order_id,
+                    quantity=fill.quantity,
+                    price_paise=str(fill.price_paise),
+                    filled_at=fill.filled_at,
+                    idempotency_key=fill.idempotency_key,
+                ),
+            )
+
+        @app.post("/api/v1/paper/orders/{order_id}/cancel")
+        def cancel_paper_order(request: Request, order_id: str) -> PaperOrderStatus:
+            require_write(request)
+            try:
+                order = paper_trading.cancel(order_id)
+            except PaperTradingError as exc:
+                status = 404 if "not found" in str(exc) else 409
+                raise HTTPException(status_code=status, detail=str(exc)) from exc
+            return order_status(order)
+
+        @app.post("/api/v1/paper/accounts/{account_id}/positions/{instrument_id}/exit")
+        def exit_paper_position(
+            request: Request,
+            account_id: str,
+            instrument_id: str,
+            body: PaperExitRequest,
+        ) -> PaperOrderStatus:
+            require_write(request)
+            try:
+                existing = paper_trading.order_for_client_id(
+                    account_id, body.client_order_id
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=404, detail="Paper account unavailable"
+                ) from exc
+            if existing is not None:
+                return order_status(existing)
+            try:
+                positions = paper_trading.positions(account_id)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=404, detail="Paper account unavailable"
+                ) from exc
+            held = next(
+                (
+                    item.quantity
+                    for item in positions
+                    if item.instrument_id == instrument_id
+                ),
+                0,
+            )
+            if held < body.quantity:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Exit quantity exceeds the held position.",
+                )
+            try:
+                order = paper_trading.place_order(
+                    account_id=account_id,
+                    instrument_id=instrument_id,
+                    client_order_id=body.client_order_id,
+                    side=PaperSide.SELL,
+                    order_type=PaperOrderType.LIMIT,
+                    quantity=Quantity(body.quantity),
+                    limit_price_paise=CurrencyPaise(body.price_paise),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return order_status(order)
+
+        @app.get("/api/v1/paper/accounts/{account_id}/reconciliation")
+        def paper_reconciliation(
+            request: Request, account_id: str
+        ) -> PaperReconciliationStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                result = paper_trading.reconcile(account_id)
+            except PaperTradingError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=404, detail="Paper account unavailable"
+                ) from exc
+            return PaperReconciliationStatus(
+                account_id=result.account_id,
+                order_count=result.order_count,
+                fill_count=result.fill_count,
+                ledger_debit_paise=str(result.ledger_debit_paise),
+                ledger_credit_paise=str(result.ledger_credit_paise),
+                position_count=result.position_count,
+            )
+
+        @app.post("/api/v1/execution/preview")
+        def execution_preview(
+            request: Request, body: ExecutionRequest
+        ) -> ExecutionResponse:
+            require_write(request)
+            plan, adapter, snapshot = prepare_execution(body)
+            try:
+                outcome = adapter.preview(plan, context=snapshot.context)
+            except ExecutionDisabled as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except PaperExecutorError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return execution_response(outcome, snapshot)
+
+        @app.post("/api/v1/execution/paper")
+        def execution_paper(
+            request: Request, body: ExecutionPlaceRequest
+        ) -> ExecutionResponse:
+            require_write(request)
+            plan, adapter, snapshot = prepare_execution(body)
+            try:
+                outcome = adapter.place(
+                    plan,
+                    context=snapshot.context,
+                    client_order_id=body.client_order_id,
+                )
+            except ExecutionDisabled as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except PaperExecutorError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return execution_response(outcome, snapshot)
+
         @app.get("/api/v1/schedules/status")
         def schedule_status(request: Request) -> ScheduleStatus:
             if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
@@ -1433,6 +1945,37 @@ def create_app(
             except SettingsError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             return _app_config_status(config)
+
+        @app.get("/api/v1/settings/risk-limits")
+        def get_risk_limits(request: Request) -> RiskLimitsStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return _risk_limits_status(settings.load().risk_limits)
+
+        @app.put("/api/v1/settings/risk-limits")
+        def update_risk_limits(
+            request: Request, body: RiskLimitsUpdate
+        ) -> RiskLimitsStatus:
+            require_write(request)
+            try:
+                config = settings.save_risk_limits(
+                    RiskLimits(
+                        max_symbol_exposure_paise=body.max_symbol_exposure_paise,
+                        max_open_positions=body.max_open_positions,
+                        max_daily_loss_paise=body.max_daily_loss_paise,
+                        max_weekly_loss_paise=body.max_weekly_loss_paise,
+                        max_monthly_loss_paise=body.max_monthly_loss_paise,
+                        max_order_rate_per_minute=body.max_order_rate_per_minute,
+                    )
+                )
+            except (SettingsError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return _risk_limits_status(config.risk_limits)
+
+        @app.delete("/api/v1/settings/risk-limits")
+        def reset_risk_limits(request: Request) -> RiskLimitsStatus:
+            require_write(request)
+            return _risk_limits_status(settings.clear_risk_limits().risk_limits)
 
         @app.put("/api/v1/settings/models")
         def update_settings_models(

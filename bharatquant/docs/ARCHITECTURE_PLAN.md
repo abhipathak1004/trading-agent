@@ -1,6 +1,6 @@
 # Architecture plan: 3-tier model routing and the multi-agent system
 
-**Version:** 1.10 · **Date:** 2026-11-26 · **Status:** approved for Phase 2
+**Version:** 1.14 · **Date:** 2026-11-26 · **Status:** approved; Phases 1–4A implemented
 **Scope:** audit of the existing BharatQuant analysis stack and the target
 architecture for a config-driven three-tier model router, Jev-preferred decision
 layer, specialist agents, four-layer memory and a deterministic execution seam.
@@ -14,6 +14,10 @@ any external provider capability is verified; see
 
 | Version | Date | Change |
 |---|---|---|
+| 1.14 | 2026-11-26 | Phase 6: order cancellation and owner-triggered SELL LIMIT position exits, reusing the fill/ledger path. |
+| 1.13 | 2026-11-26 | Phase 5: deterministic HTTP acceptance across three symbols, Strategy, paper execution, fill, reconciliation and calibration. |
+| 1.12 | 2026-11-26 | Phase 4B: owner-triggered atomic paper fills, fill idempotency, reconciliation API, and Trade-tab fill/reconcile actions. |
+| 1.11 | 2026-11-26 | Phase 4A: deterministic account-snapshot reader, PAPER-only execution adapter seam, execution preview/place API, account book, and the Trade tab with Strategy staging. |
 | 1.10 | 2026-11-26 | Phase 3F: evidence verifier gains an optional Jev/LLM Noul pass over cited claims, while the deterministic citation check remains the floor and fallback. |
 | 1.9 | 2026-11-26 | Phase 3E: versioned procedural playbooks with editable guidance, an owner API/Agent Lab editor, and a Strategy selector feeding a bounded playbook block to the Super Agent. |
 | 1.8 | 2026-11-26 | Phase 3D: deterministic outcome resolver for due shadow episodes, with stop/target first-touch, horizon close, append-only outcomes and a resolve API/UI action. |
@@ -52,6 +56,12 @@ any external provider capability is verified; see
 | Stage 1 specialists | `bq/analysis/news_context.py`, `regime.py`, `fundamental.py`, `briefs.py` | Optional, point-in-time briefs; failures degrade the node, not the run. |
 | Strategy coordinator | `bq/super_agent.py`, `POST /api/v1/strategy/run` | Per-symbol DAG → deterministic gate → reasoning synthesis (rules fallback). Never places an order. |
 | Prompt config | `bq/agent_prompts.py`, migration `027` | Append-only versions; code defaults; template placeholder validation. |
+| Execution context | `bq/execution/context.py` | One-snapshot cash/positions/realised loss, session, instrument validity. |
+| Execution adapter | `bq/execution/base.py` | PAPER enabled; sandbox/live fail closed with a typed error. |
+| Execution API | `POST /api/v1/execution/preview`, `/paper`; `GET /api/v1/paper/accounts[/{id}/book]` | Owner-only preview and paper placement; explicit limits; idempotent order key. |
+| Paper fills | `bq/paper_trading.py`, `POST /api/v1/paper/orders/{id}/fill` | Owner-triggered, limit-respecting, atomic order/position/ledger update. |
+| Reconciliation | `GET /api/v1/paper/accounts/{id}/reconciliation` | Read-only checks of order, fill, ledger and position totals. |
+| Cancel / exit | `POST /api/v1/paper/orders/{id}/cancel`; `POST /api/v1/paper/accounts/{id}/positions/{instrument}/exit` | Cancel pending/partial; SELL LIMIT capped at held quantity; no short. |
 | Execution | `bq/execution/paper_executor.py` | Paper orders only, behind `evaluate_pretrade`. |
 | Scoring | `bq/reports/scoring.py` | Brier/log-loss/Wilson helpers; offline only, unwired. |
 
@@ -180,4 +190,4 @@ existing `/api/v1/llm/complete` path. `settings.save_config` keeps its signature
 | 2 | Tier settings, `ModelRouter`, `bq/decision` battery, structured fallback, heuristic floor, Settings UI | Model swap via settings only; Jev-down, model-mismatch and no-model runs complete; suite green |
 | 3 | Specialists, four-layer memory, shadow trades, Brier, Super Agent + gate | Screener skips without reasoning spend; Brier has no look-ahead |
 | 4 | Risk-gate extensions + `ExecutionAdapter` seam, Trade tab | Paper path unchanged; sandbox/live fail closed |
-| 5 | Mocked end-to-end runs on RELIANCE/TCS/HDFCBANK | All acceptance checks in the implementation plan pass |
+| 5 | Deterministic HTTP acceptance across RELIANCE/TCS/HDFCBANK | Analysis → Strategy → paper fill/reconcile pass; live smoke run recorded |

@@ -264,6 +264,21 @@ class PaperAccountStore:
         with closing(self._connect()) as connection:
             return self._get(connection, account_id)
 
+    def list_accounts(self, *, limit: int = 50) -> tuple[PaperAccount, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 200
+        ):
+            raise PaperAccountError("Account limit must be between 1 and 200.")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT account_id FROM paper_accounts "
+                "ORDER BY created_at DESC, account_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(self.get(str(row[0])) for row in rows)
+
     def get_balance(self, account_id: str) -> PaperAccountBalance:
         _validate_identifier(account_id, "paper account identifier")
         with closing(self._connect()) as connection:

@@ -8,19 +8,23 @@ carry the old status narrative forward.
 ## Where the project is
 
 BharatQuant is a single-owner, paper-only Indian equities research system. Phases
-1–3F are implemented: config-driven model tiers, optional TypeSafe Jev decision
-layer, Agent Lab prompt/playbook editing, Strategy desk with a deterministic
-Super Agent, specialist agents, final gate, episodic/semantic/procedural memory,
-Brier calibration with an outcome resolver, and the evidence verifier with an
-optional Jev Noul pass.
+1–6 are implemented and acceptance-tested: config-driven model tiers, optional
+TypeSafe Jev decision layer, Agent Lab prompt/playbook editing, Strategy desk with
+a deterministic Super Agent, specialist agents, final gate,
+episodic/semantic/procedural memory, Brier calibration with an outcome resolver,
+the evidence verifier with an optional Jev Noul pass, and a deterministic paper
+execution, fill, cancel and exit lifecycle.
 
 - **No broker order path exists.** Kite is a read-only data vendor (ADR-001,
   ADR-013). Paper execution is the only execution path.
-- **Verification now:** 784 backend tests, 65 frontend tests; ruff + format
+- **Paper orders are owner-filled.** Placement creates PENDING; the Trade tab
+  fills at the order limit, cancels pending orders, and exits held positions with
+  a SELL LIMIT order.
+- **Verification now:** 805 backend tests, 74 frontend tests; ruff + format
   clean; frontend typecheck + build clean; fresh DB applies **30 migrations**.
 - **mypy:** 25 pre-existing errors in `cli.py`, `paper_performance.py` and
   `infra/scheduler.py`. Do not “fix” them as part of feature work.
-- **Next migration number:** `031`.
+- **Next migration number:** `031` (not needed for Phase 6).
 
 ## Code map (read these first)
 
@@ -31,9 +35,11 @@ optional Jev Noul pass.
 | Decision layer | `bq/model_router.py`, `bq/decision/` |
 | Specialists / gates | `bq/analysis/{news_context,regime,fundamental,final_gate,evidence}.py` |
 | Memory | `bq/memory/{episodic,semantic,procedural,resolver}.py` |
-| Risk / execution | `bq/risk/{policy,sizing,decisions}.py`, `bq/execution/paper_executor.py`, `bq/paper_accounts.py` |
+| Risk / execution | `bq/risk/{policy,sizing,decisions}.py`, `bq/execution/{base,context,paper_executor}.py` |
+| Paper stores | `bq/paper_accounts.py`, `bq/paper_trading.py` |
 | Config | `config/agent_settings.yaml`, `bq/settings.py`, `bq/agent_prompts.py` |
-| UI | `bharatquant/web/src/App.tsx`, the `*Panel.tsx` files and `*Contract.ts` files |
+| UI | `web/src/App.tsx`, `TradePanel.tsx`, the other `*Panel.tsx` files and `*Contract.ts` files |
+| Acceptance | `tests/test_phase5_acceptance.py` |
 
 ## Invariants (do not break)
 
@@ -53,69 +59,82 @@ optional Jev Noul pass.
   Reads are point-in-time; episodes are immutable and outcomes are append-only.
 - **Security:** owner auth, origin + CSRF on writes, `no-store` on private reads.
 - **Paper only.** Any Kite order method, sandbox order or `LIVE_AUTO` mode is out
-  of scope until the ADRs are explicitly superseded. External adapters fail closed.
+  of scope until the ADRs are explicitly superseded. Sandbox/live adapters fail
+  closed.
+- **Risk limits are explicit.** The Trade tab requires all six gate limits; there
+  are no invented defaults. Session overrides are labelled `owner_override`.
+- **Fills are owner-triggered.** There is no matching engine, no market order and
+  no short position. A fill is atomic across order, position and ledger.
+- **Exits are owner-triggered SELL LIMIT orders.** Quantity is capped at the held
+  position; the exit does not use the BUY pre-trade gate.
 - **No new runtime dependency** without a clear need.
 
-## Immediate next task — Phase 4A: make paper execution reachable
+## Latest slices
 
-The gate (`evaluate_pretrade`), paper OMS and CLI path already exist. The missing
-piece is the **owner-facing seam**: derive the account snapshot, expose
-gate/execute over the API, and wire Strategy accepted plans into it. Do not add a
-broker adapter in this slice.
+**Phase 4A — execution seam.** `bq/execution/context.py` builds the gate inputs
+from one snapshot (cash, positions, average-cost realised losses, order rate,
+calendar session, instrument validity; paused accounts fail closed).
+`bq/execution/base.py` enables only PAPER; sandbox/live raise `ExecutionDisabled`.
+`PaperExecutor.preview()` gates without placing; `execute()` preserves quantity,
+enforces the 1.5 R:R floor and replays a duplicate client order id.
 
-### Deliverables
+**Phase 4B — fill and reconcile.** `POST /api/v1/paper/orders/{id}/fill` is atomic
+and idempotent; `GET /api/v1/paper/accounts/{id}/reconciliation` checks order fill
+totals, fill totals, ledger totals and open positions. The Trade tab fills the
+remaining quantity and refreshes cash/positions.
 
-1. **Account snapshot reader** — add `bq/execution/context.py` (or a method on the
-   paper-account store) that builds `ExecutionContext` from the existing paper
-   tables: balance/cash, open positions, symbol exposure, realised daily/weekly/
-   monthly loss, orders this minute, calendar session state, kill switch and
-   instrument validity. Keep limits explicit/owner-reviewed; do not invent them.
-   Every amount stays integer paise.
-2. **Execution seam** — `bq/execution/base.py` with `ExecutionAdapter`,
-   `ExecutionMode` (`PAPER`, `KITE_SANDBOX`, `LIVE_APPROVAL`), `ExecutionResult`
-   and a typed disabled error. `PaperExecutionAdapter` wraps the existing
-   `PaperExecutor` unchanged and relays the plan quantity. The sandbox/live
-   adapters raise a typed “not enabled” error; no broker call.
-3. **API** — owner-only, origin + CSRF, `no-store`:
-   - `POST /api/v1/execution/preview` — plan + account/context + explicit risk
-     limits → gate decision, freshness and reasons; never places an order.
-   - `POST /api/v1/execution/paper` — places only on `ALLOW`; idempotency key
-     required/replayed; returns paper order + decision. Reject `SELL`/`HOLD`.
-   - Reuse the existing paper-account read endpoints for balances/positions; do
-     not create a second account model.
-4. **Strategy wiring** — accepted plans from `POST /api/v1/strategy/run` can be
-   sent to preview/execute without re-typing numbers. The Strategy accepted-plan
-   card gets a **Preview gate** / **Place paper order** action; the server
-   re-validates the plan JSON (`trade_plan_from_json`).
-5. **Trade tab** — replace the inert Trade nav item with a working panel: account,
-   plan, limits, gate reasons, freshness, order result. Show `BLOCK` reasons
-   verbatim; make the paper-only boundary explicit. No mock balances, no broker
-   fields.
-6. **Config** — if persisted risk limits are needed, add migration
-   `031_risk_limits.sql` plus a Settings card. Otherwise pass explicit limits per
-   request and say so in the UI. Do not silently default risk.
+**Phase 5 — end-to-end acceptance.** `tests/test_phase5_acceptance.py` drives the
+real HTTP surface with a deterministic market vendor: three-symbol batch →
+specialists → evidence → final gate → persisted runs → Strategy → accepted plan →
+execution preview → paper order → fill → reconciliation → calibration endpoint.
+The fixture sets `abstain_score_band=(2, 2)` because the synthetic monotonic trend
+reaches conviction 3 and the production default `(2, 3)` abstains. This is a
+test-owner policy, not a production default change.
 
-### Acceptance
+Live smoke on 26 November 2026:
+- `NSE:RELIANCE` produced a plan with no gate veto.
+- `NSE:TCS` and `NSE:HDFCBANK` produced plans but the heuristic final gate vetoed
+  them with `conviction 2 in abstain band`.
+- This is the conservative default behaving as designed, not a wiring failure.
 
-- Gate blocks: stale/unusable data, closed session, missing stop, invalid
-  instrument, kill switch, cash/notional/position/rate limits, daily/weekly/
-  monthly loss limits, and R:R below the agreed floor.
-- Only `ALLOW` reaches `PaperExecutor`; quantity is unchanged; a duplicate
-  idempotency key returns the original result.
-- `KITE_SANDBOX` / `LIVE_APPROVAL` fail closed with a typed error.
-- Strategy accepted plan → preview → paper order works end-to-end from the UI.
-- Add backend + frontend tests; keep 784+/65+ green; ruff/format/typecheck/build
-  clean; fresh `bq init` applies 31 migrations (or 30 if no new table).
+**Phase 6 — cancel and exit.** `POST /api/v1/paper/orders/{id}/cancel` cancels a
+pending/partial order. `POST /api/v1/paper/accounts/{aid}/positions/{instrument}/exit`
+creates a SELL LIMIT order for part or all of a held position; the existing fill
+flow credits exact paise. The Trade tab has per-position exit quantity/price,
+Cancel, Fill, and reconciliation controls. Over-holds and shorts are rejected.
+
+Verification: **805 backend tests**, **74 frontend tests**, ruff/format clean,
+frontend typecheck + build clean. mypy remains at 25 pre-existing errors in
+untouched files.
+
+## Immediate next task — Phase 7: owner risk-limit presets
+
+The Trade tab currently asks for all six gate limits on every run. Persist an
+owner-reviewed preset without making it an invisible default.
+
+1. **Store** — add a validated `risk_limits` JSON setting in `app_settings` (no
+   migration needed). Keep it absent on a fresh install; do not invent values.
+2. **API** — owner-only `GET/PUT /api/v1/settings/risk-limits`, origin + CSRF,
+   no-store. Return `configured: false` until the owner saves a preset.
+3. **Settings UI** — a card with the six integer paise/count fields and an
+   explicit save/reset. Show that these are gate presets, not orders.
+4. **Trade UI** — load the preset when present, prefill the six fields, and still
+   send explicit limits on every preview/place request. The owner can override a
+   field for one run. Do not auto-place anything.
+5. **Tests** — absent preset, save/validate/reset, round-trip through Settings,
+   Trade prefill/override, and security checks.
+6. **Boundary** — risk policy remains code-owned; the preset only supplies request
+   values. No migration expected; if one is added, use `031`.
 
 ### Deferred, not this slice
 
-- Working memory as a dedicated `run_state` table (the run ledger already keeps
-  `analysis_runs.detail_json`).
 - Registering the outcome resolver on a schedule (`POST /api/v1/memory/resolve`
   and the Today button are manual today).
+- Working memory as a dedicated `run_state` table (the run ledger keeps
+  `analysis_runs.detail_json`).
 - Semantic-doc ingestion API/UI (the store/search path exists).
-- Jev Noul threshold (0.60), playbook content and freshness limits are
-  unvalidated starting points; calibrate from outcomes later.
+- Jev Noul threshold (0.60), playbook content, freshness limits and the final-gate
+  abstain band remain unvalidated starting points; calibrate from outcomes later.
 
 ## Commands
 

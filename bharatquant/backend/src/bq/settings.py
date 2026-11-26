@@ -39,6 +39,7 @@ from bq.core import (
 )
 from bq.infra.audit import append_event
 from bq.news import DEFAULT_MEMORY_TTL, PULSE_FEED_URL
+from bq.risk.policy import RiskLimits
 
 
 def _utc(value: datetime) -> datetime:
@@ -90,6 +91,7 @@ KEY_DECISION_ROUTE = "decision_route"
 KEY_AGENT_ROUTING = "agent_routing"
 KEY_DECISION_POLICY = "decision_policy"
 KEY_PIPELINE = "pipeline"
+KEY_RISK_LIMITS = "risk_limits"
 
 MAX_AGENT_ROUTING_ENTRIES = 32
 MAX_AGENT_ID_CHARS = 64
@@ -218,6 +220,7 @@ class AppConfig:
     pipeline: PipelineConfig = PipelineConfig()
     decision_route: DecisionRoute = DecisionRoute.AUTO
     decision_policy: DecisionPolicyConfig = DecisionPolicyConfig()
+    risk_limits: RiskLimits | None = None
 
     def tier(self, name: TierName) -> TierConfig | None:
         for key, value in self.tiers:
@@ -847,6 +850,36 @@ def _load_pipeline(rows: Mapping[str, str]) -> PipelineConfig:
         return default
 
 
+def _load_risk_limits(rows: Mapping[str, str]) -> RiskLimits | None:
+    raw = rows.get(KEY_RISK_LIMITS)
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    fields = (
+        "max_symbol_exposure_paise",
+        "max_open_positions",
+        "max_daily_loss_paise",
+        "max_weekly_loss_paise",
+        "max_monthly_loss_paise",
+        "max_order_rate_per_minute",
+    )
+    values: dict[str, int] = {}
+    for field in fields:
+        value = parsed.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        values[field] = value
+    try:
+        return RiskLimits(**values)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _safe_execution_mode(value: object, default: str) -> str:
     if not isinstance(value, str) or value not in {"PAPER", "SANDBOX", "LIVE_APPROVAL"}:
         return default
@@ -914,6 +947,7 @@ class SettingsStore:
             pipeline=_load_pipeline(rows),
             decision_route=_load_decision_route(rows),
             decision_policy=_load_decision_policy(rows),
+            risk_limits=_load_risk_limits(rows),
         )
 
     def api_key(self, provider: Provider | str) -> str | None:
@@ -974,6 +1008,64 @@ class SettingsStore:
                         "news_feed_url": feed_url,
                         "news_memory_ttl_days": str(ttl),
                     },
+                )
+        return self.load()
+
+    def save_risk_limits(self, limits: RiskLimits) -> AppConfig:
+        if not isinstance(limits, RiskLimits):
+            raise SettingsError("Risk limits are required.")
+        updated_at = _utc(self.clock.now())
+        value = json.dumps(
+            {
+                "max_symbol_exposure_paise": limits.max_symbol_exposure_paise,
+                "max_open_positions": limits.max_open_positions,
+                "max_daily_loss_paise": limits.max_daily_loss_paise,
+                "max_weekly_loss_paise": limits.max_weekly_loss_paise,
+                "max_monthly_loss_paise": limits.max_monthly_loss_paise,
+                "max_order_rate_per_minute": limits.max_order_rate_per_minute,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "INSERT INTO app_settings (setting_key, setting_value, updated_at) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(setting_key) DO UPDATE SET "
+                    "setting_value = excluded.setting_value, "
+                    "updated_at = excluded.updated_at",
+                    (KEY_RISK_LIMITS, value, _timestamp(updated_at)),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.risk_limits.updated",
+                    object_type="app_settings",
+                    object_id=KEY_RISK_LIMITS,
+                    payload=json.loads(value),
+                )
+        return self.load()
+
+    def clear_risk_limits(self) -> AppConfig:
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "DELETE FROM app_settings WHERE setting_key = ?",
+                    (KEY_RISK_LIMITS,),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.risk_limits.cleared",
+                    object_type="app_settings",
+                    object_id=KEY_RISK_LIMITS,
+                    payload={},
                 )
         return self.load()
 

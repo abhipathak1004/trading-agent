@@ -4,7 +4,7 @@ import type { FormEvent } from "react";
 import { parsePlaybookList } from "./playbookContract";
 import type { Playbook } from "./playbookContract";
 import { parseStrategyRun } from "./strategyContract";
-import type { StrategyRun, StrategySymbol } from "./strategyContract";
+import type { StrategyPlan, StrategyRun, StrategySymbol } from "./strategyContract";
 
 type RunState =
   | { state: "idle" | "running" }
@@ -31,7 +31,13 @@ function formatPaise(value: number): string {
   })}`;
 }
 
-export default function StrategyPanel({ csrfToken }: { csrfToken: string }) {
+export default function StrategyPanel({
+  csrfToken,
+  onStagePlan,
+}: {
+  csrfToken: string;
+  onStagePlan?: (plan: StrategyPlan) => void;
+}) {
   const [strategy, setStrategy] = useState(EXAMPLES[0]);
   const [symbols, setSymbols] = useState("NSE:RELIANCE, NSE:TCS, NSE:HDFCBANK");
   const [timeframe, setTimeframe] = useState<"swing" | "intraday">("swing");
@@ -250,12 +256,20 @@ export default function StrategyPanel({ csrfToken }: { csrfToken: string }) {
           {run.message}
         </p>
       )}
-      {run.state === "ready" && <StrategyResult run={run.run} />}
+      {run.state === "ready" && (
+        <StrategyResult run={run.run} onStagePlan={onStagePlan} />
+      )}
     </section>
   );
 }
 
-function StrategyResult({ run }: { run: StrategyRun }) {
+function StrategyResult({
+  run,
+  onStagePlan,
+}: {
+  run: StrategyRun;
+  onStagePlan?: (plan: StrategyPlan) => void;
+}) {
   const decision = run.decision;
   return (
     <div className="strategy-result">
@@ -308,6 +322,7 @@ function StrategyResult({ run }: { run: StrategyRun }) {
               <th scope="col">R:R</th>
               <th scope="col">Notional</th>
               <th scope="col">Scale</th>
+              <th scope="col">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -321,6 +336,16 @@ function StrategyResult({ run }: { run: StrategyRun }) {
                 <td>{item.plan.reward_risk}</td>
                 <td>{formatPaise(item.notional_paise)}</td>
                 <td>{item.size_scale.toFixed(2)}</td>
+                <td>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => onStagePlan?.(item.plan)}
+                    disabled={onStagePlan === undefined}
+                  >
+                    Stage in Trade
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

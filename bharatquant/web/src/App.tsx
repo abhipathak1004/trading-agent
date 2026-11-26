@@ -14,6 +14,8 @@ import AnalysisPanel from "./AnalysisPanel";
 import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
 import AgentLabPanel from "./AgentLabPanel";
 import StrategyPanel from "./StrategyPanel";
+import TradePanel from "./TradePanel";
+import type { StrategyPlan } from "./strategyContract";
 import SemanticMemoryPanel from "./SemanticMemoryPanel";
 import PlaybookPanel from "./PlaybookPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
@@ -26,6 +28,7 @@ type WorkspaceView =
   | "technical"
   | "agents"
   | "strategy"
+  | "trade"
   | "research"
   | "settings"
   | "guide";
@@ -91,6 +94,7 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [view, setView] = useState<WorkspaceView>("today");
+  const [stagedPlan, setStagedPlan] = useState<StrategyPlan | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -335,6 +339,14 @@ export default function App() {
             </button>
             <button
               type="button"
+              className={`nav-item nav-item--button${view === "trade" ? " nav-item--active" : ""}`}
+              aria-current={view === "trade" ? "page" : undefined}
+              onClick={() => setView("trade")}
+            >
+              <span aria-hidden="true">◇</span>Trade
+            </button>
+            <button
+              type="button"
               className={`nav-item nav-item--button${view === "settings" ? " nav-item--active" : ""}`}
               aria-current={view === "settings" ? "page" : undefined}
               onClick={() => setView("settings")}
@@ -349,10 +361,6 @@ export default function App() {
             >
               <span aria-hidden="true">?</span>How to use
             </button>
-            <p className="nav-label nav-label--secondary">Not available yet</p>
-            <span className="nav-item nav-item--muted" aria-disabled="true">
-              <span aria-hidden="true">◇</span>Trade
-            </span>
           </nav>
         )}
 
@@ -377,6 +385,8 @@ export default function App() {
                       ? "Agent Lab"
                       : view === "strategy"
                         ? "Strategy"
+                        : view === "trade"
+                          ? "Trade"
                         : view === "research"
                           ? "Research"
                           : view === "guide"
@@ -539,8 +549,8 @@ export default function App() {
               <div>
                 <strong>Operating in paper-only foundation mode</strong>
                 <p>
-                  Trading, live research, and agent workflows are not enabled.
-                  Existing local diagnostics remain available below.
+                  Live trading is not enabled. Paper execution is available in the
+                  Trade tab after a plan passes the deterministic gate.
                 </p>
               </div>
             </section>
@@ -621,13 +631,49 @@ export default function App() {
                 <strong>The Super Agent ranks; the code gates</strong>
                 <p>
                   The Super Agent cannot create a BUY the deterministic plan did
-                  not produce. Position count and cash are enforced in code, and
-                  accepted plans are research output only — no orders are placed.
+                  not produce. Position count and cash are enforced in code. Stage
+                  an accepted plan in Trade to run the separate execution gate.
                 </p>
               </div>
             </section>
 
-            <StrategyPanel csrfToken={session.csrfToken} />
+            <StrategyPanel
+              csrfToken={session.csrfToken}
+              onStagePlan={(plan) => {
+                setStagedPlan(plan);
+                setView("trade");
+              }}
+            />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "trade" && (
+          <section className="dashboard" id="trade" aria-labelledby="trade-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">TRADE</p>
+                <h1 id="trade-page-title">Paper execution</h1>
+                <p className="intro">
+                  Run a validated plan through the deterministic risk gate and, only
+                  on ALLOW, place a paper order.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Trade scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>The code gates; the owner approves</strong>
+                <p>
+                  Risk limits are explicit on every request. Nothing reaches a
+                  broker: Kite sandbox and live modes fail closed, and a blocked gate
+                  cannot place an order.
+                </p>
+              </div>
+            </section>
+
+            <TradePanel csrfToken={session.csrfToken} stagedPlan={stagedPlan} />
           </section>
         )}
 

@@ -91,6 +91,13 @@ class PaperFill:
 
 
 @dataclass(frozen=True, slots=True)
+class PaperPosition:
+    account_id: str
+    instrument_id: str
+    quantity: int
+
+
+@dataclass(frozen=True, slots=True)
 class PaperReconciliation:
     account_id: str
     order_count: int
@@ -392,6 +399,58 @@ class PaperTradingStore:
         _validate_identifier(order_id, "paper order identifier")
         with closing(self._connect()) as connection:
             return self._get_order(connection, order_id)
+
+    def order_for_client_id(
+        self, account_id: str, client_order_id: str
+    ) -> PaperOrder | None:
+        _validate_identifier(account_id, "paper account identifier")
+        _validate_identifier(client_order_id, "client order identifier")
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT order_id FROM paper_orders "
+                "WHERE account_id = ? AND client_order_id = ?",
+                (account_id, client_order_id),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._get_order(connection, str(row[0]))
+
+    def positions(self, account_id: str) -> tuple[PaperPosition, ...]:
+        _validate_identifier(account_id, "paper account identifier")
+        with closing(self._connect()) as connection:
+            self.accounts._get(connection, account_id)
+            rows = connection.execute(
+                "SELECT account_id, instrument_id, quantity FROM paper_positions "
+                "WHERE account_id = ? AND quantity > 0 ORDER BY instrument_id",
+                (account_id,),
+            ).fetchall()
+        return tuple(
+            PaperPosition(
+                account_id=str(row[0]),
+                instrument_id=str(row[1]),
+                quantity=int(row[2]),
+            )
+            for row in rows
+        )
+
+    def recent_orders(
+        self, account_id: str, *, limit: int = 20
+    ) -> tuple[PaperOrder, ...]:
+        _validate_identifier(account_id, "paper account identifier")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise PaperTradingError("Order limit must be between 1 and 100.")
+        with closing(self._connect()) as connection:
+            self.accounts._get(connection, account_id)
+            rows = connection.execute(
+                "SELECT order_id FROM paper_orders WHERE account_id = ? "
+                "ORDER BY created_at DESC, order_id DESC LIMIT ?",
+                (account_id, limit),
+            ).fetchall()
+            return tuple(self._get_order(connection, str(row[0])) for row in rows)
 
     def reconcile(self, account_id: str) -> PaperReconciliation:
         _validate_identifier(account_id, "paper account identifier")

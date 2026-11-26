@@ -817,3 +817,143 @@ cited claims.
 pipeline depend on a model. The Noul threshold is a code-owned starting point
 like the other decision policy values; it can be calibrated from recorded
 outcomes later.
+
+## ADR-029: The execution seam is paper-only and the gate reads one snapshot
+
+**Status:** Accepted; Phase 4A implements it.
+
+**Context:** The paper executor already applied `evaluate_pretrade`, but the owner
+could only reach it through the CLI with hand-supplied account figures. The
+Strategy desk produced accepted plans that could not be taken any further, and
+the Trade nav item was inert. A UI seam is useful only if it cannot invent
+account state, risk limits or a session state.
+
+**Decision:** Phase 4A adds a deterministic account snapshot and a typed adapter,
+not a broker integration.
+
+- `build_execution_context` reads cash, positions, average-cost matched fills, order rate
+  and account status from one SQLite read transaction. Cash is the paper-account
+  balance; symbol exposure is marked at the proposed entry price; loss limits use
+  **realised** P&L only. Unrealised P&L is not stored, so the UI says so.
+- Session state comes from the reviewed exchange calendar. Missing coverage fails
+  closed; an owner-supplied override is returned with `session_source =
+  owner_override`, never hidden.
+- `ExecutionMode` has `PAPER`, `KITE_SANDBOX` and `LIVE_APPROVAL`. Only PAPER
+  resolves to an adapter. The other modes raise `ExecutionDisabled`; no broker
+  object is constructed and no Kite order method is added.
+- `PaperExecutor.preview()` runs the gate without placing. `execute()` calls it,
+  enforces the code-owned 1.5 R:R floor, preserves `suggested_quantity` and replays
+  a duplicate `client_order_id` instead of creating a second order.
+- Every risk limit is explicit on the request. The Trade tab requires all six; it
+  does not prefill invented values. Placing is enabled only for an ALLOW preview.
+- The Strategy tab may stage an accepted plan into Trade. Staging copies the
+  validated plan; the execution gate still runs separately and can block it.
+
+**Consequences:** Paper orders are reachable from the UI and remain PENDING after
+placement. Filling, partial fills and reconciliation are the Phase 4B slice. No
+ADR-001 or ADR-013 protection is weakened: the only enabled adapter is paper.
+
+## ADR-030: Paper fills are owner-triggered and atomic
+
+**Status:** Accepted; Phase 4B implements it.
+
+**Context:** Phase 4A places a PENDING paper order. A pending order that can never
+fill is not a useful paper lifecycle, but adding a matching engine or a market
+order would invent behaviour the system does not model. The existing
+`PaperTradingStore.fill` already performs the required transaction; it needed an
+authenticated API and a UI action.
+
+**Decision:** Fills remain manual and deterministic.
+
+- The owner fills an order through `POST /api/v1/paper/orders/{id}/fill`. The
+  request supplies quantity, an exact price in paise and an idempotency key.
+- The store enforces the order limit: a BUY cannot fill above its limit (a SELL
+  cannot fill below it). Quantity cannot exceed the remaining quantity and must be
+  positive.
+- The fill is one SQLite transaction: insert the fill, update the order status and
+  filled quantity, update the position and append the exact-paise ledger entry. An
+  insufficient cash balance or a short position rolls the whole transaction back.
+- `(order_id, idempotency_key)` identifies a fill. Repeating the same key returns
+  the original fill and updated order; it does not fill twice.
+- The Trade tab fills the remaining quantity at the order limit by default, or at
+  an explicit lower BUY price. Partial quantities are supported by the API.
+- `GET /api/v1/paper/accounts/{id}/reconciliation` is read-only and checks order
+  fill totals, fill totals, ledger totals and open positions.
+- There is still no market order, no automatic matching, no short position and no
+  broker adapter. ADR-001 and ADR-013 stand.
+
+**Consequences:** The paper loop now reaches cash, position and ledger changes
+from the UI, and a retry cannot double-fill. Cancellation and an exit/sell flow
+remain deferred; a filled paper position is currently exited only by a manually
+created SELL order through the store, not through the execution adapter. The
+reconciliation endpoint is a consistency check, not a broker reconciliation.
+
+## ADR-031: Acceptance drives the HTTP surface with a deterministic vendor
+
+**Status:** Accepted; Phase 5 implements it.
+
+**Context:** Unit tests cover each module and each API route, but nothing exercised
+the whole chain from batch analysis through Strategy, execution, fill and
+reconciliation. A live three-symbol run is useful but not reproducible in CI: it
+depends on the network, the data vendor and the wall clock. The acceptance also
+needed a plan strong enough to pass the conservative final gate without changing
+the production policy.
+
+**Decision:** Phase 5 uses two complementary checks.
+
+- `tests/test_phase5_acceptance.py` starts the real FastAPI app against a migrated
+  temporary database and a deterministic vendor. It drives authentication, batch
+  analysis for `NSE:RELIANCE`, `NSE:TCS` and `NSE:HDFCBANK`, the Strategy route,
+  execution preview/placement, fill and reconciliation through HTTP.
+- The vendor returns monotonic bars for equities and the three index regime
+  inputs. No network call is made and no model key is configured, so every LLM
+  node is visibly degraded / `RULES_ONLY`.
+- The monotonic fixture reaches final-gate conviction 3. The production default
+  abstain band is `(2, 3)`, so the test owner explicitly saves
+  `abstain_score_band=(2, 2)` before the app starts. This is a test-owner setting
+  on a temporary database, not a production default change.
+- A separate manual smoke run on 26 November 2026 used live cached market data:
+  RELIANCE passed the gate, while TCS and HDFCBANK were correctly vetoed by the
+  heuristic gate at conviction 2. That result is recorded rather than “fixed”.
+- The acceptance asserts wiring and arithmetic, not strategy profitability or
+  model quality. It does not assert that the default gate should pass every
+  synthetic trend.
+
+**Consequences:** CI can prove the chain without network or credentials. The
+explicit policy override is visible in the test and must not be copied into
+production defaults. Live acceptance remains a manual smoke step because vendor
+and model availability are external.
+
+## ADR-032: Cancellation and exits reuse the paper order and fill path
+
+**Status:** Accepted; Phase 6 implements it.
+
+**Context:** Phase 4B made paper orders fillable, but a pending order could not be
+cancelled and a filled position could not be closed. Adding a second exit model
+would duplicate the ledger, position and reconciliation logic that already exists.
+
+**Decision:** Cancellation and exits are deterministic operations over the
+existing order and fill tables.
+
+- `POST /api/v1/paper/orders/{id}/cancel` calls the existing store cancel. It
+  accepts only PENDING or PARTIALLY_FILLED orders; a filled or already-cancelled
+  order is rejected.
+- `POST /api/v1/paper/accounts/{aid}/positions/{instrument}/exit` creates a SELL
+  LIMIT order for a quantity no greater than the open position. It uses the
+  existing `place_order` transaction, so a short is impossible and an
+  over-hold is rejected before any order exists.
+- The exit order then uses the same fill API. The fill transaction credits the
+  exact-paise ledger and reduces the position; no new ledger or matching model is
+  introduced.
+- Client order ids make the exit creation idempotent. The endpoint checks for an
+  existing order before the position check, so retrying after a completed exit
+  returns the original order rather than an over-hold error.
+- Exits are owner-triggered and are not routed through the BUY pre-trade gate.
+  Selling held paper shares reduces exposure; the gate remains the entry path.
+- The Trade tab exposes per-position exit quantity and an explicit price, plus
+  Cancel and Fill actions. There is no market order, short sale or broker call.
+
+**Consequences:** A paper position can now be opened, filled, cancelled before
+fill, partially exited, or fully exited through the UI. Realised P&L is reflected
+in the account balance and ledger, not stored as a separate exit record. The
+pre-trade gate and broker boundary remain unchanged.

@@ -32,7 +32,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from bq.analysis.decision import DataFreshness, Signal, TradePlan
+from bq.analysis.decision import (
+    DEFAULT_MIN_REWARD_RISK_BPS,
+    DataFreshness,
+    Signal,
+    TradePlan,
+)
 from bq.core import (
     Clock,
     CurrencyPaise,
@@ -247,15 +252,14 @@ class PaperExecutor:
         self.store = PaperTradingStore(path, clock)
         self.clock = clock or SystemClock()
 
-    def execute(
+    def preview(
         self,
         plan: TradePlan,
         *,
         context: ExecutionContext,
-        client_order_id: str,
         now: datetime | None = None,
     ) -> PaperExecution:
-        """Gate a plan, then place a paper order only if it is allowed."""
+        """Run the deterministic gate without placing an order."""
         if not isinstance(plan, TradePlan):
             raise PaperExecutorError("A TradePlan is required.")
         if not isinstance(context, ExecutionContext):
@@ -286,8 +290,41 @@ class PaperExecutor:
             available_cash_paise=context.available_cash_paise,
             order_notional_paise=plan.notional_paise().value,
         )
-        if decision.state is not RiskDecisionState.ALLOW:
-            return PaperExecution(decision=decision, freshness=freshness, order=None)
+        if (
+            decision.state is RiskDecisionState.ALLOW
+            and plan.reward_risk_bps < DEFAULT_MIN_REWARD_RISK_BPS
+        ):
+            decision = RiskDecision(
+                state=RiskDecisionState.BLOCK,
+                vetoes=(*decision.vetoes, "reward_risk"),
+            )
+        return PaperExecution(decision=decision, freshness=freshness, order=None)
+
+    def execute(
+        self,
+        plan: TradePlan,
+        *,
+        context: ExecutionContext,
+        client_order_id: str,
+        now: datetime | None = None,
+    ) -> PaperExecution:
+        """Gate a plan, then place a paper order only if it is allowed."""
+        preview = self.preview(plan, context=context, now=now)
+        try:
+            existing = self.store.order_for_client_id(
+                context.account_id, client_order_id
+            )
+        except PaperTradingError as exc:
+            raise PaperExecutorError(str(exc)) from exc
+        if existing is not None:
+            return PaperExecution(
+                decision=RiskDecision(state=RiskDecisionState.ALLOW, vetoes=()),
+                freshness=preview.freshness,
+                order=existing,
+            )
+        if preview.decision.state is not RiskDecisionState.ALLOW:
+            return preview
+        freshness = preview.freshness
         try:
             order = self.store.place_order(
                 account_id=context.account_id,
@@ -300,7 +337,9 @@ class PaperExecutor:
             )
         except (PaperTradingError, PaperAccountError) as exc:
             raise PaperExecutorError(str(exc)) from exc
-        return PaperExecution(decision=decision, freshness=freshness, order=order)
+        return PaperExecution(
+            decision=preview.decision, freshness=freshness, order=order
+        )
 
 
 __all__ = [

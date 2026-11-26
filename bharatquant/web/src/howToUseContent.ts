@@ -36,7 +36,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       },
       {
         kind: "p",
-        text: "The product is organised around the workspace tabs: Today, Research, Technical, Agent Lab, Strategy, Settings and How to use. This guide documents each of them, then explains every agent in detail, and finishes with the model-routing rules, a glossary and the guardrails.",
+        text: "The product is organised around the workspace tabs: Today, Research, Technical, Agent Lab, Strategy, Trade, Settings and How to use. This guide documents each of them, then explains every agent in detail, and finishes with the model-routing rules, a glossary and the guardrails.",
       },
       {
         kind: "note",
@@ -260,13 +260,58 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "Only a deterministic BUY plan becomes a candidate. The coordinator accepts candidates until the position cap or available cash is reached, and never changes the sizer's quantity.",
           "The Super Agent may downgrade a BUY to HOLD or AVOID and write the portfolio view. It cannot create a BUY the deterministic plan did not produce, invent a symbol or alter a number.",
           "With no reasoning model the run still completes: a rules ranking by composite and confidence is labelled source rules with a fallback note.",
-          "Accepted plans are research output only. No broker call and no paper order is made.",
+          "Accepted plans are research output only until you choose Stage in Trade. Staging copies the validated plan into the Trade tab; it still has to pass the separate execution gate there.",
           "Per-symbol agent traces show which nodes ran, their status and a one-line summary, so a degraded debate is visible rather than hidden.",
         ],
       },
       {
         kind: "note",
         text: "Optionally select a procedural playbook; its guidance is passed to the Super Agent with its id, name and version. A playbook can shape emphasis and ranking commentary but cannot change thresholds or risk. At most eight symbols and ten positions per run; execution is sequential. The Super Agent prompt is editable in Agent Lab, but the cash gate, position cap, sizing and risk rules are code-owned.",
+      },
+    ],
+  },
+  {
+    id: "trade",
+    title: "Trade tab",
+    blocks: [
+      {
+        kind: "p",
+        text: "Trade is the paper-execution seam. It takes a validated trade plan, reads the selected paper account in one snapshot, runs the deterministic pre-trade gate and places a paper order only when the gate returns ALLOW.",
+      },
+      { kind: "subheading", text: "Account and book" },
+      {
+        kind: "p",
+        text: "If no paper account exists, create one with an id, a name and an opening balance. The book shows cash, open positions and the 20 most recent paper orders. Cash is the account balance after capital movements and the exact-paise ledger; it is not a margin or broker balance.",
+      },
+      { kind: "subheading", text: "Plan and limits" },
+      {
+        kind: "list",
+        items: [
+          "Stage an accepted Strategy plan, or paste a plan from a Technical run. The server re-validates the JSON and ignores display-only fields.",
+          "Every risk limit is required: maximum symbol exposure, maximum open positions, daily, weekly and monthly loss, and orders per minute. There are no invented defaults.",
+          "The kill switch is explicit. NONE is the only non-blocking value.",
+          "Session state normally comes from the reviewed exchange calendar. If coverage is missing the gate fails closed; the owner can explicitly override open or closed, and the response labels that as owner_override.",
+          "Only long LIMIT BUY plans are accepted. There is no short-margin model.",
+        ],
+      },
+      { kind: "subheading", text: "Gate result" },
+      {
+        kind: "p",
+        text: "Preview runs the gate without placing anything. The result shows ALLOW or BLOCK, every veto, the freshness label and age, cash, open positions, symbol exposure, realised daily/weekly/monthly losses, the session source and the kill switch. Loss limits count realised P&L from paper fills only; unrealised P&L is not included, and symbol exposure is marked at the proposed entry price.",
+      },
+      { kind: "subheading", text: "Fill and reconciliation" },
+      {
+        kind: "p",
+        text: "A placed paper order starts PENDING. The book lists recent orders; a pending or partially filled order can be filled for its remaining quantity at the order limit, or at an explicit lower price for a BUY. Each fill atomically updates the order, the position and the exact-paise ledger. Retrying the same fill key returns the original fill. The reconcile action checks order fill totals, ledger totals and position counts.",
+      },
+      { kind: "subheading", text: "Cancellation and exit" },
+      {
+        kind: "p",
+        text: "A PENDING or PARTIALLY_FILLED order can be cancelled; filled orders cannot. An open position can be exited by creating a SELL LIMIT order for part or all of the held quantity at an explicit price. The exit order then uses the same fill flow, crediting exact paise to the ledger. Selling is capped at the held quantity, so an exit cannot create a short position. Exits are owner-triggered and are not routed through the BUY pre-trade gate.",
+      },
+      {
+        kind: "note",
+        text: "Place paper order is enabled only for an ALLOW preview. The order keeps the plan's sized quantity unchanged and uses an idempotency key, so retrying the same key returns the original order. Fills are owner-triggered; there is no automatic matching engine or market order. Kite sandbox and live-approval modes fail closed with a typed error; no broker order path exists in this build.",
       },
     ],
   },
