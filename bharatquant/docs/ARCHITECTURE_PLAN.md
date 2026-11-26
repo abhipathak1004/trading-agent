@@ -1,6 +1,6 @@
 # Architecture plan: 3-tier model routing and the multi-agent system
 
-**Version:** 1.14 · **Date:** 2026-11-26 · **Status:** approved; Phases 1–4A implemented
+**Version:** 1.18 · **Date:** 2026-11-26 · **Status:** approved; Phases 1–4A implemented
 **Scope:** audit of the existing BharatQuant analysis stack and the target
 architecture for a config-driven three-tier model router, Jev-preferred decision
 layer, specialist agents, four-layer memory and a deterministic execution seam.
@@ -14,6 +14,10 @@ any external provider capability is verified; see
 
 | Version | Date | Change |
 |---|---|---|
+| 1.18 | 2026-11-26 | Phase 10: average-cost realised P&L on SELL fills, exposed through the fill API and Trade notice; duplicate-safe. |
+| 1.17 | 2026-11-26 | Phase 9: bounded job worker, registered `memory.resolve` handler, owner-enabled daily resolver schedule and job-run visibility. |
+| 1.16 | 2026-11-26 | Phase 8: owner-supplied semantic-memory ingestion API and Agent Lab form, with PIT and URL validation. |
+| 1.15 | 2026-11-26 | Phase 7: optional owner risk-limit preset in `app_settings`, settings API/UI, and Trade prefill with per-run override. |
 | 1.14 | 2026-11-26 | Phase 6: order cancellation and owner-triggered SELL LIMIT position exits, reusing the fill/ledger path. |
 | 1.13 | 2026-11-26 | Phase 5: deterministic HTTP acceptance across three symbols, Strategy, paper execution, fill, reconciliation and calibration. |
 | 1.12 | 2026-11-26 | Phase 4B: owner-triggered atomic paper fills, fill idempotency, reconciliation API, and Trade-tab fill/reconcile actions. |
@@ -49,7 +53,10 @@ any external provider capability is verified; see
 | Final gate | `bq/analysis/final_gate.py` | Typed battery after the plan; can block execution, never create a BUY. |
 | Procedural memory | `bq/memory/procedural.py`, migration `030` | Versioned playbooks; guidance only. |
 | Semantic memory | `bq/memory/semantic.py`, migration `029` | Immutable docs, PIT search, FTS5 or term fallback. |
+| Semantic ingestion | `POST /api/v1/memory/semantic`, `SemanticMemoryPanel.tsx` | Owner-supplied text only; HTTPS, bounds and PIT validation. |
 | Outcome resolver | `bq/memory/resolver.py`, `POST /api/v1/memory/resolve` | Due episodes → daily bars → append-only outcome. |
+| Job worker | `bq/infra/{job_worker,job_handlers}.py` | Lease/fencing claims, one handler dispatch, atomic success/failure. |
+| Resolver schedule | `/api/v1/schedules/memory-resolve` | Owner-created daily job; absent on fresh install; job runs visible in schedule status. |
 | Evidence Noul pass | `bq/analysis/evidence.py`, mapping state | Cited claims only; model can reject, never add evidence. |
 | Evidence verifier | `bq/analysis/evidence.py` | Claim evidence ids checked against the PIT news store; degraded when absent. |
 | Episodic memory | `bq/memory/episodic.py`, migration `028` | Immutable decisions, append-only outcomes, source/model Brier. |
@@ -60,8 +67,10 @@ any external provider capability is verified; see
 | Execution adapter | `bq/execution/base.py` | PAPER enabled; sandbox/live fail closed with a typed error. |
 | Execution API | `POST /api/v1/execution/preview`, `/paper`; `GET /api/v1/paper/accounts[/{id}/book]` | Owner-only preview and paper placement; explicit limits; idempotent order key. |
 | Paper fills | `bq/paper_trading.py`, `POST /api/v1/paper/orders/{id}/fill` | Owner-triggered, limit-respecting, atomic order/position/ledger update. |
+| Realised P&L | `PaperFill.realized_pnl_paise` | Average-cost basis on SELL; derived, not a second ledger. |
 | Reconciliation | `GET /api/v1/paper/accounts/{id}/reconciliation` | Read-only checks of order, fill, ledger and position totals. |
 | Cancel / exit | `POST /api/v1/paper/orders/{id}/cancel`; `POST /api/v1/paper/accounts/{id}/positions/{instrument}/exit` | Cancel pending/partial; SELL LIMIT capped at held quantity; no short. |
+| Risk preset | `bq/settings.py`, `GET/PUT/DELETE /api/v1/settings/risk-limits` | Optional six-limit preset; explicit per request; no invented defaults. |
 | Execution | `bq/execution/paper_executor.py` | Paper orders only, behind `evaluate_pretrade`. |
 | Scoring | `bq/reports/scoring.py` | Brier/log-loss/Wilson helpers; offline only, unwired. |
 

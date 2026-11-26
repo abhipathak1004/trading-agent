@@ -273,6 +273,7 @@ def test_fill_partial_full_idempotent_and_reconcile(tmp_path: Path) -> None:
             assert partial.json()["order"]["status"] == "PARTIALLY_FILLED"
             assert partial.json()["order"]["filled_quantity"] == 4
             assert partial.json()["fill"]["quantity"] == 4
+            assert partial.json()["fill"]["realized_pnl_paise"] is None
             fill_id = partial.json()["fill"]["fill_id"]
 
             duplicate = await client.post(
@@ -306,6 +307,7 @@ def test_fill_partial_full_idempotent_and_reconcile(tmp_path: Path) -> None:
             assert final.status_code == 200
             assert final.json()["order"]["status"] == "FILLED"
             assert final.json()["order"]["filled_quantity"] == 10
+            assert final.json()["fill"]["realized_pnl_paise"] is None
 
             book = await client.get("/api/v1/paper/accounts/paper-main/book")
             assert book.json()["account"]["balance_paise"] == "900000"
@@ -453,17 +455,17 @@ def test_partial_and_full_position_exit_credits_cash(tmp_path: Path) -> None:
                 headers=headers,
             )
             order_id = placed.json()["order"]["order_id"]
-            assert (
-                await client.post(
-                    f"/api/v1/paper/orders/{order_id}/fill",
-                    json={
-                        "quantity": 10,
-                        "price_paise": 10_000,
-                        "idempotency_key": "exit-buy-fill",
-                    },
-                    headers=headers,
-                )
-            ).status_code == 200
+            buy_fill = await client.post(
+                f"/api/v1/paper/orders/{order_id}/fill",
+                json={
+                    "quantity": 10,
+                    "price_paise": 10_000,
+                    "idempotency_key": "exit-buy-fill",
+                },
+                headers=headers,
+            )
+            assert buy_fill.status_code == 200
+            assert buy_fill.json()["fill"]["realized_pnl_paise"] is None
 
             exit_path = "/api/v1/paper/accounts/paper-main/positions/NSE:RELIANCE/exit"
             partial = await client.post(
@@ -493,17 +495,28 @@ def test_partial_and_full_position_exit_credits_cash(tmp_path: Path) -> None:
             assert duplicate.status_code == 200
             assert duplicate.json()["order_id"] == partial_order["order_id"]
 
-            assert (
-                await client.post(
-                    f"/api/v1/paper/orders/{partial_order['order_id']}/fill",
-                    json={
-                        "quantity": 4,
-                        "price_paise": 11_000,
-                        "idempotency_key": "exit-partial-fill",
-                    },
-                    headers=headers,
-                )
-            ).status_code == 200
+            partial_fill = await client.post(
+                f"/api/v1/paper/orders/{partial_order['order_id']}/fill",
+                json={
+                    "quantity": 4,
+                    "price_paise": 11_000,
+                    "idempotency_key": "exit-partial-fill",
+                },
+                headers=headers,
+            )
+            assert partial_fill.status_code == 200
+            assert partial_fill.json()["fill"]["realized_pnl_paise"] == "4000"
+            duplicate_fill = await client.post(
+                f"/api/v1/paper/orders/{partial_order['order_id']}/fill",
+                json={
+                    "quantity": 4,
+                    "price_paise": 11_000,
+                    "idempotency_key": "exit-partial-fill",
+                },
+                headers=headers,
+            )
+            assert duplicate_fill.status_code == 200
+            assert duplicate_fill.json()["fill"]["realized_pnl_paise"] == "4000"
             book = await client.get("/api/v1/paper/accounts/paper-main/book")
             assert book.json()["positions"] == [
                 {"instrument_id": "NSE:RELIANCE", "quantity": 6}
@@ -520,17 +533,17 @@ def test_partial_and_full_position_exit_credits_cash(tmp_path: Path) -> None:
                 headers=headers,
             )
             final_order = final.json()
-            assert (
-                await client.post(
-                    f"/api/v1/paper/orders/{final_order['order_id']}/fill",
-                    json={
-                        "quantity": 6,
-                        "price_paise": 11_000,
-                        "idempotency_key": "exit-final-fill",
-                    },
-                    headers=headers,
-                )
-            ).status_code == 200
+            final_fill = await client.post(
+                f"/api/v1/paper/orders/{final_order['order_id']}/fill",
+                json={
+                    "quantity": 6,
+                    "price_paise": 11_000,
+                    "idempotency_key": "exit-final-fill",
+                },
+                headers=headers,
+            )
+            assert final_fill.status_code == 200
+            assert final_fill.json()["fill"]["realized_pnl_paise"] == "6000"
             book = await client.get("/api/v1/paper/accounts/paper-main/book")
             assert book.json()["positions"] == []
             assert book.json()["account"]["balance_paise"] == "1010000"

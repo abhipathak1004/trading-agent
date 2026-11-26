@@ -768,6 +768,68 @@ a.nav-item:hover,
   font-weight: 600;
 }
 
+.tunnel-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.status-badge--live {
+  border-color: rgb(34 197 94 / 55%);
+  color: rgb(74 222 128);
+}
+
+.tunnel-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tunnel-link input {
+  flex: 1 1 320px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.tunnel-log {
+  margin-top: 12px;
+}
+
+.tunnel-log summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tunnel-log pre {
+  max-height: 200px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: rgb(0 0 0 / 30%);
+  color: var(--muted-strong);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Research tab ------------------------------------------------------- */
 
 .panel-header {

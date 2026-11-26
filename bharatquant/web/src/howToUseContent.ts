@@ -104,7 +104,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       { kind: "subheading", text: "Schedules" },
       {
         kind: "p",
-        text: "Shows the schedule definitions and the last recorded wake decisions. Schedules are daily local times in an IANA timezone, with optional intraday intervals, weekday filters, an operating window and a wake policy. This build has no job handlers registered: wake decisions are recorded (eligible, skipped by policy, wake window expired, outside operating window) but no work is executed, and the previews do not apply market calendars, dependencies or wake policies.",
+        text: "Shows the schedule definitions, the last recorded wake decisions and recent job runs. Schedules are daily local times in an IANA timezone, with optional intraday intervals, weekday filters, an operating window and a wake policy. Scheduler discovery enqueues due occurrences; a bounded worker executes registered handlers. The only registered handler is memory.resolve, enabled by the owner as a daily schedule from Memory calibration. The previews do not apply market calendars, dependencies or wake policies.",
       },
       { kind: "subheading", text: "Diagnostics: snapshot freshness" },
       {
@@ -129,7 +129,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       { kind: "subheading", text: "Memory calibration" },
       {
         kind: "p",
-        text: "Shows Brier score, expected calibration error and outcome rate for resolved shadow episodes, separated by decision source and model. A decision is recorded at as_of; an outcome is appended later. Both sides are filtered to the requested instant, so a later outcome cannot leak into an earlier view. Unresolved episodes and decisions without a predicted probability are not scored. Resolve due episodes runs the deterministic resolver: BUY plans use stop/target first-touch or the horizon close, and no-plan episodes use the forward return. The default horizon is five calendar days; the episode itself is never rewritten.",
+        text: "Shows Brier score, expected calibration error and outcome rate for resolved shadow episodes, separated by decision source and model. A decision is recorded at as_of; an outcome is appended later. Both sides are filtered to the requested instant, so a later outcome cannot leak into an earlier view. Unresolved episodes and decisions without a predicted probability are not scored. Resolve due episodes runs the deterministic resolver: BUY plans use stop/target first-touch or the horizon close, and no-plan episodes use the forward return. The default horizon is five calendar days; the episode itself is never rewritten. The Daily resolver checkbox creates or enables the 18:00 IST memory.resolve schedule; fresh installs have no schedule.",
       },
       { kind: "subheading", text: "Diagnostics: model usage" },
       {
@@ -221,7 +221,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       { kind: "subheading", text: "Semantic memory" },
       {
         kind: "p",
-        text: "Search stored research documents at a point in time. Results are filtered by published, known and recorded times, optionally by symbol. The service uses FTS5 when the local SQLite build supports it and the deterministic term index otherwise; both answer the same query contract. The panel shows the title, symbol, snippet, source and score.",
+        text: "Search stored research documents at a point in time. Results are filtered by published, known and recorded times, optionally by symbol. The service uses FTS5 when the local SQLite build supports it and the deterministic term index otherwise; both answer the same query contract. The panel shows the title, symbol, snippet, source and score. The Add research document form stores owner-supplied text only; it makes no web fetch and no model call, requires an HTTPS source, rejects future knowledge times, and returns the existing document for duplicate content.",
       },
       { kind: "subheading", text: "Procedural playbooks" },
       {
@@ -288,7 +288,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
         kind: "list",
         items: [
           "Stage an accepted Strategy plan, or paste a plan from a Technical run. The server re-validates the JSON and ignores display-only fields.",
-          "Every risk limit is required: maximum symbol exposure, maximum open positions, daily, weekly and monthly loss, and orders per minute. There are no invented defaults.",
+          "Every risk limit is required: maximum symbol exposure, maximum open positions, daily, weekly and monthly loss, and orders per minute. They are pre-filled from the Settings preset when one exists, remain editable for the run, and have no invented defaults.",
           "The kill switch is explicit. NONE is the only non-blocking value.",
           "Session state normally comes from the reviewed exchange calendar. If coverage is missing the gate fails closed; the owner can explicitly override open or closed, and the response labels that as owner_override.",
           "Only long LIMIT BUY plans are accepted. There is no short-margin model.",
@@ -302,7 +302,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       { kind: "subheading", text: "Fill and reconciliation" },
       {
         kind: "p",
-        text: "A placed paper order starts PENDING. The book lists recent orders; a pending or partially filled order can be filled for its remaining quantity at the order limit, or at an explicit lower price for a BUY. Each fill atomically updates the order, the position and the exact-paise ledger. Retrying the same fill key returns the original fill. The reconcile action checks order fill totals, ledger totals and position counts.",
+        text: "A placed paper order starts PENDING. The book lists recent orders; a pending or partially filled order can be filled for its remaining quantity at the order limit, or at an explicit lower price for a BUY. Each fill atomically updates the order, the position and the exact-paise ledger. A SELL fill also reports realised P&L against average cost, including a loss; it is not stored as a second ledger. Retrying the same fill key returns the original fill and result. The reconcile action checks order fill totals, ledger totals and position counts.",
       },
       { kind: "subheading", text: "Cancellation and exit" },
       {
@@ -332,6 +332,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "News feed URL: must be HTTPS and must not contain embedded credentials.",
           "Long-term memory retention: 1 to 3,650 days; memories older than this are eligible for pruning.",
           "Provider API keys: one slot per provider, including TypeSafe Jev. Keys are stored in plaintext in the local database, which is acceptable only for a single-owner, loopback-only app; they are never returned to the browser, only a masked hint and the last four characters.",
+          "Paper execution risk limits: six owner-reviewed gate presets, saved separately from any order. A fresh install has no preset; the Trade tab stays blank until one is saved or entered for the run.",
         ],
       },
       { kind: "subheading", text: "Model tiers, decision policy & routing" },

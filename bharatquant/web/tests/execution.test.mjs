@@ -123,11 +123,13 @@ test("a fill result parses the updated order and the fill", () => {
       price_paise: "10000",
       filled_at: "2026-11-25T10:01:00Z",
       idempotency_key: "fill-1",
+      realized_pnl_paise: null,
     },
   });
   assert.equal(parsed.order.status, "PARTIALLY_FILLED");
   assert.equal(parsed.order.filled_quantity, 4);
   assert.equal(parsed.fill.price_paise, "10000");
+  assert.equal(parsed.fill.realized_pnl_paise, null);
 });
 
 test("a reconciliation result parses", () => {
@@ -177,4 +179,20 @@ test("a standalone order response parses for cancel and exit", () => {
   });
   assert.equal(parsed.side, "SELL");
   assert.equal(parsed.status, "CANCELLED");
+});
+
+test("a sell fill parses realised P&L, including a loss", () => {
+  const parsed = parsePaperFill({
+    order: { ...order, side: "SELL", status: "FILLED", filled_quantity: 10 },
+    fill: {
+      fill_id: "fill-sell",
+      order_id: "order-1",
+      quantity: 10,
+      price_paise: "9000",
+      filled_at: "2026-11-25T10:02:00Z",
+      idempotency_key: "fill-sell",
+      realized_pnl_paise: "-1000",
+    },
+  });
+  assert.equal(parsed.fill.realized_pnl_paise, "-1000");
 });

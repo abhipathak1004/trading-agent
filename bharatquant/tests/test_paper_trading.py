@@ -119,3 +119,118 @@ def test_limit_violation_short_and_cancel(tmp_path: Path) -> None:
         )
     cancelled = store.cancel(buy.order_id)
     assert cancelled.status is PaperOrderStatus.CANCELLED
+
+
+def test_sell_fill_reports_average_cost_realised_pnl(tmp_path: Path) -> None:
+    path = tmp_path / "bq.db"
+    migrate(path, create=True)
+    clock = FrozenClock()
+    accounts = PaperAccountStore(path, clock)
+    accounts.create(
+        account_id="paper-main",
+        name="Paper-Main",
+        opening_balance_paise=CurrencyPaise(100_000),
+    )
+    store = PaperTradingStore(path, clock)
+    buy = store.place_order(
+        account_id="paper-main",
+        instrument_id="NSE:RELIANCE",
+        client_order_id="buy-pnl",
+        side=PaperSide.BUY,
+        order_type=PaperOrderType.LIMIT,
+        quantity=Quantity(10),
+        limit_price_paise=CurrencyPaise(1_000),
+    )
+    _order, buy_fill = store.fill(
+        buy.order_id,
+        quantity=Quantity(10),
+        price_paise=CurrencyPaise(1_000),
+        idempotency_key="buy-pnl-fill",
+    )
+    assert buy_fill.realized_pnl_paise is None
+
+    sell = store.place_order(
+        account_id="paper-main",
+        instrument_id="NSE:RELIANCE",
+        client_order_id="sell-pnl",
+        side=PaperSide.SELL,
+        order_type=PaperOrderType.LIMIT,
+        quantity=Quantity(10),
+        limit_price_paise=CurrencyPaise(900),
+    )
+    order, partial = store.fill(
+        sell.order_id,
+        quantity=Quantity(4),
+        price_paise=CurrencyPaise(1_100),
+        idempotency_key="sell-pnl-partial",
+    )
+    assert order.filled_quantity == 4
+    assert partial.realized_pnl_paise == 400
+    _duplicate_order, duplicate = store.fill(
+        sell.order_id,
+        quantity=Quantity(4),
+        price_paise=CurrencyPaise(1_100),
+        idempotency_key="sell-pnl-partial",
+    )
+    assert duplicate.fill_id == partial.fill_id
+    assert duplicate.realized_pnl_paise == 400
+
+    order, final = store.fill(
+        sell.order_id,
+        quantity=Quantity(6),
+        price_paise=CurrencyPaise(900),
+        idempotency_key="sell-pnl-final",
+    )
+    assert order.status is PaperOrderStatus.FILLED
+    assert final.realized_pnl_paise == -600
+    assert store.positions("paper-main") == ()
+    reconciled = store.reconcile("paper-main")
+    assert reconciled.fill_count == 3
+    assert reconciled.ledger_debit_paise == 10_000
+    assert reconciled.ledger_credit_paise == 9_800
+    with pytest.raises(PaperTradingError, match="no cost basis"):
+        store._realized_for_sell(0, 0, 1, 1_000)
+
+
+def test_flat_exit_realises_zero_pnl(tmp_path: Path) -> None:
+    path = tmp_path / "bq.db"
+    migrate(path, create=True)
+    clock = FrozenClock()
+    accounts = PaperAccountStore(path, clock)
+    accounts.create(
+        account_id="paper-main",
+        name="Paper-Main",
+        opening_balance_paise=CurrencyPaise(100_000),
+    )
+    store = PaperTradingStore(path, clock)
+    buy = store.place_order(
+        account_id="paper-main",
+        instrument_id="NSE:TCS",
+        client_order_id="flat-buy",
+        side=PaperSide.BUY,
+        order_type=PaperOrderType.LIMIT,
+        quantity=Quantity(2),
+        limit_price_paise=CurrencyPaise(1_000),
+    )
+    store.fill(
+        buy.order_id,
+        quantity=Quantity(2),
+        price_paise=CurrencyPaise(1_000),
+        idempotency_key="flat-buy-fill",
+    )
+    sell = store.place_order(
+        account_id="paper-main",
+        instrument_id="NSE:TCS",
+        client_order_id="flat-sell",
+        side=PaperSide.SELL,
+        order_type=PaperOrderType.LIMIT,
+        quantity=Quantity(2),
+        limit_price_paise=CurrencyPaise(1_000),
+    )
+    _order, fill = store.fill(
+        sell.order_id,
+        quantity=Quantity(2),
+        price_paise=CurrencyPaise(1_000),
+        idempotency_key="flat-sell-fill",
+    )
+    assert fill.realized_pnl_paise == 0

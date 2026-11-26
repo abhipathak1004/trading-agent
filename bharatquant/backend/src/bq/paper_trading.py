@@ -88,6 +88,7 @@ class PaperFill:
     price_paise: int
     filled_at: datetime
     idempotency_key: str
+    realized_pnl_paise: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +213,83 @@ class PaperTradingStore:
                 )
                 return self._get_order(connection, order_id)
 
+    def _fills_for_cost(
+        self,
+        connection: sqlite3.Connection,
+        account_id: str,
+        instrument_id: str,
+    ) -> list[tuple[str, str, int, int]]:
+        rows = connection.execute(
+            "SELECT f.fill_id, o.side, f.quantity, f.price_paise "
+            "FROM paper_fills f JOIN paper_orders o ON o.order_id = f.order_id "
+            "WHERE o.account_id = ? AND o.instrument_id = ? "
+            "ORDER BY f.filled_at, f.rowid",
+            (account_id, instrument_id),
+        ).fetchall()
+        return [(str(row[0]), str(row[1]), int(row[2]), int(row[3])) for row in rows]
+
+    @staticmethod
+    def _basis(rows: list[tuple[str, str, int, int]]) -> tuple[int, int]:
+        held = 0
+        cost = 0
+        for _fill_id, side, quantity, price_paise in rows:
+            if side == "BUY":
+                held += quantity
+                cost += quantity * price_paise
+                continue
+            if quantity > held:
+                raise PaperTradingError("Existing sell fills have no cost basis.")
+            if quantity == held:
+                held = 0
+                cost = 0
+            else:
+                removed = cost * quantity // held
+                cost -= removed
+                held -= quantity
+        return held, cost
+
+    @staticmethod
+    def _realized_for_sell(
+        held: int, cost: int, quantity: int, price_paise: int
+    ) -> int:
+        if quantity > held:
+            raise PaperTradingError("Sell fill has no cost basis.")
+        if quantity == held:
+            return quantity * price_paise - cost
+        removed = cost * quantity // held
+        return quantity * price_paise - removed
+
+    @classmethod
+    def _realized_for_fill(
+        cls,
+        rows: list[tuple[str, str, int, int]],
+        *,
+        target_fill_id: str,
+    ) -> int | None:
+        held = 0
+        cost = 0
+        realized: int | None = None
+        for fill_id, side, quantity, price_paise in rows:
+            if side == "BUY":
+                held += quantity
+                cost += quantity * price_paise
+                continue
+            if quantity > held:
+                raise PaperTradingError("Existing sell fills have no cost basis.")
+            proceeds = quantity * price_paise
+            if quantity == held:
+                realized = proceeds - cost
+                held = 0
+                cost = 0
+            else:
+                removed = cost * quantity // held
+                realized = proceeds - removed
+                cost -= removed
+                held -= quantity
+            if fill_id == target_fill_id:
+                return realized
+        return None
+
     def fill(
         self,
         order_id: str,
@@ -239,13 +317,23 @@ class PaperTradingStore:
                     (order_id, idempotency_key),
                 ).fetchone()
                 if existing is not None:
+                    existing_id = str(existing[0])
+                    duplicate_realized = None
+                    if order.side is PaperSide.SELL:
+                        duplicate_realized = self._realized_for_fill(
+                            self._fills_for_cost(
+                                connection, order.account_id, order.instrument_id
+                            ),
+                            target_fill_id=existing_id,
+                        )
                     fill = PaperFill(
-                        fill_id=str(existing[0]),
+                        fill_id=existing_id,
                         order_id=order_id,
                         quantity=int(existing[1]),
                         price_paise=int(existing[2]),
                         filled_at=_parse_timestamp(str(existing[3])),
                         idempotency_key=str(existing[4]),
+                        realized_pnl_paise=duplicate_realized,
                     )
                     return self._get_order(connection, order_id), fill
 
@@ -267,6 +355,17 @@ class PaperTradingStore:
                     )
                 ):
                     raise PaperTradingError("Fill violates the limit price.")
+
+                realized: int | None = None
+                if order.side is PaperSide.SELL:
+                    held, cost = self._basis(
+                        self._fills_for_cost(
+                            connection, order.account_id, order.instrument_id
+                        )
+                    )
+                    realized = self._realized_for_sell(
+                        held, cost, quantity.value, price_paise.value
+                    )
 
                 filled_at = _utc(self.clock.now())
                 fill_id = secrets.token_urlsafe(18)
@@ -364,6 +463,7 @@ class PaperTradingStore:
                     price_paise=price_paise.value,
                     filled_at=filled_at,
                     idempotency_key=idempotency_key,
+                    realized_pnl_paise=realized,
                 )
 
     def cancel(self, order_id: str) -> PaperOrder:

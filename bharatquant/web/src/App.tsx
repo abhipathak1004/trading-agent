@@ -20,6 +20,8 @@ import SemanticMemoryPanel from "./SemanticMemoryPanel";
 import PlaybookPanel from "./PlaybookPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
+import RiskLimitsPanel from "./RiskLimitsPanel";
+import CloudflareTunnelPanel from "./CloudflareTunnelPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
 import HowToUsePanel from "./HowToUsePanel";
 
@@ -606,7 +608,7 @@ export default function App() {
             </section>
 
             <AgentLabPanel csrfToken={session.csrfToken} />
-            <SemanticMemoryPanel />
+            <SemanticMemoryPanel csrfToken={session.csrfToken} />
             <PlaybookPanel csrfToken={session.csrfToken} />
           </section>
         )}
@@ -745,6 +747,8 @@ export default function App() {
 
             <SettingsConfigPanel csrfToken={session.csrfToken} />
             <ModelsConfigPanel csrfToken={session.csrfToken} />
+            <RiskLimitsPanel csrfToken={session.csrfToken} />
+            <CloudflareTunnelPanel csrfToken={session.csrfToken} />
             <SettingsOverviewPanel />
 
             <div className="dashboard-grid dashboard-grid--settings" id="settings-schedules">

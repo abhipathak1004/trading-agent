@@ -957,3 +957,164 @@ existing order and fill tables.
 fill, partially exited, or fully exited through the UI. Realised P&L is reflected
 in the account balance and ledger, not stored as a separate exit record. The
 pre-trade gate and broker boundary remain unchanged.
+
+## ADR-033: Risk-limit presets pre-fill, never silently decide
+
+**Status:** Accepted; Phase 7 implements it.
+
+**Context:** The Trade tab asked the owner for six gate limits on every run.
+Repeating them is error-prone, but defaulting them would be worse: an invented
+limit is an invisible policy change. The limits are gate inputs, not strategy
+configuration.
+
+**Decision:** Persist an optional preset and keep the request authoritative.
+
+- `risk_limits` is an optional JSON value in `app_settings`. A fresh install has
+  no preset; `AppConfig.risk_limits` is `None`.
+- The value is validated by the same `RiskLimits` contract used by the gate:
+  non-negative integer paise/counts, with at least one allowed order per minute.
+- `GET/PUT/DELETE /api/v1/settings/risk-limits` are owner-only; writes require
+  origin and CSRF. Reads are no-store. The response reports `configured: false`
+  with null fields until the owner saves.
+- The Settings card saves or resets the preset. The Trade tab loads it and
+  pre-fills the six fields, but every preview and placement still carries the
+  limits explicitly. The owner may override any field for one run.
+- Nothing auto-places an order from a preset. The preset does not change the
+  code-owned gate thresholds, sizing or risk policy.
+
+**Consequences:** Repeating the limits is cheaper without hiding them. The preset
+stores only the request inputs; a stale preset cannot silently alter policy. A
+malformed stored value is ignored (`None`) rather than trusted.
+
+## ADR-034: Semantic documents are owner-supplied and immutable
+
+**Status:** Accepted; Phase 8 implements it.
+
+**Context:** Semantic search existed over immutable documents, but only code could
+add a document. The owner needs to store research text without turning ingestion
+into an unbounded crawler or a model summarisation path.
+
+**Decision:** Ingestion is an explicit owner action with a narrow contract.
+
+- `POST /api/v1/memory/semantic` accepts symbol, HTTPS source URL, title, body,
+  published time and optional known time. Writes require owner auth, origin and
+  CSRF; reads remain no-store.
+- The store validates every field and the URL (HTTPS, no embedded credentials).
+  `known_at` cannot precede `published_at` or be in the future; oversized fields
+  are rejected.
+- No web fetch and no model call occur. The owner supplies the text; it is stored
+  as an immutable document with a content hash and deterministic term index.
+- Duplicate symbol/URL/published/content identity returns the existing document
+  rather than creating a second row.
+- The Agent Lab Semantic memory panel adds an ingest form beside search and
+  refreshes the current search after a successful store. It shows the stored
+  title and doc id.
+- Semantic memory still excludes live quotes, OHLCV candles, positions and
+  margins.
+
+**Consequences:** The owner can make the memory layer useful without a crawler or
+token spend. Ingestion quality depends on the supplied text; source metadata is an
+owner assertion, not independent verification. Retrieval remains point-in-time.
+
+## ADR-035: The worker executes registered jobs; the resolver is opt-in
+
+**Status:** Accepted; Phase 9 implements it.
+
+**Context:** The scheduler records wake decisions and enqueues `JobRun` rows, but
+nothing executed them. The Brier loop still required the owner to press a button.
+The job store already has lease tokens, fencing, retry and a bounded attempt
+count; adding a second queue would duplicate that safety.
+
+**Decision:** Add one bounded worker over the existing job store.
+
+- `JobWorker` claims one available `JobRun` with `claim_next`, invokes exactly one
+  registered handler by `job_id`, and calls `succeed` or `fail` with the held
+  lease token. Missing handlers and handler exceptions become failed runs, not
+  crashed loops.
+- `JobWorkerLoop` runs the synchronous worker in a thread on a fixed interval and
+  is started/stopped by the FastAPI lifespan beside the scheduler loop.
+- `memory.resolve` is the only registered handler. It builds the existing
+  analysis vendor router and calls `OutcomeResolver` with a 5-day horizon and a
+  bounded episode count at the occurrence's scheduled time. It makes no model
+  call.
+- The daily schedule does not exist on a fresh install. `GET/PUT
+  /api/v1/schedules/memory-resolve` reports and creates/toggles the
+  `memory-resolve-daily` schedule; enabling it is an owner action. The default is
+  disabled until then.
+- `/api/v1/schedules/status` now includes recent job runs and attempt/failure
+  state. The existing schedule panel shows them; there is no parallel scheduler
+  surface.
+
+**Consequences:** Due episodes can resolve without a manual button, and retries
+follow the existing lease/attempt rules. A scheduled resolver still needs bar
+data, so a vendor outage fails the job and leaves the episode unresolved for the
+next occurrence. Working memory remains separate and deferred.
+
+## ADR-036: Realised P&L is derived from average cost, not a second ledger
+
+**Status:** Accepted; Phase 10 implements it.
+
+**Context:** An exit fill updated cash and the position but did not show whether
+the trade made or lost money. Adding a P&L ledger or a stored column would create
+a second accounting source and a migration for a value that can be derived from
+fills.
+
+**Decision:** Compute realised P&L at fill time and return it.
+
+- For a SELL fill, replay prior fills for the account/instrument with average-cost
+  inventory. `realized_pnl_paise = proceeds - cost basis removed`. A partial exit
+  keeps the remaining basis; a full exit clears it.
+- BUY fills return `realized_pnl_paise = null`. A SELL with no prior cost basis
+  fails closed before the fill is committed.
+- The value is returned on `PaperFill` and the fill API response but is not stored
+  in `paper_fills`. On an idempotent duplicate, the store replays fills up to the
+  original fill id and recomputes the same result.
+- The Trade notice shows a signed rupee value, including a loss. The ledger
+  remains the cash authority; reconciliation is unchanged.
+- Amounts are integer paise. No migration, no broker call, no model call.
+
+**Consequences:** The owner can see the realised result of an exit without a
+second accounting model. The P&L depends on average-cost replay; if a later
+corporate action changes the basis, the historical fills remain the record and the
+result is still deterministic. A dedicated realised-P&L report can query fills
+later if needed.
+
+## ADR-037: Cloudflare quick tunnel is runtime-only, owner-triggered egress
+
+**Status:** Accepted.
+
+**Context:** The owner wants to share a live session from another device without
+deploying the app. The API is deliberately loopback-only: `TrustedHostMiddleware`
+admits `127.0.0.1` only, `verify_origin` compares against a fixed
+`http://127.0.0.1:8000`, and the session cookie is not `Secure`. A raw tunnel
+would 400 on the Host header and 403 on every write, including login.
+
+**Decision:** Add an owner-triggered Cloudflare **quick** tunnel that lives only as
+long as its child process; nothing is persisted and there is no migration.
+
+- `bq.infra.tunnel.TunnelManager` owns the state machine
+  (`stopped → downloading → starting → live → stopping → stopped`, plus `error`).
+  It spawns `cloudflared tunnel --url http://127.0.0.1:8000 --no-autoupdate` with
+  `asyncio.create_subprocess_exec` (no shell), parses the first
+  `https://<id>.trycloudflare.com`, and marks `live` only after
+  `GET /api/v1/system/health` through the tunnel returns `{"status":"ok"}`.
+- The host and origin gates become **dynamic**: `TunnelHostMiddleware` admits
+  loopback plus `manager.allowed_hosts()`, and `verify_origin` admits
+  `ALLOWED_ORIGIN` plus `manager.allowed_origins()`. Both allowlists are empty
+  unless the tunnel is `starting`/`live`, so the default posture is unchanged and
+  every rejection fails closed.
+- The session cookie is `Secure` only when the login's `Origin` is an active
+  tunnel origin; loopback logins are unchanged.
+- Access stays **owner password only**. No second auth path, no share token.
+- The `cloudflared` binary resolves from `BQ_CLOUDFLARED`, then `PATH`, then
+  `BQ_HOME/bin`. An explicit owner Start may download the official GitHub release
+  into `BQ_HOME/bin`, size-bounded, atomically written and verified with
+  `--version` before use. No owner-supplied URL is ever fetched.
+- Shutdown (`lifespan` `finally`) stops the tunnel, so no child is orphaned.
+
+**Consequences:** The link is public on the internet for as long as the tunnel
+runs and is protected only by the owner password and the app's own auth, CSRF and
+origin checks. Stopping the tunnel kills the link immediately. Auto-download is a
+supply-chain surface accepted for convenience; the binary comes only from
+Cloudflare's GitHub release and is version-checked. This does not weaken ADR-001
+or ADR-013: it exposes the same paper-only app, it does not add a broker path.

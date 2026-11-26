@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 
 import { parseMemoryCalibration } from "./memoryContract";
 import type { MemoryCalibration } from "./memoryContract";
+import { parseMemorySchedule } from "./memoryScheduleContract";
+import type { MemorySchedule } from "./memoryScheduleContract";
 
 type LoadState =
   | { state: "loading" | "error" }
@@ -20,6 +22,8 @@ export default function MemoryCalibrationPanel({
   const [retry, setRetry] = useState(0);
   const [resolving, setResolving] = useState(false);
   const [resolveMessage, setResolveMessage] = useState<string | null>(null);
+  const [schedule, setSchedule] = useState<MemorySchedule | null>(null);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -45,6 +49,46 @@ export default function MemoryCalibrationPanel({
     void loadCalibration();
     return () => controller.abort();
   }, [retry]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadSchedule() {
+      try {
+        const response = await fetch("/api/v1/schedules/memory-resolve", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (response.ok) {
+          setSchedule(parseMemorySchedule(await response.json()));
+        }
+      } catch {
+        // The schedule toggle is optional; calibration still works.
+      }
+    }
+    void loadSchedule();
+    return () => controller.abort();
+  }, [retry]);
+
+  async function toggleSchedule(enabled: boolean) {
+    setScheduleSaving(true);
+    try {
+      const response = await fetch("/api/v1/schedules/memory-resolve", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ enabled }),
+      });
+      if (response.ok) {
+        setSchedule(parseMemorySchedule(await response.json()));
+      }
+    } catch {
+      // Leave the displayed state unchanged on failure.
+    } finally {
+      setScheduleSaving(false);
+    }
+  }
 
   async function resolveDue() {
     setResolving(true);
@@ -105,6 +149,24 @@ export default function MemoryCalibrationPanel({
       {resolveMessage !== null && (
         <p className="config-feedback" role="status">
           {resolveMessage}
+        </p>
+      )}
+      {schedule !== null && (
+        <p className="panel-note">
+          <label>
+            <input
+              type="checkbox"
+              checked={schedule.enabled}
+              disabled={scheduleSaving}
+              onChange={(event) => void toggleSchedule(event.target.checked)}
+            />{" "}
+            Daily resolver
+          </label>
+          {" — "}
+          {schedule.enabled
+            ? `enabled at ${schedule.local_time ?? "18:00"} ${schedule.timezone ?? "Asia/Kolkata"}`
+            : "disabled; enable to let the worker resolve due outcomes automatically"}
+          .
         </p>
       )}
       {load.state === "loading" && <p role="status">Loading calibration...</p>}

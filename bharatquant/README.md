@@ -95,6 +95,27 @@ build is packaged with the Python application. The server refuses to start
 if the build's `index.html` is missing. Owner sign-in requires the served
 `http://127.0.0.1:8000` origin and is not supported through Vite's dev origin.
 
+### Share over a Cloudflare tunnel
+
+Settings → **Cloudflare tunnel** can start an ephemeral
+`https://<id>.trycloudflare.com` quick tunnel to the running server, so a second
+device can reach it while `bq serve` is running. Nothing is persisted; the link
+dies when you press **Stop tunnel** or quit the server.
+
+- Access is still **owner password only**. The link is public on the internet, so
+  treat it like any shared credential and stop the tunnel when finished.
+- The default posture is unchanged: with no tunnel active, only `127.0.0.1` is
+  accepted and non-loopback Host/Origin requests are rejected. While a tunnel is
+  live its host and origin are allow-listed, and the session cookie is `Secure`.
+- `cloudflared` resolves from `BQ_CLOUDFLARED`, then `PATH`, then `BQ_HOME/bin`.
+  On the first Start the app may download the official release into `BQ_HOME/bin`
+  (verified with `cloudflared --version`) instead of asking you to install it.
+- The app marks the URL live only after it health-checks through the tunnel, so
+  the copied link is responding when it appears.
+
+This is remote access to the same paper-only app. It adds no broker path and does
+not change ADR-001 or ADR-013.
+
 ## Checks
 
 ```sh

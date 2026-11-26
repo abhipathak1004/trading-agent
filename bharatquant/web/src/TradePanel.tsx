@@ -17,6 +17,7 @@ import type {
   PaperPosition,
   PaperReconciliation,
 } from "./executionContract.ts";
+import { parseRiskLimitsPreset } from "./riskLimitsContract.ts";
 import type { StrategyPlan } from "./strategyContract.ts";
 
 type PreviewState =
@@ -59,6 +60,14 @@ function formatPaise(value: string | number): string {
   })}`;
 }
 
+function formatSignedPaise(value: string): string {
+  const amount = Number(value);
+  const sign = amount < 0 ? "-" : "";
+  return `${sign}₹${(Math.abs(amount) / 100).toLocaleString("en-IN", {
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 function newClientOrderId(): string {
   return `execution-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -97,6 +106,7 @@ export default function TradePanel({
     {},
   );
   const [exitPrices, setExitPrices] = useState<Record<string, string>>({});
+  const [presetConfigured, setPresetConfigured] = useState(false);
   const [newAccountId, setNewAccountId] = useState("paper-main");
   const [newAccountName, setNewAccountName] = useState("Paper Main");
   const [newAccountBalance, setNewAccountBalance] = useState("10000");
@@ -107,6 +117,38 @@ export default function TradePanel({
       setPlanJson(JSON.stringify(stagedPlan, null, 2));
     }
   }, [stagedPlan]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadRiskPreset() {
+      try {
+        const response = await fetch("/api/v1/settings/risk-limits", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          return;
+        }
+        const preset = parseRiskLimitsPreset(await response.json());
+        if (!preset.configured) {
+          return;
+        }
+        const asRupees = (value: number | null): string =>
+          value === null ? "" : String(value / 100);
+        setMaxSymbolExposure(asRupees(preset.max_symbol_exposure_paise));
+        setMaxOpenPositions(String(preset.max_open_positions ?? ""));
+        setMaxDailyLoss(asRupees(preset.max_daily_loss_paise));
+        setMaxWeeklyLoss(asRupees(preset.max_weekly_loss_paise));
+        setMaxMonthlyLoss(asRupees(preset.max_monthly_loss_paise));
+        setMaxOrderRate(String(preset.max_order_rate_per_minute ?? ""));
+        setPresetConfigured(true);
+      } catch {
+        // A preset is optional; the owner can still fill the fields by hand.
+      }
+    }
+    void loadRiskPreset();
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -231,12 +273,18 @@ export default function TradePanel({
         return;
       }
       const result = parsePaperFill(await response.json());
+      const realized =
+        result.fill.realized_pnl_paise === null
+          ? ""
+          : ` · realised ${formatSignedPaise(
+              result.fill.realized_pnl_paise,
+            )}`;
       setNotice(
         `${result.order.side === "SELL" ? "Sold" : "Bought"} ${
           result.fill.quantity
         } ${result.order.instrument_id} at ${formatPaise(
           result.fill.price_paise,
-        )}; order ${result.order.status.toLowerCase()}.`,
+        )}${realized}; order ${result.order.status.toLowerCase()}.`,
       );
       setBookRefresh((value) => value + 1);
     } catch {
@@ -804,6 +852,11 @@ export default function TradePanel({
         </p>
 
         <h3>Risk limits (required)</h3>
+        {presetConfigured && (
+          <p className="panel-note">
+            Limits loaded from Settings. Every field remains editable for this run.
+          </p>
+        )}
         <div className="models-grid models-grid--compact">
           <label htmlFor="trade-symbol-exposure">
             Max symbol exposure (₹)

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseSemanticSearch } from "../src/semanticContract.ts";
+import {
+  parseSemanticDocument,
+  parseSemanticSearch,
+} from "../src/semanticContract.ts";
 
 const valid = {
   query: "breakout volume",
@@ -36,4 +39,37 @@ test("malformed semantic searches are rejected", () => {
   ]) {
     assert.throws(() => parseSemanticSearch({ ...valid, ...override }));
   }
+});
+
+test("a stored semantic document parses", () => {
+  const parsed = parseSemanticDocument({
+    doc_id: "sd_1",
+    symbol: "NSE:RELIANCE",
+    source_url: "https://example.com/reliance",
+    title: "Reliance breakout",
+    snippet: "Reliance cleared resistance on strong volume.",
+    published_at: "2026-11-25T10:00:00+00:00",
+    known_at: "2026-11-25T10:00:00+00:00",
+    recorded_at: "2026-11-26T12:00:00+00:00",
+    content_hash: "abc123",
+  });
+  assert.equal(parsed.doc_id, "sd_1");
+  assert.equal(parsed.content_hash, "abc123");
+});
+
+test("malformed stored semantic documents are rejected", () => {
+  const base = {
+    doc_id: "sd_1",
+    symbol: "NSE:RELIANCE",
+    source_url: "https://example.com/reliance",
+    title: "Reliance breakout",
+    snippet: "text",
+    published_at: "2026-11-25T10:00:00+00:00",
+    known_at: "2026-11-25T10:00:00+00:00",
+    recorded_at: "2026-11-26T12:00:00+00:00",
+    content_hash: "abc123",
+  };
+  assert.throws(() => parseSemanticDocument({ ...base, doc_id: "" }));
+  assert.throws(() => parseSemanticDocument({ ...base, content_hash: "" }));
+  assert.throws(() => parseSemanticDocument({ ...base, snippet: 1 }));
 });

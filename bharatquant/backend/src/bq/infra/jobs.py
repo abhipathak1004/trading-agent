@@ -317,6 +317,21 @@ class JobRunStore:
                 )
                 return self._get(connection, run_id)
 
+    def recent(self, *, limit: int = 20) -> tuple[JobRun, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ValueError("Job run limit must be between 1 and 100.")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT run_id FROM job_runs "
+                "ORDER BY scheduled_at DESC, run_id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return tuple(self._get(connection, str(row[0])) for row in rows)
+
     def get(self, run_id: str) -> JobRun:
         _validate_opaque_identifier(run_id, "run identifier")
         with closing(self._connect()) as connection:

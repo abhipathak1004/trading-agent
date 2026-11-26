@@ -1,7 +1,8 @@
 import re
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta
 from hmac import compare_digest
 from pathlib import Path
 from secrets import token_urlsafe
@@ -11,9 +12,9 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from bq.agent_prompts import (
     MAX_PROMPT_CHARS,
@@ -73,11 +74,14 @@ from bq.execution import (
     build_execution_adapter,
     build_execution_context,
 )
+from bq.infra.job_handlers import MEMORY_RESOLVE_JOB, build_job_handlers
+from bq.infra.job_worker import JobWorker, JobWorkerLoop
 from bq.infra.jobs import JobRunStore
 from bq.infra.model_attempts import ModelAttemptStore, TokenUsage
 from bq.infra.scheduler import SchedulerLoop, SchedulerRunner
 from bq.infra.schedules import ScheduleStore
 from bq.infra.task_registry import TaskRegistry
+from bq.infra.tunnel import TunnelManager, TunnelState, TunnelStatus
 from bq.llm_client import LLMClientError, LLMNotConfigured
 from bq.llm_service import LLMService
 from bq.memory import (
@@ -119,6 +123,7 @@ from bq.schedules import (
     IntervalSchedule,
     ScheduleError,
     WakeDecision,
+    WakePolicy,
     next_daily_occurrences,
     next_interval_occurrences,
 )
@@ -306,6 +311,7 @@ class PaperFillStatus(BaseModel):
     price_paise: str
     filled_at: datetime
     idempotency_key: str
+    realized_pnl_paise: str | None
 
 
 class PaperFillResponse(BaseModel):
@@ -407,6 +413,17 @@ class WakeStatus(BaseModel):
     decision: WakeDecision
 
 
+class JobRunView(BaseModel):
+    run_id: str
+    job_id: str
+    occurrence_key: str
+    scheduled_at: datetime
+    status: str
+    attempts: int
+    max_attempts: int
+    failure_code: str | None
+
+
 class ScheduleStatus(BaseModel):
     latest_version: int
     observed_at: datetime
@@ -418,6 +435,8 @@ class ScheduleStatus(BaseModel):
     decision_count: int
     recent_decisions: list[WakeStatus]
     scheduler_running: bool
+    job_run_count: int
+    job_runs: list[JobRunView]
 
 
 class ConfiguredTask(BaseModel):
@@ -697,6 +716,27 @@ class SemanticSearchResponse(BaseModel):
     hits: list[SemanticHitStatus]
 
 
+class SemanticIngestRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=64, strict=True)
+    source_url: str = Field(min_length=1, max_length=2048, strict=True)
+    title: str = Field(min_length=1, max_length=512, strict=True)
+    body: str = Field(min_length=1, max_length=16_384, strict=True)
+    published_at: datetime
+    known_at: datetime | None = None
+
+
+class SemanticDocumentStatus(BaseModel):
+    doc_id: str
+    symbol: str
+    source_url: str
+    title: str
+    snippet: str
+    published_at: datetime
+    known_at: datetime
+    recorded_at: datetime
+    content_hash: str
+
+
 class MemoryResolveRequest(BaseModel):
     horizon_days: int = Field(default=5, ge=1, le=60, strict=True)
     max_episodes: int = Field(default=50, ge=1, le=200, strict=True)
@@ -708,6 +748,19 @@ class MemoryResolveResponse(BaseModel):
     skipped: int
     failed: int
     notes: list[str]
+
+
+class MemoryScheduleRequest(BaseModel):
+    enabled: bool
+
+
+class MemoryScheduleStatus(BaseModel):
+    configured: bool
+    enabled: bool
+    schedule_id: str | None
+    version: int | None
+    local_time: str | None
+    timezone: str | None
 
 
 class PlaybookStatus(BaseModel):
@@ -926,6 +979,66 @@ class AppConfigUpdate(BaseModel):
     model_name: str = Field(max_length=MAX_SETTING_CHARS, strict=True)
     news_feed_url: str = Field(max_length=MAX_SETTING_CHARS, strict=True)
     news_memory_ttl_days: int = Field(strict=True)
+
+
+class TunnelStatusView(BaseModel):
+    state: TunnelState
+    url: str | None
+    started_at: datetime | None
+    error: str | None
+    binary_path: str | None
+    recent_log: list[str]
+
+
+def _tunnel_status(status: TunnelStatus) -> TunnelStatusView:
+    return TunnelStatusView(
+        state=status.state,
+        url=status.url,
+        started_at=status.started_at,
+        error=status.error,
+        binary_path=status.binary_path,
+        recent_log=list(status.recent_log),
+    )
+
+
+class TunnelHostMiddleware:
+    """Allow loopback plus an active tunnel host; reject everything else.
+
+    Replaces the static ``TrustedHostMiddleware`` so the tunnel host is admitted
+    only while the manager reports it as live. With no tunnel the allowlist is
+    loopback-only, identical to before this feature existed.
+    """
+
+    def __init__(self, app: ASGIApp, manager: TunnelManager | None) -> None:
+        self.app = app
+        self.manager = manager
+
+    def _allowed(self) -> frozenset[str]:
+        hosts = {"127.0.0.1"}
+        if self.manager is not None:
+            hosts |= self.manager.allowed_hosts()
+        return frozenset(hosts)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        host_header = headers.get(b"host", b"").decode("latin-1")
+        host = _bare_host(host_header)
+        if host not in self._allowed():
+            response = JSONResponse({"detail": "Invalid host header"}, status_code=400)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+def _bare_host(value: str) -> str:
+    text = value.strip().lower()
+    if text.startswith("["):
+        end = text.find("]")
+        return text[1:end] if end > 0 else text
+    return text.rsplit(":", 1)[0] if ":" in text else text
 
 
 class RiskLimitsStatus(BaseModel):
@@ -1168,6 +1281,49 @@ def _regime_label(result: AnalysisResult) -> str | None:
     return None
 
 
+MEMORY_SCHEDULE_ID = "memory-resolve-daily"
+
+
+def _default_memory_schedule(*, enabled: bool) -> DailySchedule:
+    return DailySchedule(
+        schedule_id=MEMORY_SCHEDULE_ID,
+        job_id=MEMORY_RESOLVE_JOB,
+        enabled=enabled,
+        timezone="Asia/Kolkata",
+        local_time=time(18, 0),
+        window_start=time(17, 0),
+        window_end=time(19, 0),
+        wake_policy=WakePolicy.ALWAYS_RUN,
+        wake_within_seconds=None,
+        max_attempts=2,
+    )
+
+
+def _memory_schedule_status(
+    schedules: tuple[DailySchedule, ...], *, version: int
+) -> MemoryScheduleStatus:
+    schedule = next(
+        (item for item in schedules if item.job_id == MEMORY_RESOLVE_JOB), None
+    )
+    if schedule is None:
+        return MemoryScheduleStatus(
+            configured=False,
+            enabled=False,
+            schedule_id=None,
+            version=version,
+            local_time=None,
+            timezone=None,
+        )
+    return MemoryScheduleStatus(
+        configured=True,
+        enabled=schedule.enabled,
+        schedule_id=schedule.schedule_id,
+        version=version,
+        local_time=schedule.local_time.isoformat(timespec="minutes"),
+        timezone=schedule.timezone,
+    )
+
+
 def _record_analysis_episode(
     database_path: Path, run_id: str, result: AnalysisResult, *, source: str
 ) -> None:
@@ -1230,25 +1386,37 @@ class StreamingResponseLike(Protocol):
 
 
 def create_app(
-    web_root: Path | None = None, *, database_path: Path | None = None
+    web_root: Path | None = None,
+    *,
+    database_path: Path | None = None,
+    tunnel_manager: TunnelManager | None = None,
 ) -> FastAPI:
     scheduler: SchedulerLoop | None = None
+    worker_loop: JobWorkerLoop | None = None
+    tunnel = tunnel_manager
+    if tunnel is None and database_path is not None:
+        # Built before add_middleware so the host gate sees this same instance.
+        tunnel = TunnelManager(database_path.parent, database_path=database_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         del app
         if scheduler is not None:
             scheduler.start()
+        if worker_loop is not None:
+            worker_loop.start()
         try:
             yield
         finally:
+            if tunnel is not None:
+                await tunnel.stop()
+            if worker_loop is not None:
+                await worker_loop.stop()
             if scheduler is not None:
                 await scheduler.stop()
 
     app = FastAPI(title="BharatQuant", lifespan=lifespan)
-    app.add_middleware(
-        TrustedHostMiddleware, allowed_hosts=["127.0.0.1"], www_redirect=False
-    )
+    app.add_middleware(TunnelHostMiddleware, manager=tunnel)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(
@@ -1332,24 +1500,35 @@ def create_app(
         return Response(status_code=204)
 
     if database_path is not None:
+        tunnel_manager = tunnel
         auth = OwnerAuth(database_path)
         calendar = ExchangeCalendar(database_path)
         records = DataRecordStore(database_path)
         attempts = ModelAttemptStore(database_path)
-        schedules = ScheduleStore(database_path, available_jobs=frozenset())
+        schedules = ScheduleStore(
+            database_path, available_jobs=frozenset({MEMORY_RESOLVE_JOB})
+        )
         paper_accounts = PaperAccountStore(database_path)
         paper_trading = PaperTradingStore(database_path)
         settings = SettingsStore(database_path)
+        job_store = JobRunStore(database_path)
         scheduler = SchedulerLoop(
             SchedulerRunner(
                 database_path,
                 schedule_store=schedules,
-                job_store=JobRunStore(database_path),
+                job_store=job_store,
             )
+        )
+        worker_loop = JobWorkerLoop(
+            JobWorker(job_store, build_job_handlers(database_path, settings))
         )
 
         def verify_origin(request: Request) -> None:
-            if request.headers.get("origin") != ALLOWED_ORIGIN:
+            origin = request.headers.get("origin")
+            allowed = {ALLOWED_ORIGIN}
+            if tunnel_manager is not None:
+                allowed |= tunnel_manager.allowed_origins()
+            if origin is None or origin not in allowed:
                 raise HTTPException(status_code=403, detail="Invalid request origin")
 
         def require_write(request: Request) -> None:
@@ -1362,6 +1541,13 @@ def create_app(
                 csrf.encode("ascii"),
             ):
                 raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+        def cookie_is_secure(request: Request) -> bool:
+            """Mark the cookie Secure only when the login arrives over the tunnel."""
+            if tunnel_manager is None:
+                return False
+            origin = request.headers.get("origin")
+            return origin is not None and origin in tunnel_manager.allowed_origins()
 
         def account_status(balance: PaperAccountBalance) -> PaperAccountStatusResponse:
             account = balance.account
@@ -1721,6 +1907,11 @@ def create_app(
                     price_paise=str(fill.price_paise),
                     filled_at=fill.filled_at,
                     idempotency_key=fill.idempotency_key,
+                    realized_pnl_paise=(
+                        None
+                        if fill.realized_pnl_paise is None
+                        else str(fill.realized_pnl_paise)
+                    ),
                 ),
             )
 
@@ -1840,6 +2031,50 @@ def create_app(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             return execution_response(outcome, snapshot)
 
+        @app.get("/api/v1/schedules/memory-resolve")
+        def memory_schedule(request: Request) -> MemoryScheduleStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            latest = schedules.load()
+            return _memory_schedule_status(latest.schedules, version=latest.version)
+
+        @app.put("/api/v1/schedules/memory-resolve")
+        def update_memory_schedule(
+            request: Request, body: MemoryScheduleRequest
+        ) -> MemoryScheduleStatus:
+            require_write(request)
+            latest = schedules.load()
+            existing = next(
+                (
+                    item
+                    for item in latest.schedules
+                    if item.job_id == MEMORY_RESOLVE_JOB
+                ),
+                None,
+            )
+            if existing is None:
+                if not body.enabled:
+                    return _memory_schedule_status(
+                        latest.schedules, version=latest.version
+                    )
+                schedule = _default_memory_schedule(enabled=True)
+                snapshot = schedules.save(
+                    (*latest.schedules, schedule),
+                    expected_version=latest.version,
+                )
+                return _memory_schedule_status(
+                    snapshot.schedules, version=snapshot.version
+                )
+            updated = replace(existing, enabled=body.enabled)
+            snapshot = schedules.save(
+                tuple(
+                    updated if item.schedule_id == existing.schedule_id else item
+                    for item in latest.schedules
+                ),
+                expected_version=latest.version,
+            )
+            return _memory_schedule_status(snapshot.schedules, version=snapshot.version)
+
         @app.get("/api/v1/schedules/status")
         def schedule_status(request: Request) -> ScheduleStatus:
             if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
@@ -1847,6 +2082,7 @@ def create_app(
             overview = schedules.overview()
             effective = overview.effective
             active = effective.snapshot.schedules if effective is not None else ()
+            recent_runs = job_store.recent(limit=20)
             return ScheduleStatus(
                 latest_version=overview.latest.version,
                 observed_at=overview.observed_at,
@@ -1875,6 +2111,20 @@ def create_app(
                     for item in overview.recent_decisions
                 ],
                 scheduler_running=scheduler.running,
+                job_run_count=len(recent_runs),
+                job_runs=[
+                    JobRunView(
+                        run_id=run.run_id,
+                        job_id=run.job_id,
+                        occurrence_key=run.occurrence_key,
+                        scheduled_at=run.scheduled_at,
+                        status=run.status.value,
+                        attempts=run.attempts,
+                        max_attempts=run.max_attempts,
+                        failure_code=run.failure_code,
+                    )
+                    for run in recent_runs
+                ],
             )
 
         @app.get("/api/v1/settings/overview")
@@ -1976,6 +2226,28 @@ def create_app(
         def reset_risk_limits(request: Request) -> RiskLimitsStatus:
             require_write(request)
             return _risk_limits_status(settings.clear_risk_limits().risk_limits)
+
+        @app.get("/api/v1/settings/tunnel")
+        def get_tunnel(request: Request) -> TunnelStatusView:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            if tunnel_manager is None:
+                raise HTTPException(status_code=503, detail="Tunnel unavailable")
+            return _tunnel_status(tunnel_manager.snapshot())
+
+        @app.post("/api/v1/settings/tunnel/start", status_code=202)
+        async def start_tunnel(request: Request) -> TunnelStatusView:
+            require_write(request)
+            if tunnel_manager is None:
+                raise HTTPException(status_code=503, detail="Tunnel unavailable")
+            return _tunnel_status(await tunnel_manager.request_start())
+
+        @app.post("/api/v1/settings/tunnel/stop")
+        async def stop_tunnel(request: Request) -> TunnelStatusView:
+            require_write(request)
+            if tunnel_manager is None:
+                raise HTTPException(status_code=503, detail="Tunnel unavailable")
+            return _tunnel_status(await tunnel_manager.stop())
 
         @app.put("/api/v1/settings/models")
         def update_settings_models(
@@ -2300,6 +2572,34 @@ def create_app(
                     )
                     for bucket in buckets
                 ],
+            )
+
+        @app.post("/api/v1/memory/semantic")
+        def semantic_ingest(
+            request: Request, body: SemanticIngestRequest
+        ) -> SemanticDocumentStatus:
+            require_write(request)
+            try:
+                document = SemanticMemoryStore(database_path).ingest(
+                    symbol=body.symbol,
+                    source_url=body.source_url,
+                    title=body.title,
+                    body=body.body,
+                    published_at=body.published_at,
+                    known_at=body.known_at,
+                )
+            except SemanticError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return SemanticDocumentStatus(
+                doc_id=document.doc_id,
+                symbol=document.symbol,
+                source_url=document.source_url,
+                title=document.title,
+                snippet=document.body[:400],
+                published_at=document.published_at,
+                known_at=document.known_at,
+                recorded_at=document.recorded_at,
+                content_hash=document.content_hash,
             )
 
         @app.get("/api/v1/memory/semantic")
@@ -2944,6 +3244,7 @@ def create_app(
                 max_age=SESSION_SECONDS,
                 httponly=True,
                 samesite="strict",
+                secure=cookie_is_secure(request),
                 path="/",
             )
             return SessionStatus(state="signed_in", csrf_token=session.csrf_token)
@@ -2981,6 +3282,7 @@ def create_app(
                 max_age=SESSION_SECONDS,
                 httponly=True,
                 samesite="strict",
+                secure=cookie_is_secure(request),
                 path="/",
             )
             return SessionStatus(state="signed_in", csrf_token=session.csrf_token)

@@ -42,6 +42,7 @@ export type PaperFill = {
   price_paise: string;
   filled_at: string;
   idempotency_key: string;
+  realized_pnl_paise: string | null;
 };
 
 export type PaperFillResult = {
@@ -279,7 +280,10 @@ export function parsePaperFill(value: unknown): PaperFillResult {
     !isCount(fill.quantity) ||
     fill.quantity < 1 ||
     !isTimestamp(fill.filled_at) ||
-    typeof fill.idempotency_key !== "string"
+    typeof fill.idempotency_key !== "string" ||
+    (fill.realized_pnl_paise !== null &&
+      (typeof fill.realized_pnl_paise !== "string" ||
+        !/^-?\d+$/.test(fill.realized_pnl_paise)))
   ) {
     throw new Error("Invalid paper fill");
   }
@@ -292,6 +296,7 @@ export function parsePaperFill(value: unknown): PaperFillResult {
       price_paise: paise(fill.price_paise),
       filled_at: fill.filled_at,
       idempotency_key: fill.idempotency_key,
+      realized_pnl_paise: fill.realized_pnl_paise,
     },
   };
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseMemoryCalibration } from "../src/memoryContract.ts";
+import { parseMemorySchedule } from "../src/memoryScheduleContract.ts";
 
 const valid = {
   as_of: "2026-11-26T12:00:00+00:00",
@@ -35,4 +36,29 @@ test("malformed calibration responses are rejected", () => {
   ]) {
     assert.throws(() => parseMemoryCalibration({ ...valid, ...override }));
   }
+});
+
+test("a memory schedule parses", () => {
+  const parsed = parseMemorySchedule({
+    configured: true,
+    enabled: false,
+    schedule_id: "memory-resolve-daily",
+    version: 1,
+    local_time: "18:00",
+    timezone: "Asia/Kolkata",
+  });
+  assert.equal(parsed.configured, true);
+  assert.equal(parsed.enabled, false);
+});
+
+test("an absent memory schedule parses", () => {
+  const parsed = parseMemorySchedule({
+    configured: false,
+    enabled: false,
+    schedule_id: null,
+    version: 0,
+    local_time: null,
+    timezone: null,
+  });
+  assert.equal(parsed.configured, false);
 });

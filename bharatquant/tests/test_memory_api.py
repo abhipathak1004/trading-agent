@@ -254,3 +254,98 @@ def test_playbook_routes_round_trip_and_require_csrf(tmp_path: Path) -> None:
             assert empty.status_code == 422
 
     asyncio.run(check())
+
+
+def test_semantic_ingest_requires_csrf_and_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "bq.db"
+    migrate(path, create=True)
+    auth = OwnerAuth(path)
+    now = datetime.now(UTC)
+    app = create_app(database_path=path)
+    body = {
+        "symbol": "NSE:RELIANCE",
+        "source_url": "https://example.com/reliance-breakout",
+        "title": "Reliance breakout",
+        "body": "Reliance cleared resistance on strong volume.",
+        "published_at": (now - timedelta(days=2)).isoformat(),
+        "known_at": (now - timedelta(days=1)).isoformat(),
+    }
+
+    async def check() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=ALLOWED_ORIGIN
+        ) as client:
+            assert (
+                await client.post("/api/v1/memory/semantic", json=body)
+            ).status_code == 401
+            auth.setup(PASSWORD)
+            login = await client.post(
+                "/api/v1/auth/login",
+                json={"password": PASSWORD},
+                headers={"Origin": ALLOWED_ORIGIN},
+            )
+            csrf = login.json()["csrf_token"]
+            assert (
+                await client.post(
+                    "/api/v1/memory/semantic",
+                    json=body,
+                    headers={"Origin": ALLOWED_ORIGIN},
+                )
+            ).status_code == 403
+
+            stored = await client.post(
+                "/api/v1/memory/semantic",
+                json=body,
+                headers={"Origin": ALLOWED_ORIGIN, "X-CSRF-Token": csrf},
+            )
+            assert stored.status_code == 200
+            document = stored.json()
+            assert document["doc_id"].startswith("sd_")
+            assert document["symbol"] == "NSE:RELIANCE"
+            assert document["source_url"] == body["source_url"]
+            assert document["title"] == "Reliance breakout"
+            assert document["snippet"].startswith("Reliance cleared")
+
+            duplicate = await client.post(
+                "/api/v1/memory/semantic",
+                json=body,
+                headers={"Origin": ALLOWED_ORIGIN, "X-CSRF-Token": csrf},
+            )
+            assert duplicate.status_code == 200
+            assert duplicate.json()["doc_id"] == document["doc_id"]
+
+            found = await client.get(
+                "/api/v1/memory/semantic",
+                params={"q": "breakout", "symbol": "NSE:RELIANCE"},
+            )
+            assert found.status_code == 200
+            assert len(found.json()["hits"]) == 1
+            assert found.json()["hits"][0]["doc_id"] == document["doc_id"]
+
+            before = await client.get(
+                "/api/v1/memory/semantic",
+                params={
+                    "q": "breakout",
+                    "as_of": (now - timedelta(days=2)).isoformat(),
+                },
+            )
+            assert before.status_code == 200
+            assert before.json()["hits"] == []
+
+            insecure = await client.post(
+                "/api/v1/memory/semantic",
+                json={**body, "source_url": "http://example.com/x"},
+                headers={"Origin": ALLOWED_ORIGIN, "X-CSRF-Token": csrf},
+            )
+            assert insecure.status_code == 422
+            future = await client.post(
+                "/api/v1/memory/semantic",
+                json={
+                    **body,
+                    "known_at": (now + timedelta(days=1)).isoformat(),
+                },
+                headers={"Origin": ALLOWED_ORIGIN, "X-CSRF-Token": csrf},
+            )
+            assert future.status_code == 422
+
+    asyncio.run(check())

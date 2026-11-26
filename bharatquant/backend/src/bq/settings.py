@@ -875,7 +875,7 @@ def _load_risk_limits(rows: Mapping[str, str]) -> RiskLimits | None:
             return None
         values[field] = value
     try:
-        return RiskLimits(**values)  # type: ignore[arg-type]
+        return RiskLimits(**values)
     except (TypeError, ValueError):
         return None
 

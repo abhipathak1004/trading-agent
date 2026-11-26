@@ -5,6 +5,7 @@ import pytest
 
 from bq.infra.database import migrate
 from bq.news import DEFAULT_MEMORY_TTL, PULSE_FEED_URL
+from bq.risk.policy import RiskLimits
 from bq.settings import (
     AppConfig,
     Provider,
@@ -207,3 +208,22 @@ def test_news_agent_honours_configured_memory_ttl(tmp_path: Path) -> None:
     memory = agent.digest()[0]
     assert memory.expires_at is not None
     assert (memory.expires_at - memory.known_at).days == 7
+
+
+def test_risk_limits_are_absent_until_saved_and_clearable(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    assert store.load().risk_limits is None
+    limits = RiskLimits(
+        max_symbol_exposure_paise=500_000,
+        max_open_positions=5,
+        max_daily_loss_paise=50_000,
+        max_weekly_loss_paise=100_000,
+        max_monthly_loss_paise=200_000,
+        max_order_rate_per_minute=10,
+    )
+    saved = store.save_risk_limits(limits)
+    assert saved.risk_limits == limits
+    assert saved.updated_at == NOW
+    assert _store(tmp_path).load().risk_limits == limits
+    cleared = store.clear_risk_limits()
+    assert cleared.risk_limits is None
