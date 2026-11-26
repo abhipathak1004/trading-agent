@@ -429,3 +429,40 @@ test("malformed evidence verification is rejected", () => {
     );
   }
 });
+
+test("a confidence assessment parses", () => {
+  const parsed = parseAnalysisRun({
+    ...run,
+    confidence: {
+      probability: 0.81,
+      level: "VERY_HIGH",
+      disposition: "SUGGEST",
+      confirming_families: 4,
+      base_rate_samples: 120,
+      live_outcomes: 0,
+      calibrated: false,
+      ev_r_after_costs: 1.4,
+      vetoes: [],
+      evidence: [
+        { family: "STRUCTURE", state: "CONFIRM", strength: 0.8 },
+        { family: "VOLUME", state: "CONFIRM", strength: 0.5 },
+      ],
+      base_rate: {
+        setup_id: "trend_continuation_v1",
+        symbol: "NSE:RELIANCE",
+        regime: "ALL",
+        horizon_days: 10,
+        sample_count: 120,
+        win_count: 104,
+        win_rate: 0.86,
+        data_as_of: "2026-11-25T00:00:00Z",
+      },
+    },
+  });
+  assert.equal(parsed.confidence?.level, "VERY_HIGH");
+  assert.equal(parsed.confidence?.base_rate.sample_count, 120);
+});
+
+test("a missing confidence assessment is accepted", () => {
+  assert.equal(parseAnalysisRun(run).confidence, null);
+});

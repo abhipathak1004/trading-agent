@@ -676,6 +676,30 @@ class NewsStore:
             ),
         )
 
+    def get(self, news_id: str) -> NewsItem:
+        if not isinstance(news_id, str) or IDENTIFIER.fullmatch(news_id) is None:
+            raise NewsError("Invalid news identifier.")
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT news_id, source_id, url, title, summary, category, "
+                "long_term_impact, published_at, ingested_at FROM news_items "
+                "WHERE news_id = ?",
+                (news_id,),
+            ).fetchone()
+        if row is None:
+            raise NewsError("News item not found.")
+        return NewsItem(
+            news_id=str(row[0]),
+            source_id=str(row[1]),
+            url=str(row[2]),
+            title=str(row[3]),
+            summary=str(row[4]),
+            category=NewsCategory(str(row[5])),
+            long_term_impact=bool(row[6]),
+            published_at=_parse_timestamp(str(row[7])),
+            ingested_at=_parse_timestamp(str(row[8])),
+        )
+
     def recent(
         self,
         *,

@@ -23,6 +23,7 @@ from bq.agent_prompts import (
     PromptStore,
 )
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
+from bq.analysis.confidence_engine import ConfidenceEngine
 from bq.analysis.debate import Debate
 from bq.analysis.decision import TradePlan, TradePlanError, trade_plan_from_json
 from bq.analysis.evidence import EvidenceVerifier
@@ -43,7 +44,9 @@ from bq.auth import (
     OwnerAuth,
     OwnerNotConfigured,
 )
-from bq.core import CurrencyPaise, Quantity, canonical_digest
+from bq.backtest import BacktestEngineName, BacktestError, run_backtest
+from bq.confidence import ConfidenceLevel
+from bq.core import CurrencyPaise, Quantity, canonical_digest, paise_from_price
 from bq.data.calendar import (
     ExchangeCalendar,
     SessionClass,
@@ -59,7 +62,7 @@ from bq.data.freshness import (
 from bq.data.records import DataRecordStore, MissingDataRecord, QualityStatus
 from bq.data.symbols import Symbol, SymbolError
 from bq.data.symbols import resolve as resolve_symbol
-from bq.data.vendors import DataDomain
+from bq.data.vendors import BarInterval, DataDomain
 from bq.data.yahoo import YahooDataClient, YahooError
 from bq.decision.battery import SCREENER
 from bq.decision.state import build_decision_state
@@ -74,6 +77,13 @@ from bq.execution import (
     build_execution_adapter,
     build_execution_context,
 )
+from bq.fundamentals import (
+    FundamentalError,
+    FundamentalSnapshot,
+    FundamentalSource,
+    ValuationAssumptions,
+)
+from bq.infra.job_catalogue import AVAILABLE_JOBS, JOB_CATALOGUE
 from bq.infra.job_handlers import MEMORY_RESOLVE_JOB, build_job_handlers
 from bq.infra.job_worker import JobWorker, JobWorkerLoop
 from bq.infra.jobs import JobRunStore
@@ -106,20 +116,43 @@ from bq.model_router import (
 )
 from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
+from bq.opportunities import (
+    OpportunityError,
+    OpportunityHorizon,
+    OpportunityLifecycle,
+    OpportunitySide,
+    OpportunityStore,
+)
 from bq.paper_accounts import (
     PaperAccountBalance,
     PaperAccountError,
     PaperAccountStatus,
     PaperAccountStore,
 )
+from bq.paper_square_off import PaperSquareOff
+from bq.paper_stops import PaperStop, PaperStopError, PaperStopStore
 from bq.paper_trading import (
+    PaperApproval,
     PaperOrder,
     PaperOrderType,
+    PaperProduct,
     PaperSide,
     PaperTradingError,
     PaperTradingStore,
 )
+from bq.reports.engine import ReportEngine, ReportEngineError
+from bq.reports.store import ReportError, ReportStore
+from bq.research import ResearchError, ResearchStore, Thesis, ThesisHorizon
 from bq.research_agent import ResearchAgent
+from bq.research_expansion import (
+    FundamentalRecord,
+    NoteSource,
+    ResearchClaim,
+    ResearchExpansionError,
+    ResearchExpansionStore,
+    ResearchNote,
+    ThesisEventRecord,
+)
 from bq.risk.policy import KillSwitchLevel, RiskLimits
 from bq.schedules import (
     DailySchedule,
@@ -150,6 +183,16 @@ from bq.settings import (
     SettingsStore,
     TierConfig,
     TierName,
+)
+from bq.strategies import StrategyError as LifecycleStrategyError
+from bq.strategies import StrategyLifecycle
+from bq.strategy_dsl import from_dict as strategy_from_dict
+from bq.strategy_store import (
+    BacktestRun,
+    BacktestStore,
+    StrategyRecord,
+    StrategyStore,
+    StrategyStoreError,
 )
 from bq.super_agent import StrategyError, SuperAgent
 from bq.tools.base import ToolBlocked, ToolError, ToolSpec
@@ -287,6 +330,8 @@ class PaperOrderStatus(BaseModel):
     status: str
     filled_quantity: int
     created_at: datetime
+    product: str
+    approval_status: str
 
 
 class PaperBookResponse(BaseModel):
@@ -305,6 +350,7 @@ class PaperExitRequest(BaseModel):
     quantity: int = Field(gt=0, le=10**9, strict=True)
     price_paise: int = Field(gt=0, le=10**13, strict=True)
     client_order_id: str = Field(min_length=1, max_length=128, strict=True)
+    product: Literal["CAS", "MIS"] = "MIS"
 
 
 class PaperFillStatus(BaseModel):
@@ -315,6 +361,9 @@ class PaperFillStatus(BaseModel):
     filled_at: datetime
     idempotency_key: str
     realized_pnl_paise: str | None
+    gross_paise: str
+    charges_paise: str
+    net_pnl_paise: str | None
 
 
 class PaperFillResponse(BaseModel):
@@ -329,6 +378,279 @@ class PaperReconciliationStatus(BaseModel):
     ledger_debit_paise: str
     ledger_credit_paise: str
     position_count: int
+    charges_paise: str
+
+
+class PaperApprovalStatus(BaseModel):
+    approval_id: str
+    order_id: str
+    account_id: str
+    status: str
+    reason: str
+    created_at: datetime
+    decided_at: datetime | None
+    decision_note: str | None
+
+
+class PaperApprovalDecision(BaseModel):
+    approved: bool = Field(strict=True)
+    note: str = Field(default="", max_length=512, strict=True)
+
+
+class PaperProductPositionStatus(BaseModel):
+    instrument_id: str
+    product: str
+    quantity: int
+
+
+class PaperTaxLotStatus(BaseModel):
+    lot_id: str
+    instrument_id: str
+    product: str
+    quantity: int
+    remaining_quantity: int
+    settles_on: str
+    cost_paise: str
+    charges_paise: str
+
+
+class PaperStopStatus(BaseModel):
+    stop_id: str
+    account_id: str
+    instrument_id: str
+    product: str
+    quantity: int
+    stop_price_paise: str
+    target_price_paise: str | None
+    status: str
+    trigger_order_id: str | None
+    trigger_kind: str | None
+    created_at: datetime
+    triggered_at: datetime | None
+
+
+class PaperStopCreateRequest(BaseModel):
+    instrument_id: str = Field(min_length=1, max_length=128, strict=True)
+    quantity: int = Field(gt=0, le=10**9, strict=True)
+    stop_price_paise: int = Field(gt=0, le=10**13, strict=True)
+    target_price_paise: int | None = Field(default=None, gt=0, le=10**13)
+    product: Literal["CAS", "MIS"] = "CAS"
+
+
+class PaperStopEvaluationStatus(BaseModel):
+    examined: int
+    triggered: int
+    notes: list[str]
+
+
+class PaperSquareOffStatus(BaseModel):
+    examined: int
+    squared_off: int
+    notes: list[str]
+
+
+class PaperRealismStatus(BaseModel):
+    account_id: str
+    product_positions: list[PaperProductPositionStatus]
+    tax_lots: list[PaperTaxLotStatus]
+    approvals: list[PaperApprovalStatus]
+    stops: list[PaperStopStatus]
+    charges_paise: str
+
+
+class StrategyRecordStatus(BaseModel):
+    strategy_id: str
+    version: str
+    name: str
+    kind: str
+    lifecycle: str
+    definition: dict[str, object]
+    content_hash: str
+    is_seed: bool
+    created_at: datetime
+
+
+class StrategyListResponse(BaseModel):
+    strategies: list[StrategyRecordStatus]
+
+
+class StrategyCreateRequest(BaseModel):
+    definition: dict[str, object]
+    lifecycle: Literal["DRAFT", "BACKTESTED", "PAPER_SHADOW", "PAPER_ACTIVE"] = "DRAFT"
+
+
+class StrategyBacktestRequest(BaseModel):
+    start: datetime
+    end: datetime
+    engine: Literal["FAST", "EVENT"] = "FAST"
+    initial_capital_paise: int = Field(gt=0, le=10**13, strict=True)
+
+
+class BacktestReviewRequest(BaseModel):
+    decision: Literal["ACCEPTED", "REJECTED"]
+    note: str = Field(default="", max_length=512, strict=True)
+
+
+class BacktestStatus(BaseModel):
+    run_id: str
+    strategy_id: str
+    version: str
+    engine: str
+    start: datetime
+    end: datetime
+    initial_capital_paise: str
+    metrics: dict[str, object]
+    trades: list[dict[str, object]]
+    content_hash: str
+    created_at: datetime
+    review_decision: str | None
+    review_note: str | None
+
+
+class BacktestListResponse(BaseModel):
+    runs: list[BacktestStatus]
+
+
+class ResearchNoteCreateRequest(BaseModel):
+    instrument_id: str | None = Field(default=None, max_length=128)
+    source_type: Literal["NEWS", "YOUTUBE", "XBRL", "FILING", "OWNER"]
+    source_id: str = Field(min_length=1, max_length=128, strict=True)
+    url: str | None = Field(default=None, max_length=2_048)
+    title: str = Field(min_length=1, max_length=512, strict=True)
+    body: str = Field(min_length=1, max_length=20_000, strict=True)
+    published_at: datetime
+    known_at: datetime | None = None
+
+
+class ResearchNoteStatus(BaseModel):
+    note_id: str
+    instrument_id: str | None
+    source_type: str
+    source_id: str
+    url: str | None
+    title: str
+    body: str
+    published_at: datetime
+    known_at: datetime
+    note_hash: str
+    created_at: datetime
+
+
+class ResearchNoteListResponse(BaseModel):
+    notes: list[ResearchNoteStatus]
+
+
+class NewsNoteRequest(BaseModel):
+    instrument_id: str | None = Field(default=None, max_length=128)
+
+
+class FundamentalSnapshotRequest(BaseModel):
+    instrument_id: str = Field(min_length=1, max_length=128, strict=True)
+    source: Literal["XBRL", "OWNER"]
+    period_end: datetime
+    known_at: datetime
+    revenue_paise: int = Field(ge=0, le=10**16, strict=True)
+    ebitda_paise: int = Field(ge=0, le=10**16, strict=True)
+    net_income_paise: int = Field(ge=-(10**16), le=10**16, strict=True)
+    total_debt_paise: int = Field(ge=0, le=10**16, strict=True)
+    cash_paise: int = Field(ge=0, le=10**16, strict=True)
+    shares_outstanding: int = Field(gt=0, le=10**15, strict=True)
+    book_value_paise: int = Field(gt=0, le=10**16, strict=True)
+    fcf_paise: int = Field(ge=-(10**16), le=10**16, strict=True)
+
+
+class FundamentalSnapshotStatus(BaseModel):
+    snapshot_id: str
+    instrument_id: str
+    source: str
+    period_end: datetime
+    known_at: datetime
+    revenue_paise: str
+    ebitda_paise: str
+    net_income_paise: str
+    total_debt_paise: str
+    cash_paise: str
+    shares_outstanding: int
+    book_value_paise: str
+    fcf_paise: str
+    snapshot_hash: str
+    created_at: datetime
+
+
+class FundamentalListResponse(BaseModel):
+    instrument_id: str
+    snapshots: list[FundamentalSnapshotStatus]
+
+
+class DossierResponse(BaseModel):
+    instrument_id: str
+    as_of: datetime
+    notes: list[ResearchNoteStatus]
+    filings: list[dict[str, object]]
+    theses: list[dict[str, object]]
+    fundamentals: list[FundamentalSnapshotStatus]
+    ratios: dict[str, object] | None
+    dcf: dict[str, object] | None
+    claims: list[dict[str, object]]
+
+
+class ResearchClaimCreateRequest(BaseModel):
+    instrument_id: str = Field(min_length=1, max_length=128, strict=True)
+    statement: str = Field(min_length=1, max_length=2_000, strict=True)
+    note_id: str | None = Field(default=None, max_length=128)
+
+
+class ResearchClaimStatus(BaseModel):
+    claim_id: str
+    instrument_id: str
+    statement: str
+    note_id: str | None
+    claim_hash: str
+    created_at: datetime
+    status: str
+    review_note: str | None
+
+
+class ResearchClaimReviewRequest(BaseModel):
+    decision: Literal["ACCEPTED", "REJECTED"]
+    note: str = Field(default="", max_length=512, strict=True)
+
+
+class ResearchClaimListResponse(BaseModel):
+    claims: list[ResearchClaimStatus]
+
+
+class ThesisCreateRequest(BaseModel):
+    thesis_id: str = Field(min_length=1, max_length=128, strict=True)
+    instrument_id: str = Field(min_length=1, max_length=128, strict=True)
+    horizon: Literal["SHORT_TERM", "SWING", "MEDIUM", "LONG"]
+
+
+class ThesisStatus(BaseModel):
+    thesis_id: str
+    instrument_id: str
+    horizon: str
+    state: str
+    created_at: datetime
+    thesis_hash: str
+
+
+class ThesisEventCreateRequest(BaseModel):
+    kind: Literal["EVIDENCE", "INVALIDATION", "REACTIVATION", "NOTE"]
+    statement: str = Field(min_length=1, max_length=2_000, strict=True)
+    note_id: str | None = Field(default=None, max_length=128)
+    occurred_at: datetime | None = None
+
+
+class ThesisEventStatus(BaseModel):
+    event_id: str
+    thesis_id: str
+    kind: str
+    statement: str
+    note_id: str | None
+    occurred_at: datetime
+    event_hash: str
+    created_at: datetime
 
 
 class ExecutionLimitsRequest(BaseModel):
@@ -358,6 +680,8 @@ class ExecutionRequest(BaseModel):
 
 class ExecutionPlaceRequest(ExecutionRequest):
     client_order_id: str = Field(min_length=1, max_length=128, strict=True)
+    product: Literal["CAS", "MIS"] = "MIS"
+    require_approval: bool = False
 
 
 class ExecutionFreshnessStatus(BaseModel):
@@ -425,6 +749,78 @@ class JobRunView(BaseModel):
     attempts: int
     max_attempts: int
     failure_code: str | None
+
+
+class JobDefinitionStatus(BaseModel):
+    job_id: str
+    label: str
+    description: str
+    resource_class: str
+    timezone: str
+    local_time: str
+    window_start: str
+    window_end: str
+    enabled_by_default: bool
+    max_attempts: int
+    wake_policy: str
+
+
+class JobCatalogueResponse(BaseModel):
+    jobs: list[JobDefinitionStatus]
+
+
+class ScheduleConfigStatus(BaseModel):
+    schedule_id: str
+    job_id: str
+    enabled: bool
+    timezone: str
+    local_time: str
+    window_start: str
+    window_end: str
+    wake_policy: str
+    wake_within_seconds: int | None
+    max_attempts: int
+    interval_minutes: int | None
+    weekdays: list[int]
+    dependencies: list[str]
+    version: int
+    next_occurrences: list[datetime]
+
+
+class ScheduleConfigList(BaseModel):
+    version: int
+    schedules: list[ScheduleConfigStatus]
+
+
+class ScheduleUpdateRequest(BaseModel):
+    job_id: str = Field(min_length=1, max_length=128, strict=True)
+    enabled: bool
+    timezone: str = Field(min_length=1, max_length=64, strict=True)
+    local_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$", strict=True)
+    window_start: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$", strict=True)
+    window_end: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$", strict=True)
+    wake_policy: Literal["RUN_ON_WAKE_WITHIN", "SKIP", "ALWAYS_RUN"] = "ALWAYS_RUN"
+    wake_within_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    max_attempts: int = Field(default=2, ge=1, le=10, strict=True)
+    interval_minutes: int | None = Field(default=None, ge=1, le=1_440)
+    weekdays: list[int] = Field(
+        default_factory=lambda: [0, 1, 2, 3, 4, 5, 6], max_length=7
+    )
+    dependencies: list[str] = Field(default_factory=list, max_length=16)
+
+
+class ScheduleEnableRequest(BaseModel):
+    enabled: bool
+
+
+class ScheduleRunRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=128, strict=True)
+
+
+class ScheduleDryRunResponse(BaseModel):
+    valid: bool
+    schedule_id: str
+    job_id: str
 
 
 class ScheduleStatus(BaseModel):
@@ -814,6 +1210,7 @@ class AnalysisRunResponse(BaseModel):
     specialists: list[dict[str, object]]
     evidence: dict[str, object] | None
     final_gate: dict[str, object] | None
+    confidence: dict[str, object] | None = None
 
 
 class AnalysisRunSummary(BaseModel):
@@ -846,6 +1243,66 @@ class WorkingMemoryStatus(BaseModel):
 class WorkingMemoryResponse(BaseModel):
     run_id: str
     memories: list[WorkingMemoryStatus]
+
+
+class OpportunityStatus(BaseModel):
+    opportunity_id: str
+    instrument_id: str
+    horizon: str
+    side: str
+    created_at: datetime
+    probability: float
+    level: str
+    disposition: str
+    confirming_families: int
+    base_rate_samples: int
+    calibrated: bool
+    ev_r_after_costs: float
+    vetoes: list[str]
+    assessment_hash: str
+    score: float
+    run_id: str | None
+    source: str | None
+    setup_id: str | None
+    confidence: dict[str, object] | None
+    plan: dict[str, object] | None
+    lifecycle: str
+
+
+class OpportunityListResponse(BaseModel):
+    opportunities: list[OpportunityStatus]
+
+
+class OpportunityTransitionRequest(BaseModel):
+    lifecycle: str
+    note: str | None = Field(default=None, max_length=500, strict=True)
+
+
+class ShadowSummaryStatus(BaseModel):
+    verdict: str
+    suggested_count: int
+    unsuggested_count: int
+    suggested_win_rate: float | None
+    unsuggested_win_rate: float | None
+    suggested_interval: list[float] | None
+    unsuggested_interval: list[float] | None
+
+
+class ReportStatus(BaseModel):
+    report_id: str
+    report_type: str
+    report_date: str
+    status: str
+    title: str
+    body_md: str
+    body: dict[str, object]
+    content_hash: str
+    file_path: str | None
+    created_at: datetime
+
+
+class ReportListResponse(BaseModel):
+    reports: list[ReportStatus]
 
 
 class VendorChainStatus(BaseModel):
@@ -1253,6 +1710,7 @@ def _analysis_pipeline(
             fundamental=FundamentalEventsAgent(news_store),
             final_gate=gate,
             evidence=EvidenceVerifier(news_store, router=model_router),
+            confidence=ConfidenceEngine(settings_store.path),
         )
     service = LLMService(settings_store) if config.model_route_configured else None
     return AnalysisPipeline(
@@ -1266,6 +1724,7 @@ def _analysis_pipeline(
         fundamental=FundamentalEventsAgent(news_store),
         final_gate=gate,
         evidence=EvidenceVerifier(news_store, router=model_router),
+        confidence=ConfidenceEngine(settings_store.path),
     )
 
 
@@ -1351,6 +1810,62 @@ def _record_working_memory(
     try:
         WorkingMemoryStore(database_path).record(result, run_id=run_id, source=source)
     except Exception:  # noqa: BLE001 - memory is an audit side effect
+        return
+
+
+def _record_opportunity(
+    database_path: Path, run_id: str, result: AnalysisResult, *, source: str
+) -> None:
+    """Persist a confidence candidate and its shadow trade without breaking a run."""
+    if result.confidence is None or result.plan is None:
+        return
+    try:
+        confidence = result.confidence
+        plan = result.plan
+        horizon = (
+            OpportunityHorizon.INTRADAY
+            if result.timeframe == "intraday"
+            else OpportunityHorizon.SWING
+        )
+        opportunity_id = (
+            "opp_"
+            + canonical_digest(
+                {
+                    "run_id": run_id,
+                    "symbol": result.symbol,
+                    "as_of": result.as_of.isoformat(),
+                    "setup": confidence.base_rate.setup_id,
+                }
+            )[:24]
+        )
+        store = OpportunityStore(database_path)
+        opportunity = store.freeze(
+            opportunity_id=opportunity_id,
+            instrument_id=result.symbol,
+            horizon=horizon,
+            side=OpportunitySide.BUY,
+            assessment=confidence.assessment,
+            run_id=run_id,
+            source=source,
+            setup_id=confidence.base_rate.setup_id,
+            confidence=confidence.to_dict(),
+            plan=plan.to_dict(),
+        )
+        store.record_shadow(
+            opportunity,
+            as_of=result.as_of,
+            entry_price_paise=paise_from_price(plan.entry_price).value,
+            stop_loss_paise=paise_from_price(plan.stop_loss).value,
+            target_price_paise=paise_from_price(plan.target_price).value,
+            quantity=plan.suggested_quantity,
+            not_taken_reason=(
+                "paper_not_executed"
+                if confidence.assessment.disposition.value == "SUGGEST"
+                else "not_suggested"
+            ),
+            plan=plan.to_dict(),
+        )
+    except Exception:  # noqa: BLE001 - opportunity tracking is an audit side effect
         return
 
 
@@ -1472,7 +1987,7 @@ def create_app(
                 "/api/v1/data/",
                 "/api/v1/llm/",
                 "/api/v1/news/",
-                "/api/v1/schedules/",
+                "/api/v1/schedules",
                 "/api/v1/settings/",
                 "/api/v1/paper/",
                 "/api/v1/tools/",
@@ -1480,7 +1995,12 @@ def create_app(
                 "/api/v1/analysis/",
                 "/api/v1/decision/",
                 "/api/v1/strategy/",
+                "/api/v1/research/",
+                "/api/v1/strategies",
+                "/api/v1/backtests",
                 "/api/v1/memory/",
+                "/api/v1/opportunities",
+                "/api/v1/reports",
                 "/api/v1/prompts/",
             )
         ):
@@ -1535,9 +2055,7 @@ def create_app(
         calendar = ExchangeCalendar(database_path)
         records = DataRecordStore(database_path)
         attempts = ModelAttemptStore(database_path)
-        schedules = ScheduleStore(
-            database_path, available_jobs=frozenset({MEMORY_RESOLVE_JOB})
-        )
+        schedules = ScheduleStore(database_path, available_jobs=AVAILABLE_JOBS)
         paper_accounts = PaperAccountStore(database_path)
         paper_trading = PaperTradingStore(database_path)
         settings = SettingsStore(database_path)
@@ -1608,6 +2126,8 @@ def create_app(
                 status=order.status.value,
                 filled_quantity=order.filled_quantity,
                 created_at=order.created_at,
+                product=order.product.value,
+                approval_status=order.approval_status,
             )
 
         def execution_context_status(
@@ -1942,6 +2462,11 @@ def create_app(
                         if fill.realized_pnl_paise is None
                         else str(fill.realized_pnl_paise)
                     ),
+                    gross_paise=str(fill.gross_paise),
+                    charges_paise=str(fill.charges_paise),
+                    net_pnl_paise=(
+                        None if fill.net_pnl_paise is None else str(fill.net_pnl_paise)
+                    ),
                 ),
             )
 
@@ -2001,6 +2526,7 @@ def create_app(
                     order_type=PaperOrderType.LIMIT,
                     quantity=Quantity(body.quantity),
                     limit_price_paise=CurrencyPaise(body.price_paise),
+                    product=PaperProduct(body.product),
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2027,6 +2553,186 @@ def create_app(
                 ledger_debit_paise=str(result.ledger_debit_paise),
                 ledger_credit_paise=str(result.ledger_credit_paise),
                 position_count=result.position_count,
+                charges_paise=str(result.charges_paise),
+            )
+
+        def approval_status(item: PaperApproval) -> PaperApprovalStatus:
+            return PaperApprovalStatus(
+                approval_id=item.approval_id,
+                order_id=item.order_id,
+                account_id=item.account_id,
+                status=item.status,
+                reason=item.reason,
+                created_at=item.created_at,
+                decided_at=item.decided_at,
+                decision_note=item.decision_note,
+            )
+
+        def stop_status(item: PaperStop) -> PaperStopStatus:
+            return PaperStopStatus(
+                stop_id=item.stop_id,
+                account_id=item.account_id,
+                instrument_id=item.instrument_id,
+                product=item.product.value,
+                quantity=item.quantity,
+                stop_price_paise=str(item.stop_price_paise),
+                target_price_paise=(
+                    str(item.target_price_paise)
+                    if item.target_price_paise is not None
+                    else None
+                ),
+                status=item.status,
+                trigger_order_id=item.trigger_order_id,
+                trigger_kind=item.trigger_kind,
+                created_at=item.created_at,
+                triggered_at=item.triggered_at,
+            )
+
+        @app.get("/api/v1/paper/accounts/{account_id}/realism")
+        def paper_realism(request: Request, account_id: str) -> PaperRealismStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                product_positions = paper_trading.product_positions(account_id)
+                lots = paper_trading.tax_lots(account_id)
+                approvals = paper_trading.approvals(account_id)
+                stops = PaperStopStore(database_path).list(account_id)
+                reconciliation = paper_trading.reconcile(account_id)
+            except (PaperTradingError, ValueError) as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return PaperRealismStatus(
+                account_id=account_id,
+                product_positions=[
+                    PaperProductPositionStatus(
+                        instrument_id=item.instrument_id,
+                        product=item.product.value,
+                        quantity=item.quantity,
+                    )
+                    for item in product_positions
+                ],
+                tax_lots=[
+                    PaperTaxLotStatus(
+                        lot_id=item.lot_id,
+                        instrument_id=item.instrument_id,
+                        product=item.product.value,
+                        quantity=item.quantity,
+                        remaining_quantity=item.remaining_quantity,
+                        settles_on=item.settles_on.isoformat(),
+                        cost_paise=str(item.cost_paise),
+                        charges_paise=str(item.charges_paise),
+                    )
+                    for item in lots
+                ],
+                approvals=[approval_status(item) for item in approvals],
+                stops=[stop_status(item) for item in stops],
+                charges_paise=str(reconciliation.charges_paise),
+            )
+
+        @app.get("/api/v1/paper/accounts/{account_id}/approvals")
+        def paper_approval_list(
+            request: Request, account_id: str
+        ) -> list[PaperApprovalStatus]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                items = paper_trading.approvals(account_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return [approval_status(item) for item in items]
+
+        @app.post("/api/v1/paper/orders/{order_id}/approval")
+        def decide_paper_approval(
+            request: Request, order_id: str, body: PaperApprovalDecision
+        ) -> PaperOrderStatus:
+            require_write(request)
+            try:
+                order = paper_trading.decide_approval(
+                    order_id, approved=body.approved, note=body.note
+                )
+            except PaperTradingError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return order_status(order)
+
+        @app.get("/api/v1/paper/accounts/{account_id}/stops")
+        def paper_stop_list(request: Request, account_id: str) -> list[PaperStopStatus]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                items = PaperStopStore(database_path).list(account_id)
+            except PaperStopError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return [stop_status(item) for item in items]
+
+        @app.post("/api/v1/paper/accounts/{account_id}/stops")
+        def create_paper_stop(
+            request: Request, account_id: str, body: PaperStopCreateRequest
+        ) -> PaperStopStatus:
+            require_write(request)
+            try:
+                item = PaperStopStore(database_path).create(
+                    account_id=account_id,
+                    instrument_id=body.instrument_id,
+                    quantity=Quantity(body.quantity),
+                    stop_price_paise=CurrencyPaise(body.stop_price_paise),
+                    target_price_paise=(
+                        CurrencyPaise(body.target_price_paise)
+                        if body.target_price_paise is not None
+                        else None
+                    ),
+                    product=PaperProduct(body.product),
+                )
+            except (PaperStopError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return stop_status(item)
+
+        @app.post("/api/v1/paper/accounts/{account_id}/stops/{stop_id}/cancel")
+        def cancel_paper_stop(
+            request: Request, account_id: str, stop_id: str
+        ) -> PaperStopStatus:
+            require_write(request)
+            del account_id
+            try:
+                item = PaperStopStore(database_path).cancel(stop_id)
+            except PaperStopError as exc:
+                status = 404 if "not found" in str(exc) else 409
+                raise HTTPException(status_code=status, detail=str(exc)) from exc
+            return stop_status(item)
+
+        @app.post("/api/v1/paper/accounts/{account_id}/stops/evaluate")
+        def evaluate_paper_stops(
+            request: Request, account_id: str
+        ) -> PaperStopEvaluationStatus:
+            require_write(request)
+            del account_id
+            try:
+                router = build_analysis_router(database_path, settings.load())
+                result = PaperStopStore(database_path).evaluate(
+                    router, as_of=datetime.now(UTC)
+                )
+            except Exception as exc:  # noqa: BLE001 - surface a bounded error
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return PaperStopEvaluationStatus(
+                examined=result.examined,
+                triggered=result.triggered,
+                notes=list(result.notes),
+            )
+
+        @app.post("/api/v1/paper/accounts/{account_id}/square-off")
+        def square_off_paper_mis(
+            request: Request, account_id: str
+        ) -> PaperSquareOffStatus:
+            require_write(request)
+            try:
+                router = build_analysis_router(database_path, settings.load())
+                result = PaperSquareOff(database_path).square_off(
+                    router, as_of=datetime.now(UTC), account_id=account_id
+                )
+            except Exception as exc:  # noqa: BLE001 - surface a bounded error
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return PaperSquareOffStatus(
+                examined=result.examined,
+                squared_off=result.squared_off,
+                notes=list(result.notes),
             )
 
         @app.post("/api/v1/execution/preview")
@@ -2054,6 +2760,8 @@ def create_app(
                     plan,
                     context=snapshot.context,
                     client_order_id=body.client_order_id,
+                    product=PaperProduct(body.product),
+                    require_approval=body.require_approval,
                 )
             except ExecutionDisabled as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2104,6 +2812,253 @@ def create_app(
                 expected_version=latest.version,
             )
             return _memory_schedule_status(snapshot.schedules, version=snapshot.version)
+
+        @app.get("/api/v1/schedules/catalogue")
+        def schedule_catalogue(request: Request) -> JobCatalogueResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return JobCatalogueResponse(
+                jobs=[
+                    JobDefinitionStatus(
+                        job_id=item.job_id,
+                        label=item.label,
+                        description=item.description,
+                        resource_class=item.resource_class,
+                        timezone=item.timezone,
+                        local_time=item.local_time,
+                        window_start=item.window_start,
+                        window_end=item.window_end,
+                        enabled_by_default=item.enabled_by_default,
+                        max_attempts=item.max_attempts,
+                        wake_policy=item.wake_policy,
+                    )
+                    for item in JOB_CATALOGUE
+                ]
+            )
+
+        def schedule_config(
+            schedule: DailySchedule, *, version: int
+        ) -> ScheduleConfigStatus:
+            occurrences: tuple[datetime, ...] = ()
+            try:
+                if isinstance(schedule, IntervalSchedule):
+                    occurrences = next_interval_occurrences(
+                        schedule, after=datetime.now(UTC), count=5
+                    )
+                else:
+                    occurrences = next_daily_occurrences(
+                        schedule, after=datetime.now(UTC), count=5
+                    )
+            except ScheduleError:
+                occurrences = ()
+            return ScheduleConfigStatus(
+                schedule_id=schedule.schedule_id,
+                job_id=schedule.job_id,
+                enabled=schedule.enabled,
+                timezone=schedule.timezone,
+                local_time=schedule.local_time.isoformat(timespec="minutes"),
+                window_start=schedule.window_start.isoformat(timespec="minutes"),
+                window_end=schedule.window_end.isoformat(timespec="minutes"),
+                wake_policy=schedule.wake_policy.value,
+                wake_within_seconds=schedule.wake_within_seconds,
+                max_attempts=schedule.max_attempts,
+                interval_minutes=(
+                    schedule.interval_minutes
+                    if isinstance(schedule, IntervalSchedule)
+                    else None
+                ),
+                weekdays=list(schedule.weekdays),
+                dependencies=list(schedule.dependencies),
+                version=version,
+                next_occurrences=list(occurrences),
+            )
+
+        def job_run_view(run: object) -> JobRunView:
+            return JobRunView(
+                run_id=run.run_id,  # type: ignore[attr-defined]
+                job_id=run.job_id,  # type: ignore[attr-defined]
+                occurrence_key=run.occurrence_key,  # type: ignore[attr-defined]
+                scheduled_at=run.scheduled_at,  # type: ignore[attr-defined]
+                status=run.status.value,  # type: ignore[attr-defined]
+                attempts=run.attempts,  # type: ignore[attr-defined]
+                max_attempts=run.max_attempts,  # type: ignore[attr-defined]
+                failure_code=run.failure_code,  # type: ignore[attr-defined]
+            )
+
+        @app.get("/api/v1/schedules")
+        def schedule_list(request: Request) -> ScheduleConfigList:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            snapshot = schedules.load()
+            return ScheduleConfigList(
+                version=snapshot.version,
+                schedules=[
+                    schedule_config(item, version=snapshot.version)
+                    for item in snapshot.schedules
+                ],
+            )
+
+        @app.put("/api/v1/schedules/{schedule_id}")
+        def schedule_update(
+            request: Request, schedule_id: str, body: ScheduleUpdateRequest
+        ) -> ScheduleConfigStatus:
+            require_write(request)
+            if body.job_id not in AVAILABLE_JOBS:
+                raise HTTPException(status_code=422, detail="Job is not implemented.")
+            try:
+                local_time = time.fromisoformat(body.local_time)
+                window_start = time.fromisoformat(body.window_start)
+                window_end = time.fromisoformat(body.window_end)
+                weekdays = tuple(body.weekdays)
+                if not weekdays or tuple(sorted(set(weekdays))) != weekdays:
+                    raise ScheduleError("Weekdays must be distinct ordered days.")
+                wake_policy = WakePolicy(body.wake_policy)
+                wake_within = (
+                    body.wake_within_seconds
+                    if body.wake_policy == "RUN_ON_WAKE_WITHIN"
+                    else None
+                )
+                if body.interval_minutes is None:
+                    schedule = DailySchedule(
+                        schedule_id=schedule_id,
+                        job_id=body.job_id,
+                        enabled=body.enabled,
+                        timezone=body.timezone,
+                        local_time=local_time,
+                        window_start=window_start,
+                        window_end=window_end,
+                        wake_policy=wake_policy,
+                        wake_within_seconds=wake_within,
+                        max_attempts=body.max_attempts,
+                        dependencies=tuple(body.dependencies),
+                        weekdays=weekdays,
+                    )
+                else:
+                    schedule = IntervalSchedule(
+                        schedule_id=schedule_id,
+                        job_id=body.job_id,
+                        enabled=body.enabled,
+                        timezone=body.timezone,
+                        local_time=local_time,
+                        window_start=window_start,
+                        window_end=window_end,
+                        wake_policy=wake_policy,
+                        wake_within_seconds=wake_within,
+                        max_attempts=body.max_attempts,
+                        dependencies=tuple(body.dependencies),
+                        weekdays=weekdays,
+                        interval_minutes=body.interval_minutes,
+                    )
+                latest = schedules.load()
+                updated = tuple(
+                    schedule if item.schedule_id == schedule_id else item
+                    for item in latest.schedules
+                )
+                if not any(
+                    item.schedule_id == schedule_id for item in latest.schedules
+                ):
+                    updated = (*updated, schedule)
+                snapshot = schedules.save(updated, expected_version=latest.version)
+                saved = next(
+                    item
+                    for item in snapshot.schedules
+                    if item.schedule_id == schedule_id
+                )
+            except (ScheduleError, ValueError, TypeError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return schedule_config(saved, version=snapshot.version)
+
+        @app.post("/api/v1/schedules/{schedule_id}/enable")
+        def schedule_enable(
+            request: Request, schedule_id: str, body: ScheduleEnableRequest
+        ) -> ScheduleConfigStatus:
+            require_write(request)
+            latest = schedules.load()
+            existing = next(
+                (item for item in latest.schedules if item.schedule_id == schedule_id),
+                None,
+            )
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Schedule not found.")
+            try:
+                updated_schedule = replace(existing, enabled=body.enabled)
+                snapshot = schedules.save(
+                    tuple(
+                        updated_schedule if item.schedule_id == schedule_id else item
+                        for item in latest.schedules
+                    ),
+                    expected_version=latest.version,
+                )
+            except ScheduleError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            saved = next(
+                item for item in snapshot.schedules if item.schedule_id == schedule_id
+            )
+            return schedule_config(saved, version=snapshot.version)
+
+        @app.post("/api/v1/schedules/{schedule_id}/dry-run")
+        def schedule_dry_run(
+            request: Request, schedule_id: str
+        ) -> ScheduleDryRunResponse:
+            require_write(request)
+            latest = schedules.load()
+            existing = next(
+                (item for item in latest.schedules if item.schedule_id == schedule_id),
+                None,
+            )
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Schedule not found.")
+            return ScheduleDryRunResponse(
+                valid=True,
+                schedule_id=schedule_id,
+                job_id=existing.job_id,
+            )
+
+        @app.post("/api/v1/schedules/{schedule_id}/run")
+        def schedule_run(
+            request: Request, schedule_id: str, body: ScheduleRunRequest
+        ) -> JobRunView:
+            require_write(request)
+            latest = schedules.load()
+            existing = next(
+                (item for item in latest.schedules if item.schedule_id == schedule_id),
+                None,
+            )
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Schedule not found.")
+            if existing.job_id not in AVAILABLE_JOBS:
+                raise HTTPException(status_code=422, detail="Job is not implemented.")
+            occurrence_key = f"run-now:{schedule_id}:{body.idempotency_key}"
+            try:
+                current = job_store.find(existing.job_id, occurrence_key)
+                if current is not None:
+                    return job_run_view(current)
+                run = job_store.enqueue(
+                    existing.job_id,
+                    occurrence_key,
+                    scheduled_at=datetime.now(UTC),
+                    max_attempts=existing.max_attempts,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return job_run_view(run)
+
+        @app.get("/api/v1/schedules/{schedule_id}/history")
+        def schedule_history(request: Request, schedule_id: str) -> list[JobRunView]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            latest = schedules.load()
+            existing = next(
+                (item for item in latest.schedules if item.schedule_id == schedule_id),
+                None,
+            )
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Schedule not found.")
+            return [
+                job_run_view(run)
+                for run in job_store.recent(limit=100)
+                if run.job_id == existing.job_id
+            ]
 
         @app.get("/api/v1/schedules/status")
         def schedule_status(request: Request) -> ScheduleStatus:
@@ -2524,6 +3479,461 @@ def create_app(
                 notes=list(notes),
             )
 
+        def strategy_status(record: StrategyRecord) -> StrategyRecordStatus:
+            return StrategyRecordStatus(
+                strategy_id=record.definition.strategy_id,
+                version=record.definition.version,
+                name=record.definition.name,
+                kind=record.definition.kind.value,
+                lifecycle=record.lifecycle.value,
+                definition=record.definition.to_dict(),
+                content_hash=record.content_hash,
+                is_seed=record.is_seed,
+                created_at=record.created_at,
+            )
+
+        def backtest_status(run: BacktestRun) -> BacktestStatus:
+            return BacktestStatus(
+                run_id=run.run_id,
+                strategy_id=run.strategy_id,
+                version=run.version,
+                engine=run.engine,
+                start=run.start,
+                end=run.end,
+                initial_capital_paise=str(run.initial_capital_paise),
+                metrics=run.metrics,
+                trades=run.trades,
+                content_hash=run.content_hash,
+                created_at=run.created_at,
+                review_decision=run.review_decision,
+                review_note=run.review_note,
+            )
+
+        @app.get("/api/v1/strategies")
+        def strategy_list(request: Request) -> StrategyListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            store = StrategyStore(database_path)
+            store.ensure_seeds()
+            return StrategyListResponse(
+                strategies=[strategy_status(item) for item in store.list()]
+            )
+
+        @app.post("/api/v1/strategies")
+        def strategy_create(
+            request: Request, body: StrategyCreateRequest
+        ) -> StrategyRecordStatus:
+            require_write(request)
+            try:
+                definition = strategy_from_dict(body.definition)
+                record = StrategyStore(database_path).save(
+                    definition,
+                    lifecycle=StrategyLifecycle(body.lifecycle),
+                )
+            except (StrategyStoreError, LifecycleStrategyError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return strategy_status(record)
+
+        @app.get("/api/v1/strategies/{strategy_id}/{version}")
+        def strategy_detail(
+            request: Request, strategy_id: str, version: str
+        ) -> StrategyRecordStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                record = StrategyStore(database_path).get(strategy_id, version)
+            except StrategyStoreError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return strategy_status(record)
+
+        @app.post("/api/v1/strategies/{strategy_id}/{version}/backtest")
+        def strategy_backtest(
+            request: Request,
+            strategy_id: str,
+            version: str,
+            body: StrategyBacktestRequest,
+        ) -> BacktestStatus:
+            require_write(request)
+            if body.start.utcoffset() is None or body.end.utcoffset() is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Backtest bounds must be timezone-aware.",
+                )
+            if body.end < body.start:
+                raise HTTPException(
+                    status_code=422, detail="Backtest end precedes its start."
+                )
+            try:
+                record = StrategyStore(database_path).get(strategy_id, version)
+                router = build_analysis_router(database_path, settings.load())
+                bars_by_symbol = {}
+                for instrument in record.definition.universe:
+                    symbol = resolve_symbol(instrument)
+                    result = router.bars(
+                        symbol,
+                        interval=BarInterval.DAY_1,
+                        start=body.start - timedelta(days=400),
+                        end=body.end,
+                        domain=DataDomain.BARS_DAILY,
+                    )
+                    bars_by_symbol[instrument] = tuple(
+                        bar for bar in result.data if bar.event_at <= body.end
+                    )
+                outcome = run_backtest(
+                    record.definition,
+                    bars_by_symbol,
+                    start=body.start,
+                    end=body.end,
+                    initial_capital_paise=body.initial_capital_paise,
+                    engine=BacktestEngineName(body.engine),
+                )
+                run = BacktestStore(database_path).record(outcome)
+            except (
+                StrategyStoreError,
+                StrategyError,
+                BacktestError,
+                ValueError,
+            ) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return backtest_status(run)
+
+        @app.get("/api/v1/backtests")
+        def backtest_list(
+            request: Request, limit: int = 30, strategy_id: str | None = None
+        ) -> BacktestListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                runs = BacktestStore(database_path).list(
+                    limit=limit, strategy_id=strategy_id
+                )
+            except StrategyStoreError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return BacktestListResponse(runs=[backtest_status(item) for item in runs])
+
+        @app.get("/api/v1/backtests/{run_id}")
+        def backtest_detail(request: Request, run_id: str) -> BacktestStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                run = BacktestStore(database_path).get(run_id)
+            except StrategyStoreError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return backtest_status(run)
+
+        @app.post("/api/v1/backtests/{run_id}/review")
+        def backtest_review(
+            request: Request, run_id: str, body: BacktestReviewRequest
+        ) -> BacktestStatus:
+            require_write(request)
+            try:
+                store = BacktestStore(database_path)
+                store.review(run_id, decision=body.decision, note=body.note)
+                run = store.get(run_id)
+            except StrategyStoreError as exc:
+                status = 404 if "not found" in str(exc) else 422
+                raise HTTPException(status_code=status, detail=str(exc)) from exc
+            return backtest_status(run)
+
+        def note_status(note: ResearchNote) -> ResearchNoteStatus:
+            return ResearchNoteStatus(
+                note_id=note.note_id,
+                instrument_id=note.instrument_id,
+                source_type=note.source_type.value,
+                source_id=note.source_id,
+                url=note.url,
+                title=note.title,
+                body=note.body,
+                published_at=note.published_at,
+                known_at=note.known_at,
+                note_hash=note.note_hash,
+                created_at=note.created_at,
+            )
+
+        def fundamental_status(record: FundamentalRecord) -> FundamentalSnapshotStatus:
+            snapshot = record.snapshot
+            return FundamentalSnapshotStatus(
+                snapshot_id=record.snapshot_id,
+                instrument_id=snapshot.instrument_id,
+                source=snapshot.source.value,
+                period_end=snapshot.period_end,
+                known_at=snapshot.known_at,
+                revenue_paise=str(snapshot.revenue_paise),
+                ebitda_paise=str(snapshot.ebitda_paise),
+                net_income_paise=str(snapshot.net_income_paise),
+                total_debt_paise=str(snapshot.total_debt_paise),
+                cash_paise=str(snapshot.cash_paise),
+                shares_outstanding=snapshot.shares_outstanding,
+                book_value_paise=str(snapshot.book_value_paise),
+                fcf_paise=str(snapshot.fcf_paise),
+                snapshot_hash=record.snapshot_hash,
+                created_at=record.created_at,
+            )
+
+        def claim_status(claim: ResearchClaim) -> ResearchClaimStatus:
+            return ResearchClaimStatus(
+                claim_id=claim.claim_id,
+                instrument_id=claim.instrument_id,
+                statement=claim.statement,
+                note_id=claim.note_id,
+                claim_hash=claim.claim_hash,
+                created_at=claim.created_at,
+                status=claim.status,
+                review_note=claim.review_note,
+            )
+
+        def thesis_status(thesis: Thesis) -> ThesisStatus:
+            return ThesisStatus(
+                thesis_id=thesis.thesis_id,
+                instrument_id=thesis.instrument_id,
+                horizon=thesis.horizon.value,
+                state=thesis.state.value,
+                created_at=thesis.created_at,
+                thesis_hash=thesis.thesis_hash,
+            )
+
+        def thesis_event_status(event: ThesisEventRecord) -> ThesisEventStatus:
+            return ThesisEventStatus(
+                event_id=event.event_id,
+                thesis_id=event.thesis_id,
+                kind=event.kind,
+                statement=event.statement,
+                note_id=event.note_id,
+                occurred_at=event.occurred_at,
+                event_hash=event.event_hash,
+                created_at=event.created_at,
+            )
+
+        @app.get("/api/v1/research/notes")
+        def research_note_list(
+            request: Request,
+            instrument_id: str | None = None,
+            as_of: datetime | None = None,
+            limit: int = 50,
+        ) -> ResearchNoteListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                notes = ResearchExpansionStore(database_path).notes(
+                    instrument_id=instrument_id, as_of=as_of, limit=limit
+                )
+            except (ResearchExpansionError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return ResearchNoteListResponse(notes=[note_status(item) for item in notes])
+
+        @app.post("/api/v1/research/notes")
+        def research_note_create(
+            request: Request, body: ResearchNoteCreateRequest
+        ) -> ResearchNoteStatus:
+            require_write(request)
+            try:
+                note = ResearchExpansionStore(database_path).create_note(
+                    source_type=NoteSource(body.source_type),
+                    source_id=body.source_id,
+                    title=body.title,
+                    body=body.body,
+                    published_at=body.published_at,
+                    known_at=body.known_at,
+                    instrument_id=body.instrument_id,
+                    url=body.url,
+                )
+            except (ResearchExpansionError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return note_status(note)
+
+        @app.post("/api/v1/research/notes/from-news/{news_id}")
+        def research_note_from_news(
+            request: Request, news_id: str, body: NewsNoteRequest
+        ) -> ResearchNoteStatus:
+            require_write(request)
+            try:
+                item = NewsStore(database_path).get(news_id)
+                note = ResearchExpansionStore(database_path).note_from_news(
+                    item, instrument_id=body.instrument_id
+                )
+            except (NewsError, ResearchExpansionError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return note_status(note)
+
+        @app.post("/api/v1/research/fundamentals")
+        def research_fundamentals_create(
+            request: Request, body: FundamentalSnapshotRequest
+        ) -> FundamentalSnapshotStatus:
+            require_write(request)
+            try:
+                snapshot = FundamentalSnapshot(
+                    instrument_id=body.instrument_id,
+                    source=FundamentalSource(body.source),
+                    period_end=body.period_end,
+                    known_at=body.known_at,
+                    revenue_paise=body.revenue_paise,
+                    ebitda_paise=body.ebitda_paise,
+                    net_income_paise=body.net_income_paise,
+                    total_debt_paise=body.total_debt_paise,
+                    cash_paise=body.cash_paise,
+                    shares_outstanding=body.shares_outstanding,
+                    book_value_paise=body.book_value_paise,
+                    fcf_paise=body.fcf_paise,
+                )
+                record = ResearchExpansionStore(database_path).freeze_fundamentals(
+                    snapshot
+                )
+            except (FundamentalError, ResearchExpansionError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return fundamental_status(record)
+
+        @app.get("/api/v1/research/fundamentals/{instrument_id}")
+        def research_fundamentals_list(
+            request: Request,
+            instrument_id: str,
+            as_of: datetime | None = None,
+            limit: int = 20,
+        ) -> FundamentalListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                records = ResearchExpansionStore(database_path).fundamentals(
+                    instrument_id, as_of=as_of, limit=limit
+                )
+            except (ResearchExpansionError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return FundamentalListResponse(
+                instrument_id=instrument_id,
+                snapshots=[fundamental_status(item) for item in records],
+            )
+
+        @app.get("/api/v1/research/instruments/{instrument_id}/dossier")
+        def research_dossier(
+            request: Request,
+            instrument_id: str,
+            as_of: datetime | None = None,
+            price_paise: int | None = None,
+            growth_bps: int = 1_000,
+            discount_bps: int = 1_200,
+            terminal_growth_bps: int = 400,
+            years: int = 5,
+        ) -> DossierResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                assumptions = ValuationAssumptions(
+                    growth_bps=growth_bps,
+                    discount_bps=discount_bps,
+                    terminal_growth_bps=terminal_growth_bps,
+                    years=years,
+                )
+                payload = ResearchExpansionStore(database_path).dossier(
+                    instrument_id,
+                    as_of=as_of,
+                    price_paise=price_paise,
+                    assumptions=assumptions,
+                )
+            except (FundamentalError, ResearchExpansionError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return DossierResponse.model_validate(payload)
+
+        @app.post("/api/v1/research/theses")
+        def research_thesis_create(
+            request: Request, body: ThesisCreateRequest
+        ) -> ThesisStatus:
+            require_write(request)
+            try:
+                thesis = ResearchStore(database_path).create_thesis(
+                    thesis_id=body.thesis_id,
+                    instrument_id=body.instrument_id,
+                    horizon=ThesisHorizon(body.horizon),
+                )
+            except (ResearchError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return thesis_status(thesis)
+
+        @app.get("/api/v1/research/theses/{thesis_id}")
+        def research_thesis_detail(request: Request, thesis_id: str) -> ThesisStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                thesis = ResearchStore(database_path).get_thesis(thesis_id)
+            except ResearchError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return thesis_status(thesis)
+
+        @app.post("/api/v1/research/theses/{thesis_id}/events")
+        def research_thesis_event(
+            request: Request, thesis_id: str, body: ThesisEventCreateRequest
+        ) -> ThesisEventStatus:
+            require_write(request)
+            try:
+                event = ResearchExpansionStore(database_path).add_thesis_event(
+                    thesis_id=thesis_id,
+                    kind=body.kind,
+                    statement=body.statement,
+                    note_id=body.note_id,
+                    occurred_at=body.occurred_at,
+                )
+            except (ResearchExpansionError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return thesis_event_status(event)
+
+        @app.get("/api/v1/research/theses/{thesis_id}/events")
+        def research_thesis_events(
+            request: Request, thesis_id: str
+        ) -> list[ThesisEventStatus]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                events = ResearchExpansionStore(database_path).thesis_events(thesis_id)
+            except ResearchExpansionError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return [thesis_event_status(item) for item in events]
+
+        @app.get("/api/v1/research/claims")
+        def research_claim_list(
+            request: Request,
+            instrument_id: str | None = None,
+            status: str | None = None,
+            limit: int = 50,
+        ) -> ResearchClaimListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                claims = ResearchExpansionStore(database_path).claims(
+                    instrument_id=instrument_id, status=status, limit=limit
+                )
+            except ResearchExpansionError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return ResearchClaimListResponse(
+                claims=[claim_status(item) for item in claims]
+            )
+
+        @app.post("/api/v1/research/claims")
+        def research_claim_create(
+            request: Request, body: ResearchClaimCreateRequest
+        ) -> ResearchClaimStatus:
+            require_write(request)
+            try:
+                claim = ResearchExpansionStore(database_path).create_claim(
+                    instrument_id=body.instrument_id,
+                    statement=body.statement,
+                    note_id=body.note_id,
+                )
+            except (ResearchExpansionError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return claim_status(claim)
+
+        @app.post("/api/v1/research/claims/{claim_id}/review")
+        def research_claim_review(
+            request: Request, claim_id: str, body: ResearchClaimReviewRequest
+        ) -> ResearchClaimStatus:
+            require_write(request)
+            try:
+                claim = ResearchExpansionStore(database_path).review_claim(
+                    claim_id, decision=body.decision, note=body.note
+                )
+            except ResearchExpansionError as exc:
+                status = 404 if "not found" in str(exc) else 409
+                raise HTTPException(status_code=status, detail=str(exc)) from exc
+            return claim_status(claim)
+
         @app.post("/api/v1/strategy/run")
         def run_strategy(
             request: Request, body: StrategyRunRequest
@@ -2584,9 +3994,136 @@ def create_app(
                         outcome.result,
                         source="strategy",
                     )
+                    _record_opportunity(
+                        database_path,
+                        strategy_run_id,
+                        outcome.result,
+                        source="strategy",
+                    )
             return StrategyRunResponse.model_validate(
                 {**run.to_dict(), "run_id": strategy_run_id}
             )
+
+        @app.post("/api/v1/reports/morning")
+        def report_morning(request: Request) -> ReportStatus:
+            require_write(request)
+            try:
+                router = build_analysis_router(database_path, settings.load())
+                report = ReportEngine(database_path, router).morning()
+            except (ReportError, ReportEngineError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return ReportStatus.model_validate(report.to_dict())
+
+        @app.post("/api/v1/reports/evening")
+        def report_evening(request: Request) -> ReportStatus:
+            require_write(request)
+            try:
+                router = build_analysis_router(database_path, settings.load())
+                report = ReportEngine(database_path, router).evening()
+            except (ReportError, ReportEngineError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return ReportStatus.model_validate(report.to_dict())
+
+        @app.get("/api/v1/reports")
+        def report_list(request: Request, limit: int = 30) -> ReportListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                reports = ReportStore(database_path).list(limit=limit)
+            except ReportError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return ReportListResponse(
+                reports=[
+                    ReportStatus.model_validate(item.to_dict()) for item in reports
+                ]
+            )
+
+        @app.get("/api/v1/reports/{report_id}")
+        def report_detail(request: Request, report_id: str) -> ReportStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                report = ReportStore(database_path).get(report_id)
+            except ReportError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return ReportStatus.model_validate(report.to_dict())
+
+        @app.get("/api/v1/opportunities")
+        def opportunity_list(
+            request: Request,
+            limit: int = 50,
+            horizon: str | None = None,
+            level: str | None = None,
+            lifecycle: str | None = None,
+        ) -> OpportunityListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                items = OpportunityStore(database_path).list(
+                    limit=limit,
+                    horizon=OpportunityHorizon(horizon) if horizon else None,
+                    level=ConfidenceLevel(level) if level else None,
+                    lifecycle=OpportunityLifecycle(lifecycle) if lifecycle else None,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return OpportunityListResponse(
+                opportunities=[
+                    OpportunityStatus.model_validate(item.to_dict()) for item in items
+                ]
+            )
+
+        @app.post("/api/v1/opportunities/{opportunity_id}/transition")
+        def opportunity_transition(
+            request: Request,
+            opportunity_id: str,
+            body: OpportunityTransitionRequest,
+        ) -> OpportunityStatus:
+            require_write(request)
+            try:
+                item = OpportunityStore(database_path).transition(
+                    opportunity_id,
+                    OpportunityLifecycle(body.lifecycle),
+                    note=body.note,
+                )
+            except (OpportunityError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return OpportunityStatus.model_validate(item.to_dict())
+
+        @app.get("/api/v1/opportunities/shadow/summary")
+        def shadow_summary(request: Request) -> ShadowSummaryStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            summary = OpportunityStore(database_path).filter_verdict()
+            return ShadowSummaryStatus(
+                verdict=summary.verdict,
+                suggested_count=summary.suggested_count,
+                unsuggested_count=summary.unsuggested_count,
+                suggested_win_rate=summary.suggested_win_rate,
+                unsuggested_win_rate=summary.unsuggested_win_rate,
+                suggested_interval=(
+                    list(summary.suggested_interval)
+                    if summary.suggested_interval is not None
+                    else None
+                ),
+                unsuggested_interval=(
+                    list(summary.unsuggested_interval)
+                    if summary.unsuggested_interval is not None
+                    else None
+                ),
+            )
+
+        @app.post("/api/v1/opportunities/shadow/resolve")
+        def shadow_resolve(request: Request) -> dict[str, object]:
+            require_write(request)
+            store = OpportunityStore(database_path)
+            router = build_analysis_router(database_path, settings.load())
+            try:
+                return store.resolve_shadows(
+                    router, as_of=datetime.now(UTC), max_trades=50
+                )
+            except OpportunityError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         @app.get("/api/v1/memory/calibration")
         def memory_calibration(request: Request) -> MemoryCalibrationResponse:
@@ -3057,6 +4594,7 @@ def create_app(
             _record_working_memory(
                 database_path, stored.run_id, result, source="analysis"
             )
+            _record_opportunity(database_path, stored.run_id, result, source="analysis")
             return AnalysisRunResponse(
                 run_id=stored.run_id,
                 symbol=result.symbol,
@@ -3081,6 +4619,7 @@ def create_app(
                 specialists=payload["specialists"],  # type: ignore[arg-type]
                 evidence=payload["evidence"],  # type: ignore[arg-type]
                 final_gate=payload["final_gate"],  # type: ignore[arg-type]
+                confidence=payload["confidence"],  # type: ignore[arg-type]
             )
 
         @app.post("/api/v1/analysis/batch")
@@ -3168,6 +4707,9 @@ def create_app(
                         database_path, stored.run_id, result, source="analysis"
                     )
                     _record_working_memory(
+                        database_path, stored.run_id, result, source="analysis"
+                    )
+                    _record_opportunity(
                         database_path, stored.run_id, result, source="analysis"
                     )
                     # The pipeline's payload has no `run_id` — only the store

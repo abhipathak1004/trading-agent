@@ -238,6 +238,67 @@ class ResearchStore:
             filing_hash=str(row[6]),
         )
 
+    def filings(
+        self,
+        *,
+        instrument_id: str | None = None,
+        as_of: datetime | None = None,
+        limit: int = 50,
+    ) -> tuple[Filing, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ResearchError("Filing limit must be between 1 and 100.")
+        clauses: list[str] = []
+        params: list[object] = []
+        if instrument_id is not None:
+            clauses.append("instrument_id = ?")
+            params.append(instrument_id)
+        if as_of is not None:
+            clauses.append("published_at <= ? AND ingested_at <= ?")
+            pivot = _timestamp(as_of)
+            params.extend([pivot, pivot])
+        query = (
+            "SELECT filing_id FROM filings "
+            + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
+            + "ORDER BY published_at DESC, filing_id LIMIT ?"
+        )
+        with closing(self._connect()) as connection:
+            rows = connection.execute(query, (*params, limit)).fetchall()
+        return tuple(self.get_filing(str(row[0])) for row in rows)
+
+    def theses(
+        self,
+        *,
+        instrument_id: str | None = None,
+        as_of: datetime | None = None,
+        limit: int = 50,
+    ) -> tuple[Thesis, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ResearchError("Thesis limit must be between 1 and 100.")
+        clauses: list[str] = []
+        params: list[object] = []
+        if instrument_id is not None:
+            clauses.append("instrument_id = ?")
+            params.append(instrument_id)
+        if as_of is not None:
+            clauses.append("created_at <= ?")
+            params.append(_timestamp(as_of))
+        query = (
+            "SELECT thesis_id FROM theses "
+            + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
+            + "ORDER BY created_at DESC, thesis_id LIMIT ?"
+        )
+        with closing(self._connect()) as connection:
+            rows = connection.execute(query, (*params, limit)).fetchall()
+        return tuple(self.get_thesis(str(row[0])) for row in rows)
+
     def get_thesis(self, thesis_id: str) -> Thesis:
         with closing(self._connect()) as connection:
             row = connection.execute(

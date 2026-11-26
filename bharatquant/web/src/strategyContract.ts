@@ -99,7 +99,7 @@ export type StrategyRun = {
   notes: string[];
 };
 
-function parsePlan(value: unknown): StrategyPlan {
+export function parsePlan(value: unknown): StrategyPlan {
   if (
     !isRecord(value) ||
     typeof value.signal !== "string" ||

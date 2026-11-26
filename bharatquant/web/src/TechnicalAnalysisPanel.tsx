@@ -155,6 +155,33 @@ function SymbolResult({ item }: { item: BatchAnalysisItem }) {
         </p>
       )}
 
+      {run.confidence !== null && (
+        <div className="batch-gate">
+          Confidence: <strong>{run.confidence.level}</strong>{" "}
+          {(run.confidence.probability * 100).toFixed(0)}% ·{" "}
+          {run.confidence.confirming_families}/7 families ·{" "}
+          {run.confidence.calibrated ? "calibrated" : "provisional"} ·{" "}
+          EV {run.confidence.ev_r_after_costs.toFixed(2)}R ·{" "}
+          {run.confidence.disposition}
+          {run.confidence.vetoes.length > 0
+            ? ` · vetoes: ${run.confidence.vetoes.join(", ")}`
+            : ""}
+          <div className="prompt-meta">
+            base rate {(run.confidence.base_rate.win_rate * 100).toFixed(1)}% from{" "}
+            {run.confidence.base_rate.sample_count} sample(s),{" "}
+            {run.confidence.base_rate.setup_id} /{" "}
+            {run.confidence.base_rate.regime}
+          </div>
+          <ul className="agent-tools">
+            {run.confidence.evidence.map((item) => (
+              <li key={item.family}>
+                {item.family}: {item.state} ({item.strength.toFixed(2)})
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {run.evidence !== null && (
         <p className="panel-note">
           Evidence: {run.evidence.verified_claims} verified,{" "}

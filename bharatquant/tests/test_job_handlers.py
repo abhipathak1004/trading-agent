@@ -3,6 +3,8 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from bq.analysis.decision import (
     DataFreshness,
     OrderType,
@@ -24,11 +26,13 @@ from bq.infra.job_handlers import (
     DEFAULT_RESOLVE_HORIZON_DAYS,
     DEFAULT_RESOLVE_MAX_EPISODES,
     MEMORY_RESOLVE_JOB,
+    REPORT_MORNING_JOB,
     build_job_handlers,
 )
 from bq.infra.job_worker import JobWorker
 from bq.infra.jobs import JobRunStore
 from bq.memory import EpisodicMemoryStore, ResolutionReport
+from bq.reports.store import ReportStore
 from bq.settings import SettingsStore
 
 NOW = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
@@ -67,6 +71,30 @@ def test_memory_resolve_handler_uses_the_bounded_resolver(
     assert calls[0]["horizon_days"] == DEFAULT_RESOLVE_HORIZON_DAYS
     assert calls[0]["max_episodes"] == DEFAULT_RESOLVE_MAX_EPISODES
     assert calls[1]["as_of"] == NOW
+
+
+def test_morning_failure_is_recorded_in_the_report_archive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "bq.db"
+    migrate(path, create=True)
+    monkeypatch.setattr(
+        "bq.infra.job_handlers.build_analysis_router",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("router unavailable")),
+    )
+    handlers = build_job_handlers(path, SettingsStore(path))
+    with pytest.raises(RuntimeError, match="router unavailable"):
+        handlers[REPORT_MORNING_JOB](
+            SimpleNamespace(scheduled_at=NOW)  # type: ignore[arg-type]
+        )
+    reports = ReportStore(path).list()
+    assert len(reports) == 1
+    assert reports[0].report_type == "morning"
+    assert reports[0].status == "FAILED"
+    assert reports[0].body["error"] == "RuntimeError"
+    assert reports[0].file_path is not None
+    assert reports[0].file_path.endswith(f"{reports[0].report_id}.md")
+    assert Path(reports[0].file_path).exists()
 
 
 class StubVendor:

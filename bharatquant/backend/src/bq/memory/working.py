@@ -10,6 +10,7 @@ and margins. A Strategy run contains several symbols, so the key is
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -18,7 +19,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bq.core import (
-    IDENTIFIER,
     Clock,
     SystemClock,
     canonical_digest,
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from bq.analysis.pipeline import AnalysisResult
 
 SCHEMA_VERSION = 1
+RUN_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._:-]{0,127}")
 MAX_STATE_JSON = 65_536
 MAX_ROUTING_ENTRIES = 64
 MAX_SPECIALISTS = 16
@@ -66,6 +67,7 @@ class WorkingState:
     evidence: dict[str, object] | None
     debate: dict[str, object]
     final_gate: dict[str, object] | None
+    confidence: dict[str, object] | None
     plan: dict[str, object] | None
     vetoes: tuple[str, ...]
     notes: tuple[str, ...]
@@ -86,6 +88,7 @@ class WorkingState:
             "evidence": self.evidence,
             "debate": self.debate,
             "final_gate": self.final_gate,
+            "confidence": self.confidence,
             "plan": self.plan,
             "vetoes": list(self.vetoes),
             "notes": list(self.notes),
@@ -135,6 +138,9 @@ class WorkingState:
             final_gate=(
                 None if result.final_gate is None else result.final_gate.to_dict()
             ),
+            confidence=(
+                None if result.confidence is None else result.confidence.to_dict()
+            ),
             plan=None if result.plan is None else result.plan.to_dict(),
             vetoes=result.vetoes,
             notes=tuple(note[:500] for note in result.notes[:MAX_NOTES]),
@@ -180,7 +186,7 @@ class WorkingMemoryStore:
         run_id: str,
         source: str,
     ) -> WorkingMemoryRecord:
-        if not isinstance(run_id, str) or IDENTIFIER.fullmatch(run_id) is None:
+        if not isinstance(run_id, str) or RUN_ID.fullmatch(run_id) is None:
             raise WorkingMemoryError("Invalid working-memory run identifier.")
         if source not in {"analysis", "strategy"}:
             raise WorkingMemoryError("Unknown working-memory source.")
@@ -232,7 +238,7 @@ class WorkingMemoryStore:
                 return self._get_one(connection, run_id, state.symbol)
 
     def get(self, run_id: str) -> tuple[WorkingMemoryRecord, ...]:
-        if not isinstance(run_id, str) or IDENTIFIER.fullmatch(run_id) is None:
+        if not isinstance(run_id, str) or RUN_ID.fullmatch(run_id) is None:
             raise WorkingMemoryError("Invalid working-memory run identifier.")
         with closing(self._connect()) as connection:
             rows = connection.execute(

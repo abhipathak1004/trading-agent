@@ -29,6 +29,7 @@ from decimal import Decimal
 
 from bq.agents import AgentCycleResult, AgentDAG, AgentDAGError, AgentNode
 from bq.analysis.briefs import SPECIALIST_ORDER, SpecialistBrief
+from bq.analysis.confidence_engine import ConfidenceEngine, ConfidenceResult
 from bq.analysis.debate import (
     Argument,
     Debate,
@@ -98,6 +99,7 @@ class PipelineContext:
     mode: str = "FULL"
     plan: TradePlan | None = None
     final_gate: FinalGateResult | None = None
+    confidence: ConfidenceResult | None = None
     vetoes: tuple[str, ...] = ()
     notes: list[str] = field(default_factory=list)
     degraded: list[str] = field(default_factory=list)
@@ -166,6 +168,7 @@ AGENT_ROLES: dict[str, str] = {
     "size": "Position sizer",
     "decision": "Decision",
     "final_gate": "Final gate",
+    "confidence": "Confidence engine",
 }
 
 # The order agents appear in the UI. This is the graph order, not DAG sort order,
@@ -184,6 +187,7 @@ AGENT_ORDER: tuple[str, ...] = (
     "size",
     "decision",
     "final_gate",
+    "confidence",
 )
 
 
@@ -215,6 +219,7 @@ class AnalysisResult:
     specialists: tuple[SpecialistBrief, ...] = ()
     evidence: EvidenceResult | None = None
     final_gate: FinalGateResult | None = None
+    confidence: ConfidenceResult | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -250,6 +255,9 @@ class AnalysisResult:
             "evidence": None if self.evidence is None else self.evidence.to_dict(),
             "final_gate": (
                 None if self.final_gate is None else self.final_gate.to_dict()
+            ),
+            "confidence": (
+                None if self.confidence is None else self.confidence.to_dict()
             ),
         }
 
@@ -331,6 +339,7 @@ class AnalysisPipeline:
         fundamental: FundamentalEventsAgent | None = None,
         final_gate: FinalGate | None = None,
         evidence: EvidenceVerifier | None = None,
+        confidence: ConfidenceEngine | None = None,
     ) -> None:
         self.router = router
         self.debate = debate
@@ -343,6 +352,7 @@ class AnalysisPipeline:
         self.fundamental = fundamental
         self.final_gate = final_gate
         self.evidence = evidence
+        self.confidence = confidence
 
     # -- nodes ------------------------------------------------------------
 
@@ -514,6 +524,42 @@ class AnalysisPipeline:
             status,
             f"{result.verified_claims} verified, "
             f"{result.unverified_claims} unverified claim(s)",
+        )
+
+    def _confidence(self, ctx: PipelineContext) -> None:
+        if self.confidence is None:
+            self._record(ctx, "confidence", "degraded", "not configured")
+            return
+        if ctx.report is None or ctx.plan is None:
+            self._record(ctx, "confidence", "degraded", "skipped: no plan")
+            return
+        try:
+            result = self.confidence.assess(
+                bars=ctx.bars,
+                report=ctx.report,
+                plan=ctx.plan,
+                specialists=tuple(ctx.specialists.values()),
+                as_of=ctx.as_of,
+            )
+        except Exception as exc:  # noqa: BLE001 - optional confidence must not kill a run
+            ctx.notes.append(f"confidence: unavailable ({type(exc).__name__})")
+            self._record(
+                ctx,
+                "confidence",
+                "degraded",
+                f"confidence unavailable ({type(exc).__name__})",
+            )
+            return
+        if result is None:
+            self._record(ctx, "confidence", "degraded", "no long candidate")
+            return
+        ctx.confidence = result
+        self._record(
+            ctx,
+            "confidence",
+            "ok",
+            f"{result.assessment.level.value} p={result.assessment.probability:.2f} "
+            f"base n={result.assessment.base_rate_samples}",
         )
 
     def _technical(self, ctx: PipelineContext) -> None:
@@ -793,6 +839,7 @@ class AnalysisPipeline:
             ),
             AgentNode("decision", ("size",), self._decision),
             AgentNode("final_gate", ("decision",), self._final_gate),
+            AgentNode("confidence", ("final_gate",), self._confidence),
         )
         dag: AgentDAG[PipelineContext, object] = AgentDAG(nodes)
         try:
@@ -851,6 +898,7 @@ class AnalysisPipeline:
             ),
             evidence=ctx.evidence,
             final_gate=ctx.final_gate,
+            confidence=ctx.confidence,
         )
 
 

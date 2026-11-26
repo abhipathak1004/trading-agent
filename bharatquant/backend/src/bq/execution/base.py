@@ -13,7 +13,7 @@ from bq.execution.paper_executor import (
     PaperExecution,
     PaperExecutor,
 )
-from bq.paper_trading import PaperOrder
+from bq.paper_trading import PaperOrder, PaperProduct
 from bq.risk.policy import RiskDecision, RiskLimits
 
 
@@ -54,6 +54,8 @@ class ExecutionAdapter(Protocol):
         *,
         context: ExecutionContext,
         client_order_id: str,
+        product: PaperProduct = PaperProduct.MIS,
+        require_approval: bool = False,
     ) -> ExecutionOutcome: ...
 
 
@@ -77,11 +79,17 @@ class PaperExecutionAdapter:
         *,
         context: ExecutionContext,
         client_order_id: str,
+        product: PaperProduct = PaperProduct.MIS,
+        require_approval: bool = False,
     ) -> ExecutionOutcome:
         return ExecutionOutcome(
             mode=self.mode,
             execution=self.executor.execute(
-                plan, context=context, client_order_id=client_order_id
+                plan,
+                context=context,
+                client_order_id=client_order_id,
+                product=product,
+                require_approval=require_approval,
             ),
         )
 
@@ -103,7 +111,10 @@ class DisabledExecutionAdapter:
         *,
         context: ExecutionContext,
         client_order_id: str,
+        product: PaperProduct = PaperProduct.MIS,
+        require_approval: bool = False,
     ) -> ExecutionOutcome:
+        del product, require_approval
         raise ExecutionDisabled(
             f"{self.mode.value} execution is not enabled; only PAPER is available."
         )

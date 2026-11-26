@@ -7,6 +7,7 @@ import {
   parsePaperBook,
   parsePaperFill,
   parsePaperOrder,
+  parsePaperRealism,
   parseReconciliation,
 } from "../src/executionContract.ts";
 
@@ -32,6 +33,8 @@ const order = {
   status: "PENDING",
   filled_quantity: 0,
   created_at: "2026-11-25T10:00:00Z",
+  product: "MIS",
+  approval_status: "APPROVED",
 };
 
 const execution = {
@@ -124,6 +127,9 @@ test("a fill result parses the updated order and the fill", () => {
       filled_at: "2026-11-25T10:01:00Z",
       idempotency_key: "fill-1",
       realized_pnl_paise: null,
+      gross_paise: "40000",
+      charges_paise: "2",
+      net_pnl_paise: null,
     },
   });
   assert.equal(parsed.order.status, "PARTIALLY_FILLED");
@@ -140,6 +146,7 @@ test("a reconciliation result parses", () => {
     ledger_debit_paise: "100000",
     ledger_credit_paise: "0",
     position_count: 1,
+    charges_paise: "2",
   });
   assert.equal(parsed.fill_count, 2);
   assert.equal(parsed.ledger_debit_paise, "100000");
@@ -192,7 +199,64 @@ test("a sell fill parses realised P&L, including a loss", () => {
       filled_at: "2026-11-25T10:02:00Z",
       idempotency_key: "fill-sell",
       realized_pnl_paise: "-1000",
+      gross_paise: "90000",
+      charges_paise: "20",
+      net_pnl_paise: "-1020",
     },
   });
   assert.equal(parsed.fill.realized_pnl_paise, "-1000");
+});
+
+test("execution realism parses products, lots, approvals and stops", () => {
+  const parsed = parsePaperRealism({
+    account_id: "paper-main",
+    product_positions: [
+      { instrument_id: "NSE:RELIANCE", product: "CAS", quantity: 10 },
+    ],
+    tax_lots: [
+      {
+        lot_id: "lot-1",
+        instrument_id: "NSE:RELIANCE",
+        product: "CAS",
+        quantity: 10,
+        remaining_quantity: 10,
+        settles_on: "2026-11-26",
+        cost_paise: "10000",
+        charges_paise: "10",
+      },
+    ],
+    approvals: [
+      {
+        approval_id: "approval-1",
+        order_id: "order-1",
+        account_id: "paper-main",
+        status: "PENDING",
+        reason: "large order",
+        created_at: "2026-11-25T10:00:00Z",
+        decided_at: null,
+        decision_note: null,
+      },
+    ],
+    stops: [
+      {
+        stop_id: "stop-1",
+        account_id: "paper-main",
+        instrument_id: "NSE:RELIANCE",
+        product: "CAS",
+        quantity: 10,
+        stop_price_paise: "9000",
+        target_price_paise: "12000",
+        status: "ACTIVE",
+        trigger_order_id: null,
+        trigger_kind: null,
+        created_at: "2026-11-25T10:00:00Z",
+        triggered_at: null,
+      },
+    ],
+    charges_paise: "10",
+  });
+  assert.equal(parsed.product_positions[0].product, "CAS");
+  assert.equal(parsed.tax_lots[0].settles_on, "2026-11-26");
+  assert.equal(parsed.approvals[0].status, "PENDING");
+  assert.equal(parsed.stops[0].stop_price_paise, "9000");
 });

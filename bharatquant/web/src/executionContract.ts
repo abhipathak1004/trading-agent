@@ -27,6 +27,8 @@ export type PaperOrder = {
   status: string;
   filled_quantity: number;
   created_at: string;
+  product: "CAS" | "MIS";
+  approval_status: string;
 };
 
 export type PaperBook = {
@@ -43,6 +45,9 @@ export type PaperFill = {
   filled_at: string;
   idempotency_key: string;
   realized_pnl_paise: string | null;
+  gross_paise: string;
+  charges_paise: string;
+  net_pnl_paise: string | null;
 };
 
 export type PaperFillResult = {
@@ -57,6 +62,59 @@ export type PaperReconciliation = {
   ledger_debit_paise: string;
   ledger_credit_paise: string;
   position_count: number;
+  charges_paise: string;
+};
+
+export type PaperApproval = {
+  approval_id: string;
+  order_id: string;
+  account_id: string;
+  status: string;
+  reason: string;
+  created_at: string;
+  decided_at: string | null;
+  decision_note: string | null;
+};
+
+export type PaperProductPosition = {
+  instrument_id: string;
+  product: "CAS" | "MIS";
+  quantity: number;
+};
+
+export type PaperTaxLot = {
+  lot_id: string;
+  instrument_id: string;
+  product: "CAS" | "MIS";
+  quantity: number;
+  remaining_quantity: number;
+  settles_on: string;
+  cost_paise: string;
+  charges_paise: string;
+};
+
+export type PaperStop = {
+  stop_id: string;
+  account_id: string;
+  instrument_id: string;
+  product: "CAS" | "MIS";
+  quantity: number;
+  stop_price_paise: string;
+  target_price_paise: string | null;
+  status: string;
+  trigger_order_id: string | null;
+  trigger_kind: string | null;
+  created_at: string;
+  triggered_at: string | null;
+};
+
+export type PaperRealism = {
+  account_id: string;
+  product_positions: PaperProductPosition[];
+  tax_lots: PaperTaxLot[];
+  approvals: PaperApproval[];
+  stops: PaperStop[];
+  charges_paise: string;
 };
 
 export type ExecutionFreshness = {
@@ -158,7 +216,9 @@ function parseOrder(value: unknown): PaperOrder {
       typeof value.limit_price_paise !== "string") ||
     typeof value.status !== "string" ||
     !isCount(value.filled_quantity) ||
-    !isTimestamp(value.created_at)
+    !isTimestamp(value.created_at) ||
+    (value.product !== "CAS" && value.product !== "MIS") ||
+    typeof value.approval_status !== "string"
   ) {
     throw new Error("Invalid paper order");
   }
@@ -175,6 +235,8 @@ function parseOrder(value: unknown): PaperOrder {
     status: value.status,
     filled_quantity: value.filled_quantity,
     created_at: value.created_at,
+    product: value.product,
+    approval_status: value.approval_status,
   };
 }
 
@@ -283,7 +345,12 @@ export function parsePaperFill(value: unknown): PaperFillResult {
     typeof fill.idempotency_key !== "string" ||
     (fill.realized_pnl_paise !== null &&
       (typeof fill.realized_pnl_paise !== "string" ||
-        !/^-?\d+$/.test(fill.realized_pnl_paise)))
+        !/^-?\d+$/.test(fill.realized_pnl_paise))) ||
+    (fill.net_pnl_paise !== null &&
+      (typeof fill.net_pnl_paise !== "string" ||
+        !/^-?\d+$/.test(fill.net_pnl_paise))) ||
+    typeof fill.gross_paise !== "string" ||
+    typeof fill.charges_paise !== "string"
   ) {
     throw new Error("Invalid paper fill");
   }
@@ -297,6 +364,9 @@ export function parsePaperFill(value: unknown): PaperFillResult {
       filled_at: fill.filled_at,
       idempotency_key: fill.idempotency_key,
       realized_pnl_paise: fill.realized_pnl_paise,
+      gross_paise: paise(fill.gross_paise),
+      charges_paise: paise(fill.charges_paise),
+      net_pnl_paise: fill.net_pnl_paise,
     },
   };
 }
@@ -318,5 +388,128 @@ export function parseReconciliation(value: unknown): PaperReconciliation {
     ledger_debit_paise: paise(value.ledger_debit_paise),
     ledger_credit_paise: paise(value.ledger_credit_paise),
     position_count: value.position_count,
+    charges_paise: paise(value.charges_paise),
+  };
+}
+
+function parseApproval(value: unknown): PaperApproval {
+  if (
+    !isRecord(value) ||
+    typeof value.approval_id !== "string" ||
+    typeof value.order_id !== "string" ||
+    typeof value.account_id !== "string" ||
+    typeof value.status !== "string" ||
+    typeof value.reason !== "string" ||
+    !isTimestamp(value.created_at) ||
+    (value.decided_at !== null && !isTimestamp(value.decided_at)) ||
+    (value.decision_note !== null && typeof value.decision_note !== "string")
+  ) {
+    throw new Error("Invalid paper approval");
+  }
+  return {
+    approval_id: value.approval_id,
+    order_id: value.order_id,
+    account_id: value.account_id,
+    status: value.status,
+    reason: value.reason,
+    created_at: value.created_at,
+    decided_at: value.decided_at,
+    decision_note: value.decision_note,
+  };
+}
+
+function parseStop(value: unknown): PaperStop {
+  if (
+    !isRecord(value) ||
+    typeof value.stop_id !== "string" ||
+    typeof value.account_id !== "string" ||
+    typeof value.instrument_id !== "string" ||
+    (value.product !== "CAS" && value.product !== "MIS") ||
+    !isCount(value.quantity) ||
+    typeof value.stop_price_paise !== "string" ||
+    (value.target_price_paise !== null &&
+      typeof value.target_price_paise !== "string") ||
+    typeof value.status !== "string" ||
+    (value.trigger_order_id !== null &&
+      typeof value.trigger_order_id !== "string") ||
+    (value.trigger_kind !== null && typeof value.trigger_kind !== "string") ||
+    !isTimestamp(value.created_at) ||
+    (value.triggered_at !== null && !isTimestamp(value.triggered_at))
+  ) {
+    throw new Error("Invalid paper stop");
+  }
+  return {
+    stop_id: value.stop_id,
+    account_id: value.account_id,
+    instrument_id: value.instrument_id,
+    product: value.product,
+    quantity: value.quantity,
+    stop_price_paise: paise(value.stop_price_paise),
+    target_price_paise:
+      value.target_price_paise === null
+        ? null
+        : paise(value.target_price_paise),
+    status: value.status,
+    trigger_order_id: value.trigger_order_id,
+    trigger_kind: value.trigger_kind,
+    created_at: value.created_at,
+    triggered_at: value.triggered_at,
+  };
+}
+
+export function parsePaperRealism(value: unknown): PaperRealism {
+  if (
+    !isRecord(value) ||
+    typeof value.account_id !== "string" ||
+    !Array.isArray(value.product_positions) ||
+    !Array.isArray(value.tax_lots) ||
+    !Array.isArray(value.approvals) ||
+    !Array.isArray(value.stops)
+  ) {
+    throw new Error("Invalid paper realism");
+  }
+  return {
+    account_id: value.account_id,
+    product_positions: value.product_positions.map((item) => {
+      if (
+        !isRecord(item) ||
+        typeof item.instrument_id !== "string" ||
+        (item.product !== "CAS" && item.product !== "MIS") ||
+        !isCount(item.quantity)
+      ) {
+        throw new Error("Invalid product position");
+      }
+      return {
+        instrument_id: item.instrument_id,
+        product: item.product,
+        quantity: item.quantity,
+      };
+    }),
+    tax_lots: value.tax_lots.map((item) => {
+      if (
+        !isRecord(item) ||
+        typeof item.lot_id !== "string" ||
+        typeof item.instrument_id !== "string" ||
+        (item.product !== "CAS" && item.product !== "MIS") ||
+        !isCount(item.quantity) ||
+        !isCount(item.remaining_quantity) ||
+        typeof item.settles_on !== "string"
+      ) {
+        throw new Error("Invalid tax lot");
+      }
+      return {
+        lot_id: item.lot_id,
+        instrument_id: item.instrument_id,
+        product: item.product,
+        quantity: item.quantity,
+        remaining_quantity: item.remaining_quantity,
+        settles_on: item.settles_on,
+        cost_paise: paise(item.cost_paise),
+        charges_paise: paise(item.charges_paise),
+      };
+    }),
+    approvals: value.approvals.map(parseApproval),
+    stops: value.stops.map(parseStop),
+    charges_paise: paise(value.charges_paise),
   };
 }

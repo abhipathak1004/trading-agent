@@ -49,6 +49,7 @@ from bq.paper_accounts import PaperAccountError
 from bq.paper_trading import (
     PaperOrder,
     PaperOrderType,
+    PaperProduct,
     PaperSide,
     PaperTradingError,
     PaperTradingStore,
@@ -71,6 +72,11 @@ INTRADAY_CRITICAL_AFTER_SECONDS = 15 * 60
 # at the session *open* but is only settled at the *close*, so age measured from
 # the open overstates staleness by this much for every daily bar.
 SESSION_LENGTH = timedelta(hours=6, minutes=15)
+
+# Code-owned approval policy: an order above half the available cash is too large
+# to fill without an explicit owner decision. This is a paper safeguard, not a
+# broker rule.
+APPROVAL_CASH_FRACTION_BPS = 5_000
 
 
 class PaperExecutorError(ValueError):
@@ -307,6 +313,8 @@ class PaperExecutor:
         context: ExecutionContext,
         client_order_id: str,
         now: datetime | None = None,
+        product: PaperProduct = PaperProduct.MIS,
+        require_approval: bool = False,
     ) -> PaperExecution:
         """Gate a plan, then place a paper order only if it is allowed."""
         preview = self.preview(plan, context=context, now=now)
@@ -325,6 +333,11 @@ class PaperExecutor:
         if preview.decision.state is not RiskDecisionState.ALLOW:
             return preview
         freshness = preview.freshness
+        notional = plan.notional_paise().value
+        automatic_approval = (
+            notional * 10_000
+            > context.available_cash_paise * APPROVAL_CASH_FRACTION_BPS
+        )
         try:
             order = self.store.place_order(
                 account_id=context.account_id,
@@ -334,6 +347,13 @@ class PaperExecutor:
                 order_type=PaperOrderType.LIMIT,
                 quantity=Quantity(plan.suggested_quantity),
                 limit_price_paise=_price_paise(plan.entry_price),
+                product=product,
+                require_approval=require_approval or automatic_approval,
+                approval_reason=(
+                    "Order notional exceeds half of available cash"
+                    if automatic_approval
+                    else "Execution request flagged for owner approval"
+                ),
             )
         except (PaperTradingError, PaperAccountError) as exc:
             raise PaperExecutorError(str(exc)) from exc
@@ -343,6 +363,7 @@ class PaperExecutor:
 
 
 __all__ = [
+    "APPROVAL_CASH_FRACTION_BPS",
     "ExecutionContext",
     "FreshnessAssessment",
     "INTRADAY_CRITICAL_AFTER_SECONDS",

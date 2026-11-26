@@ -290,7 +290,10 @@ def test_fill_partial_full_idempotent_and_reconcile(tmp_path: Path) -> None:
             assert duplicate.json()["order"]["filled_quantity"] == 4
 
             book = await client.get("/api/v1/paper/accounts/paper-main/book")
-            assert book.json()["account"]["balance_paise"] == "960000"
+            partial_charges = int(partial.json()["fill"]["charges_paise"])
+            assert book.json()["account"]["balance_paise"] == str(
+                1_000_000 - 40_000 - partial_charges
+            )
             assert book.json()["positions"] == [
                 {"instrument_id": "NSE:RELIANCE", "quantity": 4}
             ]
@@ -310,7 +313,11 @@ def test_fill_partial_full_idempotent_and_reconcile(tmp_path: Path) -> None:
             assert final.json()["fill"]["realized_pnl_paise"] is None
 
             book = await client.get("/api/v1/paper/accounts/paper-main/book")
-            assert book.json()["account"]["balance_paise"] == "900000"
+            final_charges = int(final.json()["fill"]["charges_paise"])
+            buy_charges = partial_charges + final_charges
+            assert book.json()["account"]["balance_paise"] == str(
+                1_000_000 - 100_000 - buy_charges
+            )
             assert book.json()["positions"][0]["quantity"] == 10
 
             reconciled = await client.get(
@@ -321,9 +328,10 @@ def test_fill_partial_full_idempotent_and_reconcile(tmp_path: Path) -> None:
                 "account_id": "paper-main",
                 "order_count": 1,
                 "fill_count": 2,
-                "ledger_debit_paise": "100000",
+                "ledger_debit_paise": str(100_000 + buy_charges),
                 "ledger_credit_paise": "0",
                 "position_count": 1,
+                "charges_paise": str(buy_charges),
             }
 
             overfill = await client.post(
@@ -521,7 +529,11 @@ def test_partial_and_full_position_exit_credits_cash(tmp_path: Path) -> None:
             assert book.json()["positions"] == [
                 {"instrument_id": "NSE:RELIANCE", "quantity": 6}
             ]
-            assert book.json()["account"]["balance_paise"] == "944000"
+            partial_charges = int(partial_fill.json()["fill"]["charges_paise"])
+            buy_charge = int(buy_fill.json()["fill"]["charges_paise"])
+            assert book.json()["account"]["balance_paise"] == str(
+                1_000_000 - 100_000 - buy_charge + 44_000 - partial_charges
+            )
 
             final = await client.post(
                 exit_path,
@@ -546,7 +558,15 @@ def test_partial_and_full_position_exit_credits_cash(tmp_path: Path) -> None:
             assert final_fill.json()["fill"]["realized_pnl_paise"] == "6000"
             book = await client.get("/api/v1/paper/accounts/paper-main/book")
             assert book.json()["positions"] == []
-            assert book.json()["account"]["balance_paise"] == "1010000"
+            final_charges = int(final_fill.json()["fill"]["charges_paise"])
+            assert book.json()["account"]["balance_paise"] == str(
+                1_000_000
+                - 100_000
+                - buy_charge
+                + 110_000
+                - partial_charges
+                - final_charges
+            )
 
             over = await client.post(
                 exit_path,
@@ -565,8 +585,10 @@ def test_partial_and_full_position_exit_credits_cash(tmp_path: Path) -> None:
             )
             assert reconciled.status_code == 200
             assert reconciled.json()["fill_count"] == 3
-            assert reconciled.json()["ledger_debit_paise"] == "100000"
-            assert reconciled.json()["ledger_credit_paise"] == "110000"
+            assert reconciled.json()["ledger_debit_paise"] == str(100_000 + buy_charge)
+            assert reconciled.json()["ledger_credit_paise"] == str(
+                110_000 - partial_charges - final_charges
+            )
             assert reconciled.json()["position_count"] == 0
 
     asyncio.run(check())

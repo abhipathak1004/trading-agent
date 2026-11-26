@@ -54,6 +54,37 @@ export type SpecialistBrief = {
   source: string;
 };
 
+export type ConfidenceEvidence = {
+  family: string;
+  state: string;
+  strength: number;
+};
+
+export type ConfidenceBaseRate = {
+  setup_id: string;
+  symbol: string;
+  regime: string;
+  horizon_days: number;
+  sample_count: number;
+  win_count: number;
+  win_rate: number;
+  data_as_of: string;
+};
+
+export type Confidence = {
+  probability: number;
+  level: string;
+  disposition: string;
+  confirming_families: number;
+  base_rate_samples: number;
+  live_outcomes: number;
+  calibrated: boolean;
+  ev_r_after_costs: number;
+  vetoes: string[];
+  evidence: ConfidenceEvidence[];
+  base_rate: ConfidenceBaseRate;
+};
+
 export type EvidenceVerification = {
   verified_claims: number;
   unverified_claims: number;
@@ -98,6 +129,7 @@ export type AnalysisRun = {
   specialists: SpecialistBrief[];
   evidence: EvidenceVerification | null;
   final_gate: FinalGate | null;
+  confidence: Confidence | null;
 };
 
 function isNumberOrNull(value: unknown): value is number | null {
@@ -228,6 +260,83 @@ function parseSpecialistBriefs(value: unknown): SpecialistBrief[] {
       source: brief.source,
     };
   });
+}
+
+export function parseConfidence(value: unknown): Confidence | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.probability !== "number" ||
+    !Number.isFinite(value.probability) ||
+    typeof value.level !== "string" ||
+    typeof value.disposition !== "string" ||
+    !isCount(value.confirming_families) ||
+    !isCount(value.base_rate_samples) ||
+    !isCount(value.live_outcomes) ||
+    typeof value.calibrated !== "boolean" ||
+    typeof value.ev_r_after_costs !== "number" ||
+    !Number.isFinite(value.ev_r_after_costs) ||
+    !Array.isArray(value.vetoes) ||
+    !value.vetoes.every((item) => typeof item === "string") ||
+    !Array.isArray(value.evidence) ||
+    value.evidence.length > 7 ||
+    !isRecord(value.base_rate)
+  ) {
+    throw new Error("Invalid confidence result");
+  }
+  const baseRate = value.base_rate;
+  if (
+    typeof baseRate.setup_id !== "string" ||
+    typeof baseRate.symbol !== "string" ||
+    typeof baseRate.regime !== "string" ||
+    !isCount(baseRate.horizon_days) ||
+    !isCount(baseRate.sample_count) ||
+    !isCount(baseRate.win_count) ||
+    typeof baseRate.win_rate !== "number" ||
+    !Number.isFinite(baseRate.win_rate) ||
+    typeof baseRate.data_as_of !== "string"
+  ) {
+    throw new Error("Invalid confidence base rate");
+  }
+  return {
+    probability: value.probability,
+    level: value.level,
+    disposition: value.disposition,
+    confirming_families: value.confirming_families,
+    base_rate_samples: value.base_rate_samples,
+    live_outcomes: value.live_outcomes,
+    calibrated: value.calibrated,
+    ev_r_after_costs: value.ev_r_after_costs,
+    vetoes: value.vetoes as string[],
+    evidence: value.evidence.map((item) => {
+      if (
+        !isRecord(item) ||
+        typeof item.family !== "string" ||
+        typeof item.state !== "string" ||
+        typeof item.strength !== "number" ||
+        !Number.isFinite(item.strength)
+      ) {
+        throw new Error("Invalid confidence evidence");
+      }
+      return {
+        family: item.family,
+        state: item.state,
+        strength: item.strength,
+      };
+    }),
+    base_rate: {
+      setup_id: baseRate.setup_id,
+      symbol: baseRate.symbol,
+      regime: baseRate.regime,
+      horizon_days: baseRate.horizon_days,
+      sample_count: baseRate.sample_count,
+      win_count: baseRate.win_count,
+      win_rate: baseRate.win_rate,
+      data_as_of: baseRate.data_as_of,
+    },
+  };
 }
 
 function parseEvidence(value: unknown): EvidenceVerification | null {
@@ -369,6 +478,7 @@ export function parseAnalysisRun(value: unknown): AnalysisRun {
     specialists: parseSpecialistBriefs(value.specialists),
     evidence: parseEvidence(value.evidence),
     final_gate: parseFinalGate(value.final_gate),
+    confidence: parseConfidence(value.confidence),
   };
 }
 

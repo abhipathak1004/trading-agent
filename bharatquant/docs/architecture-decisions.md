@@ -1149,3 +1149,234 @@ re-running the pipeline.
 an audit/read model, not an accounting or trading ledger; `analysis_runs` remains
 the run summary and the paper ledger remains the cash authority. The 64 KiB cap
 can drop an oversized optional state, but never corrupts a run.
+
+## ADR-039: Confidence v1 is deterministic and deliberately narrow
+
+**Status:** Accepted; Phase 12 implements it.
+
+**Context:** The plan's confidence card promises calibrated probabilities and
+seven evidence families. The repo already has technical and specialist facts but
+no market-wide base-rate history, no relative-strength/peer series and no catalyst
+model. Inventing those numbers would be worse than shipping a narrow, honest card.
+
+**Decision:** Build a deterministic confidence v1 before any report or
+opportunity surface.
+
+- `bq/analysis/confidence_engine.py` produces evidence for four families:
+  `STRUCTURE`, `VOLUME`, `MOMENTUM` and `MARKET_CONTEXT`, from the existing
+  technical report and market-regime brief. Structure and volume remain mandatory;
+  the policy still requires four confirming families.
+- `bq/compute/setup_study.py` computes a symbol-scoped trend-continuation base
+  rate from bars already available at decision time. Entry is the next bar's open;
+  exit is a 1.5×ATR stop, 2.5×ATR target or the horizon close; a stop wins a
+  same-bar tie. No look-ahead is used.
+- Migration `032` stores append-only `setup_base_rates`. v1 labels the regime
+  `ALL`; a market-wide, regime-conditioned study is deferred.
+- `assess_confidence` applies the existing policy: minimum base-rate samples,
+  mandatory families, 4-of-7 confluence, EV/R floor, provisional haircut and
+  vetoes. `confidence` runs as a trace node after the final gate, never changes
+  the plan or places an order.
+- The run payload, working memory and Technical tab carry the assessment. No
+  model call is involved; `confidence.review` remains deferred.
+
+**Consequences:** The system can show a conservative confidence card without
+faking calibration. Many symbols will be discarded for insufficient history or
+missing volume/regime confirmation. The next phase can use these assessments for
+ranking while a later market-wide study supplies true regime-conditioned rates.
+
+## ADR-040: Opportunities are immutable; lifecycle and shadow outcomes are events
+
+**Status:** Accepted; Phase 13 implements it.
+
+**Context:** The existing opportunity row was a frozen confidence snapshot with
+no lifecycle and no counterfactual learning. Updating it in place would destroy the
+audit trail; adding a second candidate store would duplicate the confidence card.
+
+**Decision:** Keep `opportunities` immutable and append the moving parts.
+
+- Migration `033` adds `opportunity_events`, `shadow_trades` and
+  `shadow_outcomes`, plus detail columns on the opportunity row. Update/delete
+  triggers protect the event and outcome tables.
+- Lifecycle is `NEW → WATCHING/TRIGGERED → TRADED → CLOSED`, with `DISMISSED` and
+  `EXPIRED` terminal paths. The latest event is the current state.
+- Every analysis/Strategy candidate with a confidence card is recorded, including
+  non-suggested candidates. A shadow trade stores the plan geometry,
+  `suggested` flag, confidence level and why it was not taken.
+- The v1 score is a deterministic ranking formula over probability, EV, confirming
+  families and vetoes. Confidence still decides suggestion; the score only orders
+  the board.
+- Shadow outcomes resolve at 1/3/5/10 days from later daily bars, using
+  stop/target first-touch with the stop winning a tie. The Filter Verdict compares
+  suggested vs other resolved shadows with Wilson intervals at horizon 5.
+- The board only transitions lifecycle or stages a plan in Trade. It never places
+  an order.
+
+**Consequences:** The board is auditable and the counterfactual loop starts
+filling. v1 records all confidence candidates rather than only HIGH/VERY HIGH, and
+shadow resolution is a manual owner endpoint; both can be tightened/automated
+without changing the immutable row contract.
+
+## ADR-041: Scheduler jobs are catalogue entries; run-now only enqueues
+
+**Status:** Accepted; Phase 14 implements it.
+
+**Context:** The scheduler had one handler and one hard-coded memory toggle. The
+plan requires every recurring job to be owner-configurable, runnable and auditable,
+without turning an HTTP request into an inline job execution.
+
+**Decision:** Add a code-owned catalogue and keep the durable job store as the
+only queue.
+
+- `bq/infra/job_catalogue.py` lists only jobs whose handlers are registered:
+  `memory.resolve` and `news.ingest`. Each entry carries class, defaults, wake
+  policy and retry bound. UI times are configuration, not baked into handler code.
+- `GET /api/v1/schedules` returns editable schedule versions; `PUT` creates or
+  updates one through the immutable `ScheduleStore`; enable/dry-run/run/history
+  are separate owner-only endpoints. Writes require origin + CSRF.
+- Run now enqueues one `JobRun` with an occurrence key `run-now:<schedule>:<key>`.
+  A duplicate key returns the existing run; no handler executes in the request.
+- Dry run validates the saved schedule and enqueues nothing. History reads the
+  existing `job_runs` rows; there is no second run store.
+- The Schedules page exposes the catalogue, next occurrences, edit/save,
+  enable/disable, dry-run, run-now and history. The worker remains the only
+  executor.
+
+**Consequences:** Owners can configure and operate jobs without code edits, and
+manual runs remain durable and idempotent. Dependencies/timeout/catch-up validation
+is limited to what `ScheduleStore` already enforces; richer dependency execution is
+still a later scheduler refinement.
+
+## ADR-042: Reports are immutable; predictions freeze before the window
+
+**Status:** Accepted; Phase 15 implements it.
+
+**Context:** The daily report is the product's memory of what it expected and what
+happened. Rewriting a report or prediction destroys the accuracy record; letting
+the model choose levels or probabilities makes scoring meaningless.
+
+**Decision:** Keep reports and prediction metadata append-only, and compute the
+v1 reports deterministically.
+
+- Migration `034` adds immutable `reports` and `prediction_details`. The existing
+  `predictions`/`prediction_outcomes` tables remain append-only. Corrections are
+  new report rows, never edits.
+- The morning engine reads daily NIFTY/VIX bars at `as_of`, computes regime,
+  ATR-based range and probabilities in code, and freezes DIRECTION, RANGE, GAP,
+  VOLATILITY and a 3-session Market Stance before the next session opens. No model call is on this path.
+- The evening engine resolves every due prediction using code-owned rules
+  (dead-band for direction/gap, containment for range, close comparison for VIX),
+  writes the immutable outcome, and scores the run with the existing
+  Brier/log-loss helpers. Missing bars are recorded as notes rather than silently
+  dropped.
+- Reports are stored as Markdown and JSON in SQLite and mirrored under
+  `BQ_HOME/reports/YYYY/MM/DD/`; the content hash covers both. The API is
+  owner-only, writes require origin + CSRF, and report reads are `no-store`.
+- `report.morning` and `report.evening_accuracy` are catalogue jobs. Enabling a
+  schedule remains an explicit owner action; run-now still only enqueues.
+
+**Consequences:** Accuracy is auditable and predictions cannot be rewritten with
+hindsight. v1 has no LLM synthesis, provisional/confirmed distinction,
+LEVEL_TOUCH/RELATIVE_PERF/TRADE resolvers, or model attribution; these can be added
+as new report versions without changing the immutable contract.
+
+## ADR-043: Paper realism keeps cash, lots and approvals deterministic
+
+**Status:** Accepted; Phase 16 implements it.
+
+**Context:** The paper OMS had one product, no charges, no settlement and no
+mandatory decision point for large orders. Adding realism inside the fill could
+silently change historical accounting; letting the model decide costs or approval
+would make the audit trail unfalsifiable.
+
+**Decision:** Keep accounting deterministic and make every realism dimension
+explicit.
+
+- Migration `035` adds itemized `paper_charges`, `paper_tax_lots`,
+  `paper_product_positions`, `paper_approvals` and `paper_stops`, plus product,
+  approval and gross/charges/net columns on orders/fills.
+- A code-owned charge schedule computes STT, exchange, SEBI, stamp and GST. Each
+  component is stored. Ledger cash is gross +/- charges; realised P&L remains the
+  average-cost gross figure, while net P&L subtracts sell charges plus allocated
+  buy charges. The two are never conflated.
+- Orders carry `MIS` (default, same-day) or `CAS`. CAS buys create tax lots with a
+  T+1 settlement date; a CAS sell cannot fill until enough settled lots exist.
+  Lots are a FIFO view only; the average-cost inventory remains the accounting
+  basis.
+- `paper.square_off` closes open MIS positions at the daily close.
+- `paper.stops` evaluates active stop/target exits from daily bars. A stop is
+  one-shot: it creates a durable SELL order and marks itself `TRIGGERED`; the
+  trigger is idempotent. A failed fill leaves the order visible rather than
+  retrying invisibly.
+- Approval is explicit: the request may require it, and code requires it
+  automatically when notional exceeds 50% of available cash. Pending orders
+  cannot fill. Approval/rejection is owner-only, CSRF-protected and audited.
+
+**Consequences:** Gross and net accounting are auditable, CAS/ MIS behaviour is
+explicit, and large orders cannot bypass a human decision. v1 uses weekday T+1
+(not the exchange holiday calendar), daily bars for stops (not intraday triggers),
+and an estimated charge schedule; each can be refined without changing the
+immutable fill and approval contracts.
+
+## ADR-044: Strategy versions are immutable; fast/event parity is a gate
+
+**Status:** Accepted; Phase 17 implements it.
+
+**Context:** A strategy result has no meaning if the definition can be edited
+afterwards, or if the fast research engine and the event engine disagree. Both
+would make a review decision impossible to audit.
+
+**Decision:** Separate definition, execution and review into immutable records.
+
+- `strategy_versions` stores a strict DSL document and its canonical hash. The
+  same `(strategy_id, version)` cannot be rewritten with different content or
+  lifecycle. Seed strategies are code-owned and inserted idempotently.
+- The DSL fixes the vocabulary for universe, entry/exit rules, ATR multiples,
+  risk, slippage and knowledge cutoff. Unknown fields and out-of-bound values are
+  rejected rather than defaulted.
+- `fast` and `event` engines share the same rules and accounting but compute
+  indicators differently (precomputed vs bar-by-bar). Tests compare their entire
+  serialized output, excluding the engine label.
+- Backtests use only bars at or before `as_of`, enter on the next bar open, use
+  stop/target first-touch with the stop winning ties, and apply paper charges and
+  slippage. Metrics keep gross, charges and net separate.
+- `backtest_runs` are immutable and `strategy_reviews` append-only. Review is an
+  owner action; the model never accepts its own run.
+
+**Consequences:** A reviewed run is reproducible from its strategy hash and
+archived trades. v1 is daily-bar, one position per symbol, without portfolio
+margin, walk-forward optimization or an AI review layer; those can be added as
+new engines without changing the immutable version/run contracts.
+
+## ADR-045: Research notes are point-in-time; valuation arithmetic is code-owned
+
+**Status:** Accepted; Phase 18 implements it.
+
+**Context:** Research text and financial facts arrive at different times. A note
+ingested today may describe an event that was not public yesterday; a valuation
+that uses future-known facts contaminates the historical record. Letting the
+model compute ratios or DCF would make the result unreproducible.
+
+**Decision:** Separate evidence storage from deterministic arithmetic and human
+judgement.
+
+- Migration `037` adds append-only `research_notes`, `fundamental_snapshots`,
+  `thesis_events`, `research_claims` and `research_claim_reviews`.
+- Every note carries `published_at` and `known_at`. Queries take one `as_of`
+  pivot and return only notes with both timestamps at or before it. Future
+  `known_at` values are rejected. News items can be imported without refetching
+  the article.
+- A fundamental snapshot stores absolute paise values, period end and known-at.
+  Ratios and DCF are computed in `bq/fundamentals.py` with Decimal arithmetic;
+  the model never supplies or edits them. DCF assumptions are explicit and
+  bounded.
+- Theses stay immutable. Evidence, invalidation and reactivation are appended as
+  `thesis_events`; a dossier shows the event history rather than mutating a
+  thesis state.
+- Research claims are text-only records. Acceptance/rejection is an append-only
+  owner decision; a claim cannot be auto-accepted.
+
+**Consequences:** A dossier is reproducible at any past `as_of` and fundamental
+calculations are auditable. v1 accepts owner-supplied XBRL-shaped facts rather
+than parsing XBRL documents, supports YouTube metadata/notes rather than video
+transcription, and has no automatic thesis invalidation rule; each can be added
+without changing the immutable note/snapshot contracts.

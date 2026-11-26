@@ -102,7 +102,7 @@ def test_snapshot_reads_cash_positions_and_realised_loss(tmp_path: Path) -> None
         now=NOW,
         session_open_override=True,
     )
-    assert snapshot.context.available_cash_paise == 945_000
+    assert snapshot.context.available_cash_paise == 944_981
     assert snapshot.context.open_positions == 1
     assert snapshot.context.symbol_exposure_paise == 50_000
     assert snapshot.context.daily_loss_paise == 5_000

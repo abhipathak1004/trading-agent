@@ -140,10 +140,12 @@ def test_acceptance_analysis_strategy_trade_fill_reconcile(
                 nodes = {agent["node"] for agent in analysis["agents"]}
                 assert {"evidence_verifier", "final_gate"} <= nodes
                 assert analysis["mode"] == "RULES_ONLY"
+                assert analysis["confidence"] is not None
+                assert analysis["confidence"]["confirming_families"] >= 0
                 working = await client.get(
                     f"/api/v1/analysis/runs/{analysis['run_id']}/working-memory"
                 )
-                assert working.status_code == 200
+                assert working.status_code == 200, working.text
                 assert len(working.json()["memories"]) == 1
                 assert working.json()["memories"][0]["symbol"] == item["symbol"]
 
@@ -241,7 +243,10 @@ def test_acceptance_analysis_strategy_trade_fill_reconcile(
                 }
             ]
             notional = int(order["limit_price_paise"]) * order["quantity"]
-            assert book_body["account"]["balance_paise"] == str(100_000_000 - notional)
+            charges = int(filled.json()["fill"]["charges_paise"])
+            assert book_body["account"]["balance_paise"] == str(
+                100_000_000 - notional - charges
+            )
 
             reconciled = await client.get(
                 "/api/v1/paper/accounts/acceptance/reconciliation"

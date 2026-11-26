@@ -9,11 +9,14 @@ import UsageStatus from "./UsageStatus";
 import MemoryCalibrationPanel from "./MemoryCalibrationPanel";
 import PaperAccountStatus from "./PaperAccountStatus";
 import ResearchPanel from "./ResearchPanel";
+import ReportsPanel from "./ReportsPanel";
+import ResearchDossierPanel from "./ResearchDossierPanel";
 import AgentConsole from "./AgentConsole";
 import AnalysisPanel from "./AnalysisPanel";
 import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
 import AgentLabPanel from "./AgentLabPanel";
 import StrategyPanel from "./StrategyPanel";
+import BacktestsPanel from "./BacktestsPanel";
 import TradePanel from "./TradePanel";
 import type { StrategyPlan } from "./strategyContract";
 import SemanticMemoryPanel from "./SemanticMemoryPanel";
@@ -30,6 +33,7 @@ type WorkspaceView =
   | "technical"
   | "agents"
   | "strategy"
+  | "reports"
   | "trade"
   | "research"
   | "settings"
@@ -341,6 +345,14 @@ export default function App() {
             </button>
             <button
               type="button"
+              className={`nav-item nav-item--button${view === "reports" ? " nav-item--active" : ""}`}
+              aria-current={view === "reports" ? "page" : undefined}
+              onClick={() => setView("reports")}
+            >
+              <span aria-hidden="true">▤</span>Reports
+            </button>
+            <button
+              type="button"
               className={`nav-item nav-item--button${view === "trade" ? " nav-item--active" : ""}`}
               aria-current={view === "trade" ? "page" : undefined}
               onClick={() => setView("trade")}
@@ -387,6 +399,8 @@ export default function App() {
                       ? "Agent Lab"
                       : view === "strategy"
                         ? "Strategy"
+                        : view === "reports"
+                          ? "Reports"
                         : view === "trade"
                           ? "Trade"
                         : view === "research"
@@ -580,6 +594,36 @@ export default function App() {
           </section>
         )}
 
+        {serviceState === "online" && session.state === "signed_in" && view === "reports" && (
+          <section className="dashboard" id="reports" aria-labelledby="reports-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">REPORTS</p>
+                <h1 id="reports-page-title">Morning &amp; evening reports</h1>
+                <p className="intro">
+                  Frozen predictions, deterministic resolution, accuracy and an
+                  append-only report archive.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Reports scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Frozen predictions, no hindsight</strong>
+                <p>
+                  Reports never place orders. Morning predictions are frozen before
+                  the session; the evening run resolves every due prediction and
+                  scores it. Reports are append-only and downloadable from the archive.
+                </p>
+              </div>
+            </section>
+
+            <ReportsPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
         {serviceState === "online" && session.state === "signed_in" && view === "agents" && (
           <section className="dashboard" id="agents" aria-labelledby="agents-page-title">
             <header className="page-header">
@@ -646,6 +690,7 @@ export default function App() {
                 setView("trade");
               }}
             />
+            <BacktestsPanel csrfToken={session.csrfToken} />
           </section>
         )}
 
@@ -708,6 +753,8 @@ export default function App() {
             <div className="dashboard-grid dashboard-grid--research">
               <AgentConsole csrfToken={session.csrfToken} />
             </div>
+
+            <ResearchDossierPanel csrfToken={session.csrfToken} />
 
             <div className="dashboard-grid dashboard-grid--research">
               <AnalysisPanel csrfToken={session.csrfToken} />

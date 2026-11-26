@@ -187,7 +187,10 @@ def test_sell_fill_reports_average_cost_realised_pnl(tmp_path: Path) -> None:
     reconciled = store.reconcile("paper-main")
     assert reconciled.fill_count == 3
     assert reconciled.ledger_debit_paise == 10_000
-    assert reconciled.ledger_credit_paise == 9_800
+    assert reconciled.ledger_credit_paise == 9_798
+    assert reconciled.charges_paise == 2
+    assert final.net_pnl_paise is not None
+    assert final.net_pnl_paise < final.realized_pnl_paise
     with pytest.raises(PaperTradingError, match="no cost basis"):
         store._realized_for_sell(0, 0, 1, 1_000)
 

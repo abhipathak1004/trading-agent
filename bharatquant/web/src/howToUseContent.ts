@@ -194,6 +194,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "Evidence: specialist claims are checked against the point-in-time news store before the debate. When a decision model is configured, a Noul pass also rates whether the cited evidence supports each claim; it can only reject, never rescue a missing citation. The panel shows verified versus unverified claims, any missing evidence ids, and the source (citation or model).",
           "A failed symbol is isolated: it is shown as not analysed with its error, and the other symbols still complete.",
           "Working memory expands the typed decision state stored for that run: routing, specialists, evidence, debate, final gate, plan and notes. It contains no raw quotes, OHLCV, positions or margins.",
+          "Confidence shows the deterministic confidence card: probability, level, confirming families, EV/R, vetoes and the symbol-scoped setup base rate. v1 covers structure, volume, momentum and market context; missing history or a failed mandatory family discards the candidate.",
         ],
       },
       {
@@ -269,6 +270,55 @@ export const GUIDE_SECTIONS: DocSection[] = [
       {
         kind: "note",
         text: "Optionally select a procedural playbook; its guidance is passed to the Super Agent with its id, name and version. A playbook can shape emphasis and ranking commentary but cannot change thresholds or risk. At most eight symbols and ten positions per run; execution is sequential. The Super Agent prompt is editable in Agent Lab, but the cash gate, position cap, sizing and risk rules are code-owned.",
+      },
+    ],
+  },
+  {
+    id: "opportunities",
+    title: "Opportunities tab",
+    blocks: [
+      {
+        kind: "p",
+        text: "The Opportunity board shows confidence candidates. Confidence decides whether a candidate is suggested (HIGH or VERY HIGH); the deterministic score only ranks the board. The default view is the ranked board, with a level filter and no automatic order placement.",
+      },
+      {
+        kind: "list",
+        items: [
+          "Each row shows score, level, probability, horizon and lifecycle.",
+          "Watch or Dismiss moves the append-only lifecycle event; it does not rewrite the frozen opportunity.",
+          "Evidence and plan detail expands the confidence families, base rate and proposed entry/stop/target.",
+          "Stage in Trade copies a validated plan to the Trade tab; execution still requires the separate gate.",
+          "Every candidate is shadow-tracked, including ones you skip. Resolve shadow outcomes resolves 1/3/5/10-day results from later daily bars.",
+          "The shadow Filter Verdict (HELPS/NEUTRAL/HURTS) compares suggested and other resolved candidates using Wilson intervals.",
+        ],
+      },
+      {
+        kind: "note",
+        text: "The board is a research surface. It cannot place an order, and its score never overrides a failed confidence or risk gate. Shadow resolution is currently an owner-triggered action, not a scheduled job.",
+      },
+    ],
+  },
+  {
+    id: "schedules-page",
+    title: "Schedules tab",
+    blocks: [
+      {
+        kind: "p",
+        text: "The Schedules tab is the owner-facing job configuration. The catalogue lists only jobs with registered handlers; each entry shows its class, job id and wake policy. A schedule can be created from the catalogue, edited, enabled, disabled, dry-run, run now, and inspected in history.",
+      },
+      {
+        kind: "list",
+        items: [
+          "Saving a schedule writes a new immutable version and advances the effective boundary.",
+          "Run now enqueues one durable job and returns it as PENDING; the worker executes it later. Repeating the same idempotency key returns the original run.",
+          "Dry run validates the saved schedule and enqueues nothing.",
+          "Disabled schedules do not dispatch. Missed runs are recorded, never back-filled with hindsight.",
+          "The catalogue currently contains memory.resolve and news.ingest.",
+        ],
+      },
+      {
+        kind: "note",
+        text: "The Schedules page does not execute handlers inside the browser request and cannot place orders. Report jobs arrive in the next phase and will use the same catalogue and worker.",
       },
     ],
   },

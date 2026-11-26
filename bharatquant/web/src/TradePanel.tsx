@@ -17,6 +17,7 @@ import type {
   PaperPosition,
   PaperReconciliation,
 } from "./executionContract.ts";
+import ExecutionRealismPanel from "./ExecutionRealismPanel.tsx";
 import { parseRiskLimitsPreset } from "./riskLimitsContract.ts";
 import type { StrategyPlan } from "./strategyContract.ts";
 
@@ -96,6 +97,8 @@ export default function TradePanel({
     null,
   );
   const [clientOrderId, setClientOrderId] = useState("");
+  const [product, setProduct] = useState<"CAS" | "MIS">("MIS");
+  const [requireApproval, setRequireApproval] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [fillPrice, setFillPrice] = useState("");
@@ -276,15 +279,17 @@ export default function TradePanel({
       const realized =
         result.fill.realized_pnl_paise === null
           ? ""
-          : ` · realised ${formatSignedPaise(
-              result.fill.realized_pnl_paise,
-            )}`;
+          : ` · gross P&L ${formatSignedPaise(result.fill.realized_pnl_paise)}`;
+      const net =
+        result.fill.net_pnl_paise === null
+          ? ""
+          : ` · net ${formatSignedPaise(result.fill.net_pnl_paise)}`;
       setNotice(
         `${result.order.side === "SELL" ? "Sold" : "Bought"} ${
           result.fill.quantity
         } ${result.order.instrument_id} at ${formatPaise(
           result.fill.price_paise,
-        )}${realized}; order ${result.order.status.toLowerCase()}.`,
+        )} · charges ${formatPaise(result.fill.charges_paise)}${realized}${net}; order ${result.order.status.toLowerCase()} (${result.order.product}).`,
       );
       setBookRefresh((value) => value + 1);
     } catch {
@@ -571,6 +576,8 @@ export default function TradePanel({
         body: JSON.stringify({
           ...previewBody,
           client_order_id: clientOrderId,
+          product,
+          require_approval: requireApproval,
         }),
       });
       if (!response.ok) {
@@ -832,6 +839,7 @@ export default function TradePanel({
                   </table>
                 </>
               )}
+              <ExecutionRealismPanel accountId={accountId} csrfToken={csrfToken} />
             </div>
           )}
         </>
@@ -943,6 +951,32 @@ export default function TradePanel({
               <option value="true">Owner override: open</option>
               <option value="false">Owner override: closed</option>
             </select>
+          </label>
+        </div>
+
+        <div className="models-grid models-grid--compact">
+          <label htmlFor="trade-product">
+            Paper product
+            <select
+              id="trade-product"
+              value={product}
+              onChange={(event) => setProduct(event.target.value as "CAS" | "MIS")}
+            >
+              <option value="MIS">MIS · intraday, same-day sells</option>
+              <option value="CAS">CAS · delivery, T+1 sells</option>
+            </select>
+          </label>
+          <label htmlFor="trade-approval">
+            Owner approval
+            <span>
+              <input
+                id="trade-approval"
+                type="checkbox"
+                checked={requireApproval}
+                onChange={(event) => setRequireApproval(event.target.checked)}
+              />{" "}
+              Require approval before this order can fill
+            </span>
           </label>
         </div>
 
