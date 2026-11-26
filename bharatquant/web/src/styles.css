@@ -280,8 +280,7 @@ h1 {
   font-size: 13px;
 }
 
-.login-row,
-.signed-in {
+.login-row {
   display: flex;
   align-items: center;
   gap: 12px;

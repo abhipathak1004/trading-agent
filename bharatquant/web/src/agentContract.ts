@@ -1,3 +1,4 @@
+import { isCount, isRecord } from "./contracts.ts";
 export type AgentToolSpec = {
   name: string;
   summary: string;
@@ -33,14 +34,6 @@ export type AgentRun = {
   input_tokens: number | null;
   output_tokens: number | null;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
 
 function parseToolSpec(value: unknown): AgentToolSpec {
   if (

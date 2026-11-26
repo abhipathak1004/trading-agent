@@ -24,10 +24,37 @@ from hashlib import sha256
 from pathlib import Path
 from xml.etree import ElementTree
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    IDENTIFIER,
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    parse_timestamp as core_parse_timestamp,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.audit import append_event
 
-IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise NewsError("News timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return core_parse_timestamp(value)
+
 
 PULSE_SOURCE_ID = "pulse.zerodha"
 PULSE_FEED_URL = "https://pulse.zerodha.com/feed.xml"
@@ -382,20 +409,6 @@ class IngestResult:
     long_term_memories: int
 
 
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise NewsError("News timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 def _sha256(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
 
@@ -514,11 +527,7 @@ class NewsStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def ingest(
         self,

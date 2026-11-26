@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { formatUtc } from "./contracts";
 
 import { parseDigest, parseIngestResult } from "./newsContract";
 import type { NewsDigest, NewsIngestResult } from "./newsContract";
@@ -12,10 +13,6 @@ type RunState =
   | { state: "running" }
   | { state: "done"; result: NewsIngestResult }
   | { state: "failed"; message: string };
-
-function formatTimestamp(value: string): string {
-  return new Date(value).toISOString().replace("T", " ").replace("Z", " UTC");
-}
 
 export default function ResearchPanel({ csrfToken }: { csrfToken: string }) {
   const [status, setStatus] = useState<Status>({ state: "loading" });
@@ -147,7 +144,7 @@ export default function ResearchPanel({ csrfToken }: { csrfToken: string }) {
                   <strong>{memory.title}</strong>
                   {memory.body && <span>{memory.body}</span>}
                   <time dateTime={memory.known_at}>
-                    {formatTimestamp(memory.known_at)}
+                    {formatUtc(memory.known_at)}
                   </time>
                 </li>
               ))}
@@ -166,7 +163,7 @@ export default function ResearchPanel({ csrfToken }: { csrfToken: string }) {
                     {item.title}
                   </a>
                   <time dateTime={item.published_at}>
-                    {formatTimestamp(item.published_at)}
+                    {formatUtc(item.published_at)}
                   </time>
                 </li>
               ))}

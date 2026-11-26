@@ -16,12 +16,33 @@ from __future__ import annotations
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from pathlib import Path
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.data.symbols import Symbol
 from bq.data.vendors.errors import NoMarketDataError, VendorUnavailableError
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise InstrumentMasterError("Timestamps must be timezone-aware.") from exc
+
+
+def _ts(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
 
 MIN_TOKEN = 1
 MAX_TOKEN = 2**31 - 1
@@ -47,12 +68,6 @@ class Instrument:
             raise InstrumentMasterError("Instrument token is out of range.")
         if self.lot_size <= 0:
             raise InstrumentMasterError("Lot size must be positive.")
-
-
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise InstrumentMasterError("Timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
 
 
 def _parse_name(row: object, key: str) -> str:
@@ -115,9 +130,7 @@ class InstrumentMasterStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
+        return core_open_connection(self.path, foreign_keys=False)
 
     def cached_date(self, exchange: str) -> date | None:
         """The most recent date we hold tokens for, or ``None``."""

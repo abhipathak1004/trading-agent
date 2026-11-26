@@ -1,8 +1,23 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 
+from bq.core import (
+    utc as core_utc,
+)
 from bq.data.records import DataRecord, DataRecordVersion, QualityStatus, RecordKind
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise ValueError("Freshness timestamps must be timezone-aware.") from exc
+
+
+def _ts(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
 
 MAX_THRESHOLD_SECONDS = 31_536_000
 
@@ -60,12 +75,6 @@ def freshness_policy_from_seconds(
     return FreshnessPolicy(
         timedelta(seconds=delayed_after), timedelta(seconds=critical_after), mode
     )
-
-
-def _utc(value: datetime) -> datetime:
-    if not isinstance(value, datetime) or value.utcoffset() is None:
-        raise ValueError("Freshness timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
 
 
 def inspect_snapshot_freshness(

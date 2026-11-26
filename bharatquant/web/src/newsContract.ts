@@ -1,3 +1,4 @@
+import { isCount, isRecord, isTimestamp } from "./contracts.ts";
 export type NewsCategory =
   | "INDIA_MARKET"
   | "GLOBAL_MARKET"
@@ -8,7 +9,7 @@ export type NewsCategory =
   | "REGULATORY"
   | "OTHER";
 
-export const NEWS_CATEGORIES: readonly NewsCategory[] = [
+const NEWS_CATEGORIES: readonly NewsCategory[] = [
   "INDIA_MARKET",
   "GLOBAL_MARKET",
   "GEOPOLITICAL",
@@ -54,15 +55,7 @@ export type NewsIngestResult = {
   long_term_memories: number;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-export function parseCategory(value: unknown): NewsCategory {
+function parseCategory(value: unknown): NewsCategory {
   if (
     typeof value !== "string" ||
     !(NEWS_CATEGORIES as readonly string[]).includes(value)
@@ -70,10 +63,6 @@ export function parseCategory(value: unknown): NewsCategory {
     throw new Error("Invalid news category");
   }
   return value as NewsCategory;
-}
-
-function isTimestamp(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
 function parseItem(value: unknown): NewsItem {

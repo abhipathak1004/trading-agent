@@ -1,9 +1,11 @@
-import json
 import secrets
 import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from hashlib import sha256
+
+from bq.core import (
+    canonical_digest as core_canonical_digest,
+)
 
 
 class AuditIntegrityError(Exception):
@@ -11,8 +13,7 @@ class AuditIntegrityError(Exception):
 
 
 def _digest(value: object) -> str:
-    canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return sha256(canonical).hexdigest()
+    return core_canonical_digest(value)
 
 
 def append_event(

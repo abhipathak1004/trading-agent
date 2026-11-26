@@ -7,6 +7,54 @@ Start here when resuming work. This file lives in the workspace and does not dep
 Updated 25 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
 
+**Latest slice — repository cleanup and deduplication (no behaviour change).**
+Removed dead code, consolidated copy-pasted helpers, and stopped tracking
+generated files. Verified: **648 backend tests** (647 + 1 new), **31 frontend
+tests**, ruff clean, format clean, mypy unchanged at 47 pre-existing errors in 8
+files, frontend typecheck and build clean, `bq doctor` OK.
+
+- **Repo hygiene.** `git ls-files` went from **4,250 to 283** files:
+  `bharatquant/web/node_modules` (3,970 files, already listed in `.gitignore` but
+  force-added), the tracked `bq.db`, `pinak.zip` and two `.DS_Store` files are now
+  untracked and ignored. *No secret was in the tracked database — it stopped at
+  migration 17, before `provider_api_keys` existed — but it has been committed and
+  `dev` tracks `origin/dev`, so it is in remote history. It also contained the
+  owner Argon2 hash and a hashed session token. Rotating the owner password is
+  cheap insurance if that remote is ever shared.*
+- **New `bq/core.py` helpers** replace copies across 22 modules: `utc`,
+  `timestamp`, `parse_timestamp` (was 20 copies), `open_connection` (21),
+  `canonical_digest` (6), `IDENTIFIER` (10 identical declarations) and
+  `paise_from_price` (2). Every module keeps a thin `_utc`/`_timestamp` wrapper
+  so its own error class and message are preserved, and every store keeps a
+  `_connect` method because tests monkeypatch it.
+- **`open_connection` keeps each store's existing PRAGMA policy.** The 6 stores
+  that never enabled `foreign_keys` still pass `foreign_keys=False`; turning
+  enforcement on is a separate change with its own risk.
+- **One behaviour tightened:** `PaperExecutor._price_paise` now shares
+  `paise_from_price`, so a non-positive price is rejected instead of silently
+  converted. Unreachable from a validated `TradePlan`; asserted by a new test.
+- **Real duplication removed:** the Yahoo bounded-streaming fetch existed twice
+  (`data/yahoo.fetch_chart` and `yahoo_vendor._fetch_window`); both now share
+  `yahoo.stream_chart`, so `fetch_chart` gains the vendor's typed HTTP mapping.
+  The paper ledger DEBIT/CREDIT aggregate is now one `LEDGER_TOTALS_SQL`
+  constant. `MAX_SYMBOL_CHARS` is declared once.
+- **Frontend:** new `web/src/contracts.ts` holds `isRecord` / `isCount` /
+  `isTimestamp` / `formatUtc`, replacing 15 byte-identical copies across 5
+  contract modules and 4 panels. Removed an unused `onSaved` prop, an unused
+  `.signed-in` CSS rule, and two dead exports; `UsageStatus` now renders the
+  `provider_connected` value it was already parsing.
+- **Bundle:** `just build` regenerated `static/assets`; `index.html` and the
+  files on disk agree.
+
+Deliberately **not** touched: the 19 modules unreachable from `cli.py`/`api.py`
+(~3,010 lines — predictions, opportunities, strategies, replay, research,
+universe, confidence, benchmarks, macos, llm_tokens, llm_gateway, model_output,
+risk/decisions, reports/scoring, data/providers, data/context,
+infra/context_routing). They are documented P2–P9 foundations with passing tests.
+Also left alone, after checking: the news / paper-account / context layering,
+`data/symbols` vs `universe`, the risk trio, and the two ticker validators
+(they enforce different, deliberate policies).
+
 **Latest slice — Phase 4: the deterministic risk gate is wired to paper execution.**
 A validated `TradePlan` now runs through the existing pre-trade gate and, only on
 `ALLOW`, becomes a **paper** order. Nothing touches a broker; ADR-001 stands.

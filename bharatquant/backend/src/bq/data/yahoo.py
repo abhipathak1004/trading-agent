@@ -29,13 +29,13 @@ import httpx
 
 from bq.core import Clock, SystemClock
 from bq.data.records import DataImportResult, DataRecord, DataRecordStore, RecordKind
+from bq.data.symbols import MAX_SYMBOL_CHARS
 
 YAHOO_ENDPOINT = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 SOURCE_ID = "yahoo.finance"
 SOURCE_URL = "https://finance.yahoo.com"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 20.0
-MAX_SYMBOL_CHARS = 24
 _USER_AGENT = "Mozilla/5.0 BharatQuant/0.1 (personal research)"
 
 _VALID_RANGES = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"}
@@ -178,6 +178,33 @@ def parse_chart(
     return symbol, currency, tuple(bars)
 
 
+def stream_chart(
+    url: str,
+    *,
+    params: dict[str, str | int],
+    timeout: float,
+    transport: httpx.BaseTransport | None,
+    too_large: Exception,
+) -> bytes:
+    """Stream a bounded chart response. The caller maps transport errors."""
+    with httpx.Client(timeout=timeout, transport=transport) as client:
+        with client.stream(
+            "GET",
+            url,
+            params=params,
+            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+        ) as response:
+            response.raise_for_status()
+            chunks: list[bytes] = []
+            size = 0
+            for chunk in response.iter_bytes():
+                size += len(chunk)
+                if size > MAX_RESPONSE_BYTES:
+                    raise too_large
+                chunks.append(chunk)
+            return b"".join(chunks)
+
+
 def fetch_chart(
     symbol: str,
     *,
@@ -192,22 +219,13 @@ def fetch_chart(
         raise YahooError("Unsupported Yahoo interval.")
     url = YAHOO_ENDPOINT.format(symbol=quote(_validate_symbol(symbol)))
     try:
-        with httpx.Client(timeout=timeout, transport=transport) as client:
-            with client.stream(
-                "GET",
-                url,
-                params={"range": range_, "interval": interval},
-                headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
-            ) as response:
-                response.raise_for_status()
-                chunks: list[bytes] = []
-                size = 0
-                for chunk in response.iter_bytes():
-                    size += len(chunk)
-                    if size > MAX_RESPONSE_BYTES:
-                        raise YahooError("Yahoo response exceeded the size limit.")
-                    chunks.append(chunk)
-                return b"".join(chunks)
+        return stream_chart(
+            url,
+            params={"range": range_, "interval": interval},
+            timeout=timeout,
+            transport=transport,
+            too_large=YahooError("Yahoo response exceeded the size limit."),
+        )
     except httpx.HTTPError as exc:
         raise YahooError(f"Yahoo request failed: {type(exc).__name__}.") from exc
 
@@ -299,9 +317,8 @@ class YahooDataClient:
         received_at = self.clock.now().astimezone(UTC)
         resolved_symbol, currency, bars = parse_chart(raw, received_at=received_at)
         key = import_key or f"yahoo.{resolved_symbol}.{range_}.{bars[-1].trading_date}"
-        from bq.data.records import DataRecordStore as _Store
 
-        store = _Store(self.path, self.clock)
+        store = DataRecordStore(self.path, self.clock)
         result = import_bars(
             store, symbol=resolved_symbol, bars=bars, currency=currency, import_key=key
         )

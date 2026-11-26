@@ -1,6 +1,9 @@
 graphify-out/
 .venv/
 node_modules/
+.runtime-data/
+.DS_Store
+pinak.zip
 __pycache__/
 .pytest_cache/
 .mypy_cache/

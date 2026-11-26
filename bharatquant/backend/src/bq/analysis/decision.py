@@ -26,7 +26,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from bq.core import CurrencyPaise, Quantity
+from bq.core import CurrencyPaise, Quantity, paise_from_price
 from bq.risk.sizing import size_long_fixed_fractional
 
 PDF = Decimal
@@ -62,12 +62,10 @@ class DataFreshness(StrEnum):
 
 def _to_paise(price: Decimal) -> CurrencyPaise:
     """Convert a price to exact paise, rounding half-up to the nearest paisa."""
-    if not isinstance(price, Decimal):
-        raise TradePlanError("Prices must be Decimal.")
-    if price <= 0:
-        raise TradePlanError("Prices must be positive.")
-    paise = (price * 100).quantize(Decimal("1"), rounding="ROUND_HALF_UP")
-    return CurrencyPaise(int(paise))
+    try:
+        return paise_from_price(price)
+    except ValueError as exc:
+        raise TradePlanError(str(exc)) from exc
 
 
 @dataclass(frozen=True, slots=True)

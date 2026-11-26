@@ -3,12 +3,33 @@ import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.contexts import ContextManifestStore
+
+
+def _ts(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise AttemptError("Attempt clock must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _ts(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
 
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 FAILURE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
@@ -46,14 +67,6 @@ class UsageKind(StrEnum):
 def _identifier(value: str) -> None:
     if not isinstance(value, str) or IDENTIFIER.fullmatch(value) is None:
         raise AttemptError("Invalid attempt identifier.")
-
-
-def _timestamp(value: datetime) -> str:
-    if not isinstance(value, datetime) or value.utcoffset() is None:
-        raise AttemptError("Attempt clock must be timezone-aware.")
-    return (
-        value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,11 +198,7 @@ class ModelAttemptStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def start(
         self,

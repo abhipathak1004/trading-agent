@@ -5,14 +5,44 @@ import sqlite3
 from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    parse_timestamp as core_parse_timestamp,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.audit import append_event
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise ValueError("Data record timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return core_parse_timestamp(value)
+
 
 RECORD_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 
@@ -63,22 +93,6 @@ class DataImportSummary:
     import_count: int
     record_count: int
     recent_imports: tuple[DataImportInfo, ...]
-
-
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise ValueError("Data record timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def _canonical_payload(payload: Mapping[str, object]) -> str:
@@ -235,11 +249,7 @@ class DataRecordStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def record(self, record: DataRecord) -> str:
         with closing(self._connect()) as connection:

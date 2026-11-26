@@ -22,10 +22,8 @@ type SaveState =
 
 export default function SettingsConfigPanel({
   csrfToken,
-  onSaved,
 }: {
   csrfToken: string;
-  onSaved?: () => void;
 }) {
   const [load, setLoad] = useState<LoadState>({ state: "loading" });
   const [retry, setRetry] = useState(0);
@@ -101,7 +99,6 @@ export default function SettingsConfigPanel({
       const config = parseConfig(await response.json());
       setLoad({ state: "ready", config });
       setSave({ state: "saved" });
-      onSaved?.();
     } catch {
       setSave({
         state: "failed",
@@ -144,7 +141,6 @@ export default function SettingsConfigPanel({
       setLoad({ state: "ready", config: parseConfig(await response.json()) });
       setApiKey("");
       setKeySave({ state: "saved" });
-      onSaved?.();
     } catch {
       setKeySave({
         state: "failed",
@@ -166,7 +162,6 @@ export default function SettingsConfigPanel({
       }
       setLoad({ state: "ready", config: parseConfig(await response.json()) });
       setKeySave({ state: "saved" });
-      onSaved?.();
     } catch {
       setKeySave({
         state: "failed",

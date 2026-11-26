@@ -27,7 +27,6 @@ from bq.agent_runtime import (
     run_agent_loop,
 )
 from bq.core import Clock, SystemClock
-from bq.llm_client import LLMClientError, LLMNotConfigured
 from bq.llm_service import CompletionOutcome, LLMService
 from bq.settings import SettingsStore
 from bq.tools.base import Tool
@@ -211,8 +210,6 @@ class ResearchAgent:
 
 __all__ = [
     "AGENT_ID",
-    "LLMClientError",
-    "LLMNotConfigured",
     "ResearchAgent",
     "ResearchRun",
 ]

@@ -1,3 +1,4 @@
+import { isCount, isRecord } from "./contracts.ts";
 export type ConfiguredTask = {
   task_id: string;
   task_version: string;
@@ -42,14 +43,6 @@ export type SettingsOverview = {
 export const MAX_MODEL_NAME_CHARS = 200;
 export const MIN_MEMORY_TTL_DAYS = 1;
 export const MAX_MEMORY_TTL_DAYS = 3650;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
 
 function isStringList(value: unknown): value is string[] {
   return (

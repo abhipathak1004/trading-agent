@@ -1,3 +1,4 @@
+import { isRecord } from "./contracts.ts";
 export type AnalysisSubScores = {
   trend: number | null;
   momentum: number | null;
@@ -44,10 +45,6 @@ export type AnalysisRun = {
   vetoes: string[];
   notes: string[];
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function isNumberOrNull(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));

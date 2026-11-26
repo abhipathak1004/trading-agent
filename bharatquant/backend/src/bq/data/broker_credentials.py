@@ -16,12 +16,42 @@ from __future__ import annotations
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    parse_timestamp as core_parse_timestamp,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.audit import append_event
 from bq.settings import mask_api_key
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise BrokerCredentialError(
+            "Credential timestamps must be timezone-aware."
+        ) from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return core_parse_timestamp(value)
+
 
 BROKER_KITE = "KITE"
 MIN_SECRET_CHARS = 8
@@ -39,20 +69,6 @@ class KiteStatus:
     configured: bool
     api_key_masked: str | None
     updated_at: datetime | None
-
-
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise BrokerCredentialError("Credential timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def _validate_secret(value: str, label: str) -> str:
@@ -77,9 +93,7 @@ class BrokerCredentialStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
+        return core_open_connection(self.path, foreign_keys=False)
 
     def status(self) -> KiteStatus:
         with closing(self._connect()) as connection:

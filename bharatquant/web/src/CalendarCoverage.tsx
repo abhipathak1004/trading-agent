@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { formatUtc } from "./contracts";
 
 import { dateMillis, parseResult } from "./calendarContract";
 import type { Result } from "./calendarContract";
@@ -8,10 +9,6 @@ type Status =
   | { state: "idle" | "loading" }
   | { state: "error"; message: string }
   | { state: "ready"; result: Result };
-
-function utc(value: string): string {
-  return new Date(value).toISOString().replace("T", " ").replace("Z", " UTC");
-}
 
 export default function CalendarCoverage() {
   const [exchange, setExchange] = useState("");
@@ -68,7 +65,7 @@ export default function CalendarCoverage() {
       {status.state === "ready" && (
         <>
           <p>
-            {status.result.exchange}, as of <time dateTime={status.result.asOf}>{utc(status.result.asOf)}</time>
+            {status.result.exchange}, as of <time dateTime={status.result.asOf}>{formatUtc(status.result.asOf)}</time>
             {" "}(device clock).
           </p>
           <ul>
@@ -76,7 +73,7 @@ export default function CalendarCoverage() {
               <li key={day.date}>
                 <time dateTime={day.date}>{day.date}</time>: {day.state === "UNCOVERED" ? "Uncovered" : `${day.state} (${day.sessionClass})`}
                 {day.opensAt !== null && day.closesAt !== null && (
-                  <> · <time dateTime={day.opensAt}>{utc(day.opensAt)}</time> to <time dateTime={day.closesAt}>{utc(day.closesAt)}</time></>
+                  <> · <time dateTime={day.opensAt}>{formatUtc(day.opensAt)}</time> to <time dateTime={day.closesAt}>{formatUtc(day.closesAt)}</time></>
                 )}
               </li>
             ))}

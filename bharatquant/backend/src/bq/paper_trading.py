@@ -2,14 +2,44 @@ import secrets
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from re import compile as regex
 
-from bq.core import Clock, CurrencyPaise, Quantity, SystemClock
+from bq.core import (
+    Clock,
+    CurrencyPaise,
+    Quantity,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    parse_timestamp as core_parse_timestamp,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.audit import append_event
-from bq.paper_accounts import PaperAccountStatus, PaperAccountStore
+from bq.paper_accounts import LEDGER_TOTALS_SQL, PaperAccountStatus, PaperAccountStore
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise PaperTradingError("Paper timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return core_parse_timestamp(value)
+
 
 IDENTIFIER = regex(r"[A-Za-z0-9_-][A-Za-z0-9._:-]{0,127}")
 
@@ -70,20 +100,6 @@ class PaperReconciliation:
     position_count: int
 
 
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise PaperTradingError("Paper timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 def _validate_identifier(value: str, label: str) -> None:
     if not isinstance(value, str) or IDENTIFIER.fullmatch(value) is None:
         raise PaperTradingError(f"Invalid {label}.")
@@ -96,11 +112,7 @@ class PaperTradingStore:
         self.accounts = PaperAccountStore(path, clock)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def place_order(
         self,
@@ -415,11 +427,7 @@ class PaperTradingStore:
                         f"Fill totals mismatch for order {order_id}."
                     )
             ledger = connection.execute(
-                "SELECT "
-                "COALESCE(SUM(CASE WHEN kind = 'DEBIT' THEN amount_paise ELSE 0 END), 0), "
-                "COALESCE(SUM(CASE WHEN kind = 'CREDIT' THEN amount_paise ELSE 0 END), 0) "
-                "FROM paper_ledger_entries WHERE account_id = ?",
-                (account.account_id,),
+                LEDGER_TOTALS_SQL, (account.account_id,)
             ).fetchone()
             position_count = int(
                 connection.execute(

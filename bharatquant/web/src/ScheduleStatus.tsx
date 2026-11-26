@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatUtc, isCount, isRecord, isTimestamp } from "./contracts";
 
 import { parseInterval, parseWeekdays } from "./scheduleContract";
 
@@ -37,18 +38,6 @@ type Summary = {
 );
 
 type Status = { state: "loading" | "error" } | { state: "ready"; summary: Summary };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isTimestamp(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
-}
 
 function parseSchedule(value: unknown): Schedule {
   if (
@@ -145,10 +134,6 @@ function parseSummary(value: unknown): Summary {
   };
 }
 
-function utc(value: string): string {
-  return new Date(value).toISOString().replace("T", " ").replace("Z", " UTC");
-}
-
 const decisionText: Record<WakeDecision, string> = {
   RUN: "Wake policy eligible; not dispatched",
   SKIPPED_BY_POLICY: "Skipped by wake policy",
@@ -216,12 +201,12 @@ export default function ScheduleStatus() {
               <p>
                 Effective version {status.summary.effective_version}, since{" "}
                 <time dateTime={status.summary.effective_at}>
-                  {utc(status.summary.effective_at)}
+                  {formatUtc(status.summary.effective_at)}
                 </time>; latest version {status.summary.latest_version}.
               </p>
               <p>Showing {status.summary.schedules.length} of {status.summary.schedule_count} schedules.</p>
               <p>
-                Previews after <time dateTime={status.summary.observed_at}>{utc(status.summary.observed_at)}</time>
+                Previews after <time dateTime={status.summary.observed_at}>{formatUtc(status.summary.observed_at)}</time>
                 {" "}assume the current version stays unchanged. They do not apply market calendars,
                 dependencies or wake policies and do not schedule jobs.
               </p>
@@ -239,7 +224,7 @@ export default function ScheduleStatus() {
                       {schedule.preview_state === "available" && (
                         <ul>
                           {schedule.next_occurrences.map((occurrence) => (
-                            <li key={occurrence}><time dateTime={occurrence}>{utc(occurrence)}</time></li>
+                            <li key={occurrence}><time dateTime={occurrence}>{formatUtc(occurrence)}</time></li>
                           ))}
                         </ul>
                       )}
@@ -259,9 +244,9 @@ export default function ScheduleStatus() {
             <ul>
               {status.summary.recent_decisions.map((wake) => (
                 <li key={JSON.stringify([wake.schedule_id, wake.scheduled_at])}>
-                  {wake.schedule_id} · <time dateTime={wake.scheduled_at}>{utc(wake.scheduled_at)}</time>
+                  {wake.schedule_id} · <time dateTime={wake.scheduled_at}>{formatUtc(wake.scheduled_at)}</time>
                   {" "}· {decisionText[wake.decision]} · version {wake.schedule_version}
-                  {" "}· observed <time dateTime={wake.observed_at}>{utc(wake.observed_at)}</time>
+                  {" "}· observed <time dateTime={wake.observed_at}>{formatUtc(wake.observed_at)}</time>
                 </li>
               ))}
             </ul>

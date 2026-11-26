@@ -29,11 +29,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from pathlib import Path
 
 from bq.analysis.decision import DataFreshness, Signal, TradePlan
-from bq.core import Clock, CurrencyPaise, Quantity, SystemClock
+from bq.core import (
+    Clock,
+    CurrencyPaise,
+    Quantity,
+    SystemClock,
+    paise_from_price,
+)
 from bq.paper_accounts import PaperAccountError
 from bq.paper_trading import (
     PaperOrder,
@@ -219,9 +225,10 @@ def assess_freshness(
 
 
 def _price_paise(price: Decimal) -> CurrencyPaise:
-    return CurrencyPaise(
-        int((price * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    )
+    try:
+        return paise_from_price(price)
+    except ValueError as exc:
+        raise PaperExecutorError(str(exc)) from exc
 
 
 class PaperExecutor:

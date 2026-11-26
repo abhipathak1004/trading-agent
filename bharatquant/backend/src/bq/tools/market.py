@@ -45,7 +45,6 @@ MAX_URL_CHARS = 2_048
 WEB_TIMEOUT_SECONDS = 20.0
 _USER_AGENT = "Mozilla/5.0 BharatQuant/0.1 (personal research)"
 _VALID_RANGES = {"5d", "1mo", "3mo", "6mo", "1y"}
-_VALID_INTERVALS = {"1d", "1wk"}
 
 
 class _SymbolToolsBase:

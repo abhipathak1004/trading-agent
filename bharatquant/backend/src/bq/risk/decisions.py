@@ -1,25 +1,53 @@
 import json
-import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from hashlib import sha256
+from datetime import datetime
 from pathlib import Path
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    IDENTIFIER,
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    canonical_digest as core_canonical_digest,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    parse_timestamp as core_parse_timestamp,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.audit import append_event
 from bq.risk.policy import (
     ApprovalMode,
     ApprovalPolicy,
     RiskDecision,
+    RiskDecisionState,
 )
-
-IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
 class RiskDecisionError(ValueError):
     pass
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise RiskDecisionError("Decision timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return core_parse_timestamp(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,28 +69,8 @@ class StoredApprovalDecision:
     decision_hash: str
 
 
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise RiskDecisionError("Decision timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 def _hash(payload: object) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return sha256(encoded).hexdigest()
+    return core_canonical_digest(payload)
 
 
 class RiskDecisionStore:
@@ -71,11 +79,7 @@ class RiskDecisionStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def freeze_risk(
         self,
@@ -211,7 +215,6 @@ class RiskDecisionStore:
             ).fetchone()
         if row is None:
             raise RiskDecisionError("Risk decision not found.")
-        from bq.risk.policy import RiskDecisionState
 
         return StoredRiskDecision(
             decision_id=str(row[0]),

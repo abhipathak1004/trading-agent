@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { formatUtc } from "./contracts";
+
 type ImportSummary = {
   import_id: string;
   source_id: string;
@@ -146,7 +148,7 @@ export default function DataStatus() {
                     {item.source_id}: {item.record_count.toLocaleString("en-IN")}{" "}
                     {item.record_count === 1 ? "record" : "records"} ·{" "}
                     <time dateTime={item.recorded_at}>
-                      {new Date(item.recorded_at).toISOString().replace("T", " ").replace("Z", " UTC")}
+                      {formatUtc(item.recorded_at)}
                     </time>
                   </li>
                 ))}

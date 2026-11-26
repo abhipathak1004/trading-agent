@@ -6,7 +6,13 @@ from hashlib import sha256
 from pathlib import Path
 
 from bq.context import SECTION_ORDER, ContextSection
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
 from bq.infra.audit import append_event
 from bq.model_routing import (
     DataClassification,
@@ -106,9 +112,7 @@ class TaskRegistry:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
+        return core_open_connection(self.path, foreign_keys=False)
 
     def save(self, definition: TaskDefinition) -> None:
         if not isinstance(definition, TaskDefinition):

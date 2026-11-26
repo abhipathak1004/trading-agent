@@ -34,9 +34,9 @@ from bq.data.yahoo import (
     YAHOO_ENDPOINT,
     YahooError,
     parse_chart,
+    stream_chart,
 )
 
-MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 BASE_DELAY_SECONDS = 900.0  # Yahoo quotes are delayed; 15 minutes is the floor
 _USER_AGENT = "Mozilla/5.0 BharatQuant/0.1 (personal research)"
 
@@ -79,25 +79,15 @@ def _fetch_window(
         "events": "div,splits",
     }
     try:
-        with httpx.Client(timeout=timeout, transport=transport) as client:
-            with client.stream(
-                "GET",
-                url,
-                params=params,
-                headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
-            ) as response:
-                response.raise_for_status()
-                chunks: list[bytes] = []
-                size = 0
-                for chunk in response.iter_bytes():
-                    size += len(chunk)
-                    if size > MAX_RESPONSE_BYTES:
-                        raise VendorUnavailableError(
-                            "response_too_large",
-                            "Yahoo response exceeded the size limit.",
-                        )
-                    chunks.append(chunk)
-                return b"".join(chunks)
+        return stream_chart(
+            url,
+            params=params,
+            timeout=timeout,
+            transport=transport,
+            too_large=VendorUnavailableError(
+                "response_too_large", "Yahoo response exceeded the size limit."
+            ),
+        )
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         if status == 429:

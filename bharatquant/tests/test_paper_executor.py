@@ -16,6 +16,7 @@ from bq.execution.paper_executor import (
     ExecutionContext,
     PaperExecutor,
     PaperExecutorError,
+    _price_paise,
     assess_freshness,
 )
 from bq.infra.database import migrate
@@ -102,6 +103,13 @@ def _executor(tmp_path: Path, at: datetime = AS_OF) -> PaperExecutor:
 
 
 # -- freshness mapping ------------------------------------------------------
+
+
+def test_price_conversion_rejects_a_non_positive_price() -> None:
+    # The executor used to accept any Decimal; conversion is now shared with
+    # the trade-plan boundary, which rejects non-positive prices.
+    with pytest.raises(PaperExecutorError):
+        _price_paise(Decimal("-1"))
 
 
 def test_realtime_fresh_data_is_usable() -> None:

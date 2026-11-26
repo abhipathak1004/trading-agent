@@ -2,13 +2,28 @@ import csv
 import io
 import json
 import re
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
 from urllib.parse import urlsplit
 
+from bq.core import (
+    utc as core_utc,
+)
 from bq.data.records import DataImportResult, DataRecord, DataRecordStore, RecordKind
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise ValueError("CSV timestamps must be timezone-aware.") from exc
+
+
+def _ts(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 10000
@@ -30,12 +45,6 @@ PRICE = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 class Adjustment(StrEnum):
     ADJUSTED = "ADJUSTED"
     UNADJUSTED = "UNADJUSTED"
-
-
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise ValueError("CSV timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
 
 
 def _https_url(value: str, label: str) -> None:
