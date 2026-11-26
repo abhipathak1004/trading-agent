@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import TableScroll from "./TableScroll";
 
 import {
   parseExecution,
@@ -690,67 +691,69 @@ export default function TradePanel({
                 </button>
               </p>
               {book.positions.length > 0 && (
-                <table className="judgment-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Instrument</th>
-                      <th scope="col">Quantity</th>
-                      <th scope="col">Exit qty</th>
-                      <th scope="col">Exit price (₹)</th>
-                      <th scope="col">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {book.positions.map((position) => (
-                      <tr key={position.instrument_id}>
-                        <th scope="row">{position.instrument_id}</th>
-                        <td>{position.quantity}</td>
-                        <td>
-                          <input
-                            aria-label={`Exit quantity for ${position.instrument_id}`}
-                            type="number"
-                            min="1"
-                            max={position.quantity}
-                            value={
-                              exitQuantities[position.instrument_id] ??
-                              String(position.quantity)
-                            }
-                            onChange={(event) =>
-                              setExitQuantities((current) => ({
-                                ...current,
-                                [position.instrument_id]: event.target.value,
-                              }))
-                            }
-                          />
-                        </td>
-                        <td>
-                          <input
-                            aria-label={`Exit price for ${position.instrument_id}`}
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={exitPrices[position.instrument_id] ?? ""}
-                            onChange={(event) =>
-                              setExitPrices((current) => ({
-                                ...current,
-                                [position.instrument_id]: event.target.value,
-                              }))
-                            }
-                          />
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="text-button"
-                            onClick={() => void exitPosition(position)}
-                          >
-                            Exit position
-                          </button>
-                        </td>
+                <TableScroll label="Paper positions">
+                  <table className="judgment-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Instrument</th>
+                        <th scope="col">Quantity</th>
+                        <th scope="col">Exit qty</th>
+                        <th scope="col">Exit price (₹)</th>
+                        <th scope="col">Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {book.positions.map((position) => (
+                        <tr key={position.instrument_id}>
+                          <th scope="row">{position.instrument_id}</th>
+                          <td>{position.quantity}</td>
+                          <td>
+                            <input
+                              aria-label={`Exit quantity for ${position.instrument_id}`}
+                              type="number"
+                              min="1"
+                              max={position.quantity}
+                              value={
+                                exitQuantities[position.instrument_id] ??
+                                String(position.quantity)
+                              }
+                              onChange={(event) =>
+                                setExitQuantities((current) => ({
+                                  ...current,
+                                  [position.instrument_id]: event.target.value,
+                                }))
+                              }
+                            />
+                          </td>
+                          <td>
+                            <input
+                              aria-label={`Exit price for ${position.instrument_id}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={exitPrices[position.instrument_id] ?? ""}
+                              onChange={(event) =>
+                                setExitPrices((current) => ({
+                                  ...current,
+                                  [position.instrument_id]: event.target.value,
+                                }))
+                              }
+                            />
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => void exitPosition(position)}
+                            >
+                              Exit position
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableScroll>
               )}
               {reconciliation !== null && (
                 <p className="panel-note">
@@ -785,58 +788,60 @@ export default function TradePanel({
                       />
                     </label>
                   </div>
-                  <table className="judgment-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Instrument</th>
-                        <th scope="col">Side</th>
-                        <th scope="col">Filled / Qty</th>
-                        <th scope="col">Limit</th>
-                        <th scope="col">Status</th>
-                        <th scope="col">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {book.orders.map((order) => (
-                        <tr key={order.order_id}>
-                          <th scope="row">{order.instrument_id}</th>
-                          <td>{order.side}</td>
-                          <td>
-                            {order.filled_quantity} / {order.quantity}
-                          </td>
-                          <td>
-                            {order.limit_price_paise === null
-                              ? "market"
-                              : formatPaise(order.limit_price_paise)}
-                          </td>
-                          <td>{order.status}</td>
-                          <td>
-                            {order.status === "PENDING" ||
-                            order.status === "PARTIALLY_FILLED" ? (
-                              <>
-                                <button
-                                  type="button"
-                                  className="text-button"
-                                  onClick={() => void fillOrder(order)}
-                                >
-                                  Fill at limit
-                                </button>{" "}
-                                <button
-                                  type="button"
-                                  className="text-button"
-                                  onClick={() => void cancelOrder(order)}
-                                >
-                                  Cancel
-                                </button>
-                              </>
-                            ) : (
-                              "—"
-                            )}
-                          </td>
+                  <TableScroll label="Paper orders">
+                    <table className="judgment-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Instrument</th>
+                          <th scope="col">Side</th>
+                          <th scope="col">Filled / Qty</th>
+                          <th scope="col">Limit</th>
+                          <th scope="col">Status</th>
+                          <th scope="col">Action</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {book.orders.map((order) => (
+                          <tr key={order.order_id}>
+                            <th scope="row">{order.instrument_id}</th>
+                            <td>{order.side}</td>
+                            <td>
+                              {order.filled_quantity} / {order.quantity}
+                            </td>
+                            <td>
+                              {order.limit_price_paise === null
+                                ? "market"
+                                : formatPaise(order.limit_price_paise)}
+                            </td>
+                            <td>{order.status}</td>
+                            <td>
+                              {order.status === "PENDING" ||
+                              order.status === "PARTIALLY_FILLED" ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="text-button"
+                                    onClick={() => void fillOrder(order)}
+                                  >
+                                    Fill at limit
+                                  </button>{" "}
+                                  <button
+                                    type="button"
+                                    className="text-button"
+                                    onClick={() => void cancelOrder(order)}
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                "—"
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </TableScroll>
                 </>
               )}
               <ExecutionRealismPanel accountId={accountId} csrfToken={csrfToken} />
@@ -1068,32 +1073,34 @@ export default function TradePanel({
           {result.order !== null && (
             <>
               <h3>Paper order</h3>
-              <table className="judgment-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Order</th>
-                    <th scope="col">Instrument</th>
-                    <th scope="col">Side</th>
-                    <th scope="col">Qty</th>
-                    <th scope="col">Limit</th>
-                    <th scope="col">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <th scope="row">{result.order.order_id}</th>
-                    <td>{result.order.instrument_id}</td>
-                    <td>{result.order.side}</td>
-                    <td>{result.order.quantity}</td>
-                    <td>
-                      {result.order.limit_price_paise === null
-                        ? "market"
-                        : formatPaise(result.order.limit_price_paise)}
-                    </td>
-                    <td>{result.order.status}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <TableScroll label="Paper order">
+                <table className="judgment-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Order</th>
+                      <th scope="col">Instrument</th>
+                      <th scope="col">Side</th>
+                      <th scope="col">Qty</th>
+                      <th scope="col">Limit</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <th scope="row">{result.order.order_id}</th>
+                      <td>{result.order.instrument_id}</td>
+                      <td>{result.order.side}</td>
+                      <td>{result.order.quantity}</td>
+                      <td>
+                        {result.order.limit_price_paise === null
+                          ? "market"
+                          : formatPaise(result.order.limit_price_paise)}
+                      </td>
+                      <td>{result.order.status}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </TableScroll>
             </>
           )}
         </div>

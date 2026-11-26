@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import TableScroll from "./TableScroll";
 
 import { parseDossier } from "./researchContract.ts";
 import type { Dossier, ResearchClaim } from "./researchContract.ts";
@@ -326,96 +327,102 @@ export default function ResearchDossierPanel({ csrfToken }: { csrfToken: string 
           )}
 
           {dossier.notes.length > 0 && (
-            <table className="judgment-table">
-              <caption>Research notes</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Known</th>
-                  <th scope="col">Source</th>
-                  <th scope="col">Title</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dossier.notes.map((note) => (
-                  <tr key={note.note_id}>
-                    <th scope="row">{note.known_at.slice(0, 10)}</th>
-                    <td>{note.source_type}</td>
-                    <td>
-                      {note.url === null ? (
-                        note.title
-                      ) : (
-                        <a href={note.url} target="_blank" rel="noreferrer">
-                          {note.title}
-                        </a>
-                      )}
-                    </td>
+            <TableScroll label="Research notes">
+              <table className="judgment-table">
+                <caption>Research notes</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Known</th>
+                    <th scope="col">Source</th>
+                    <th scope="col">Title</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {dossier.notes.map((note) => (
+                    <tr key={note.note_id}>
+                      <th scope="row">{note.known_at.slice(0, 10)}</th>
+                      <td>{note.source_type}</td>
+                      <td>
+                        {note.url === null ? (
+                          note.title
+                        ) : (
+                          <a href={note.url} target="_blank" rel="noreferrer">
+                            {note.title}
+                          </a>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
 
           {dossier.theses.length > 0 && (
-            <table className="judgment-table">
-              <caption>Theses &amp; invalidation evidence</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Thesis</th>
-                  <th scope="col">Horizon</th>
-                  <th scope="col">Events</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dossier.theses.map((thesis) => (
-                  <tr key={thesis.thesis_id}>
-                    <th scope="row">{thesis.thesis_id}</th>
-                    <td>{thesis.horizon}</td>
-                    <td>
-                      {thesis.events
-                        .map((item) =>
-                          typeof item.kind === "string" ? item.kind : "NOTE",
-                        )
-                        .join(", ")}
-                    </td>
+            <TableScroll label="Theses and invalidation evidence">
+              <table className="judgment-table">
+                <caption>Theses &amp; invalidation evidence</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Thesis</th>
+                    <th scope="col">Horizon</th>
+                    <th scope="col">Events</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {dossier.theses.map((thesis) => (
+                    <tr key={thesis.thesis_id}>
+                      <th scope="row">{thesis.thesis_id}</th>
+                      <td>{thesis.horizon}</td>
+                      <td>
+                        {thesis.events
+                          .map((item) =>
+                            typeof item.kind === "string" ? item.kind : "NOTE",
+                          )
+                          .join(", ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
 
           {pending.length > 0 && (
-            <table className="judgment-table">
-              <caption>Claims waiting for owner review</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Claim</th>
-                  <th scope="col">Decision</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pending.map((item) => (
-                  <tr key={item.claim_id}>
-                    <th scope="row">{item.statement}</th>
-                    <td>
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() => void review(item, "ACCEPTED")}
-                      >
-                        Accept
-                      </button>{" "}
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() => void review(item, "REJECTED")}
-                      >
-                        Reject
-                      </button>
-                    </td>
+            <TableScroll label="Claims waiting for owner review">
+              <table className="judgment-table">
+                <caption>Claims waiting for owner review</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Claim</th>
+                    <th scope="col">Decision</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {pending.map((item) => (
+                    <tr key={item.claim_id}>
+                      <th scope="row">{item.statement}</th>
+                      <td>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => void review(item, "ACCEPTED")}
+                        >
+                          Accept
+                        </button>{" "}
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => void review(item, "REJECTED")}
+                        >
+                          Reject
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </>
       )}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { parseMemoryCalibration } from "./memoryContract";
+import TableScroll from "./TableScroll";
 import type { MemoryCalibration } from "./memoryContract";
 import { parseMemorySchedule } from "./memoryScheduleContract";
 import type { MemorySchedule } from "./memoryScheduleContract";
@@ -189,30 +190,32 @@ export default function MemoryCalibrationPanel({
         (load.calibration.buckets.length === 0 ? (
           <p>No resolved shadow episodes yet.</p>
         ) : (
-          <table className="judgment-table">
-            <thead>
-              <tr>
-                <th scope="col">Source</th>
-                <th scope="col">Model</th>
-                <th scope="col">n</th>
-                <th scope="col">Brier</th>
-                <th scope="col">ECE</th>
-                <th scope="col">Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {load.calibration.buckets.map((bucket) => (
-                <tr key={`${bucket.decision_source}-${bucket.model}`}>
-                  <th scope="row">{bucket.decision_source}</th>
-                  <td>{bucket.model}</td>
-                  <td>{bucket.count}</td>
-                  <td>{format(bucket.mean_brier)}</td>
-                  <td>{format(bucket.expected_calibration_error)}</td>
-                  <td>{format(bucket.outcome_rate)}</td>
+          <TableScroll label="Calibration by source">
+            <table className="judgment-table">
+              <thead>
+                <tr>
+                  <th scope="col">Source</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">n</th>
+                  <th scope="col">Brier</th>
+                  <th scope="col">ECE</th>
+                  <th scope="col">Outcome</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {load.calibration.buckets.map((bucket) => (
+                  <tr key={`${bucket.decision_source}-${bucket.model}`}>
+                    <th scope="row">{bucket.decision_source}</th>
+                    <td>{bucket.model}</td>
+                    <td>{bucket.count}</td>
+                    <td>{format(bucket.mean_brier)}</td>
+                    <td>{format(bucket.expected_calibration_error)}</td>
+                    <td>{format(bucket.outcome_rate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         ))}
     </section>
   );

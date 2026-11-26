@@ -6,6 +6,23 @@ task. History lives in git and
 
 ## Current state
 
+- **Responsive UI (26 Nov 2026):** the shell now works on phones and tablets.
+  Below 1024px the sidebar is an off-canvas drawer — `web/src/Sidebar.tsx`
+  (wrapping `App.tsx`) owns the state, a backdrop, `inert` when closed, body
+  scroll lock, ESC/backdrop/item-select close, focus onto the active item and
+  back to the toggle, and a 44px target floor. The old ≤800px horizontal
+  nav strip and its `.nav-label` suppression are gone, so group headings
+  survive at every width. All 22 `.judgment-table` instances (11 panels) are
+  wrapped in `web/src/TableScroll.tsx`, a labelled, focusable
+  `role="region"`; under 768px the table keeps a 620px minimum and the first
+  column is sticky, so data scrolls inside the card and the page never
+  scrolls sideways. `web/index.html` carries `viewport-fit=cover`, `100dvh`
+  pairs back every `100vh`, safe-area insets pad the sidebar/footer, and
+  fields are 16px under 640px so iOS Safari no longer zooms on focus.
+  Verified in Chrome via CDP with a signed-in session at 320/390/430/768/1024/
+  1280/1440 across all 10 mounted pages: **zero horizontal overflow**, drawer
+  open/close/focus/labels correct at every width ≤1024, desktop unchanged.
+  `web/tests/responsive.test.mjs` guards the invariants.
 - Cloudflare tunnel fixed (26 Nov 2026): the panel never left "Waiting for
   Cloudflare" and the tunnel had **never** once reached live (audit DB: 3 ×
   `tunnel.start_failed`, 0 × `tunnel.started`). Two independent causes:
@@ -51,7 +68,7 @@ task. History lives in git and
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
   execution/realism, memory, confidence, opportunities/shadows, scheduler,
   reports, backtests, research dossiers and runtime hardening.
-- **Verification:** 872 backend tests, 116 frontend tests; ruff/format clean;
+- **Verification:** 872 backend tests, 119 frontend tests; ruff/format clean;
   frontend typecheck/build clean; fresh DB applies **37 migrations**.
 - **mypy:** 90 pre-existing errors across `cli.py`, `paper_performance.py`,
   `infra/scheduler.py` and the tunnel test fakes. Do not “fix” them as part of
@@ -105,6 +122,7 @@ maintenance/optional breadth:
 
 | Area | Files |
 |---|---|
+| Responsive shell | `web/src/Sidebar.tsx`, `web/src/TableScroll.tsx`, `web/src/styles.css`, `web/tests/responsive.test.mjs` |
 | Runtime | `bq/runtime.py`, `bq/cli.py`, `web/src/RuntimePanel.tsx` |
 | Tunnel | `bq/infra/tunnel.py`, `web/src/CloudflareTunnelPanel.tsx`, `web/src/tunnelContract.ts` |
 | Operations | `docs/runtime-operations.md`, `justfile` |

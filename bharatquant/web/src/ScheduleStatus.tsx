@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { formatUtc, isCount, isRecord, isTimestamp } from "./contracts";
+import TableScroll from "./TableScroll";
 
 import { parseInterval, parseWeekdays } from "./scheduleContract";
 
@@ -298,28 +299,30 @@ export default function ScheduleStatus() {
           {status.summary.job_runs.length === 0 ? (
             <p>No job runs yet.</p>
           ) : (
-            <table className="judgment-table">
-              <thead>
-                <tr>
-                  <th scope="col">Job</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Attempts</th>
-                  <th scope="col">Failure</th>
-                </tr>
-              </thead>
-              <tbody>
-                {status.summary.job_runs.map((run) => (
-                  <tr key={run.run_id}>
-                    <th scope="row">{run.job_id}</th>
-                    <td>{run.status}</td>
-                    <td>
-                      {run.attempts}/{run.max_attempts}
-                    </td>
-                    <td>{run.failure_code ?? "—"}</td>
+            <TableScroll label="Recent job runs">
+              <table className="judgment-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Job</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Attempts</th>
+                    <th scope="col">Failure</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {status.summary.job_runs.map((run) => (
+                    <tr key={run.run_id}>
+                      <th scope="row">{run.job_id}</th>
+                      <td>{run.status}</td>
+                      <td>
+                        {run.attempts}/{run.max_attempts}
+                      </td>
+                      <td>{run.failure_code ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </>
       )}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import TableScroll from "./TableScroll";
 
 import { parsePlaybookList } from "./playbookContract";
 import type { Playbook } from "./playbookContract";
@@ -286,72 +287,76 @@ function StrategyResult({
       {run.run_id !== null && <WorkingMemoryPanel runId={run.run_id} />}
 
       <h3>Ranked actions</h3>
-      <table className="judgment-table">
-        <thead>
-          <tr>
-            <th scope="col">#</th>
-            <th scope="col">Symbol</th>
-            <th scope="col">Action</th>
-            <th scope="col">Size scale</th>
-            <th scope="col">Rationale</th>
-          </tr>
-        </thead>
-        <tbody>
-          {decision.ranked_actions.map((action) => (
-            <tr key={action.symbol}>
-              <td>{action.rank}</td>
-              <th scope="row">{action.symbol}</th>
-              <td>{action.action}</td>
-              <td>{action.size_scale.toFixed(2)}</td>
-              <td>{action.rationale}</td>
+      <TableScroll label="Ranked actions">
+        <table className="judgment-table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Symbol</th>
+              <th scope="col">Action</th>
+              <th scope="col">Size scale</th>
+              <th scope="col">Rationale</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {decision.ranked_actions.map((action) => (
+              <tr key={action.symbol}>
+                <td>{action.rank}</td>
+                <th scope="row">{action.symbol}</th>
+                <td>{action.action}</td>
+                <td>{action.size_scale.toFixed(2)}</td>
+                <td>{action.rationale}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableScroll>
 
       <h3>Accepted paper plans</h3>
       {run.accepted.length === 0 ? (
         <p className="panel-note">No plan passed the deterministic gate.</p>
       ) : (
-        <table className="judgment-table">
-          <thead>
-            <tr>
-              <th scope="col">Symbol</th>
-              <th scope="col">Qty</th>
-              <th scope="col">Entry</th>
-              <th scope="col">Stop</th>
-              <th scope="col">Target</th>
-              <th scope="col">R:R</th>
-              <th scope="col">Notional</th>
-              <th scope="col">Scale</th>
-              <th scope="col">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {run.accepted.map((item) => (
-              <tr key={item.symbol}>
-                <th scope="row">{item.symbol}</th>
-                <td>{item.plan.suggested_quantity}</td>
-                <td>{item.plan.entry_price}</td>
-                <td>{item.plan.stop_loss}</td>
-                <td>{item.plan.target_price}</td>
-                <td>{item.plan.reward_risk}</td>
-                <td>{formatPaise(item.notional_paise)}</td>
-                <td>{item.size_scale.toFixed(2)}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => onStagePlan?.(item.plan)}
-                    disabled={onStagePlan === undefined}
-                  >
-                    Stage in Trade
-                  </button>
-                </td>
+        <TableScroll label="Accepted paper plans">
+          <table className="judgment-table">
+            <thead>
+              <tr>
+                <th scope="col">Symbol</th>
+                <th scope="col">Qty</th>
+                <th scope="col">Entry</th>
+                <th scope="col">Stop</th>
+                <th scope="col">Target</th>
+                <th scope="col">R:R</th>
+                <th scope="col">Notional</th>
+                <th scope="col">Scale</th>
+                <th scope="col">Action</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {run.accepted.map((item) => (
+                <tr key={item.symbol}>
+                  <th scope="row">{item.symbol}</th>
+                  <td>{item.plan.suggested_quantity}</td>
+                  <td>{item.plan.entry_price}</td>
+                  <td>{item.plan.stop_loss}</td>
+                  <td>{item.plan.target_price}</td>
+                  <td>{item.plan.reward_risk}</td>
+                  <td>{formatPaise(item.notional_paise)}</td>
+                  <td>{item.size_scale.toFixed(2)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => onStagePlan?.(item.plan)}
+                      disabled={onStagePlan === undefined}
+                    >
+                      Stage in Trade
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
 
       {run.rejected.length > 0 && (

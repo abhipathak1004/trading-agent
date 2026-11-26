@@ -7,6 +7,7 @@ import {
 } from "./opportunityContract.ts";
 import type { Opportunity, ShadowSummary } from "./opportunityContract.ts";
 import type { StrategyPlan } from "./strategyContract.ts";
+import TableScroll from "./TableScroll";
 
 type LoadState =
   | { state: "loading" | "error" }
@@ -214,53 +215,55 @@ export default function OpportunitiesPanel({
       )}
 
       {opportunities.length > 0 && (
-        <table className="judgment-table">
-          <thead>
-            <tr>
-              <th scope="col">Symbol</th>
-              <th scope="col">Score</th>
-              <th scope="col">Level</th>
-              <th scope="col">Conf.</th>
-              <th scope="col">Horizon</th>
-              <th scope="col">Lifecycle</th>
-              <th scope="col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {opportunities.map((item) => (
-              <tr key={item.opportunity_id}>
-                <th scope="row">{item.instrument_id}</th>
-                <td>{item.score.toFixed(1)}</td>
-                <td><span className={levelClass(item.level)}>{item.level}</span></td>
-                <td>{(item.probability * 100).toFixed(0)}%</td>
-                <td>{item.horizon}</td>
-                <td>{item.lifecycle}</td>
-                <td>
-                  {LIFECYCLE_ACTIONS.map((target) => (
-                    <button
-                      key={target}
-                      type="button"
-                      className="text-button"
-                      disabled={action === "saving" || item.lifecycle === target}
-                      onClick={() => void transition(item, target)}
-                    >
-                      {target === "WATCHING" ? "Watch" : "Dismiss"}
-                    </button>
-                  ))}
-                  {item.plan !== null && onStagePlan !== undefined && (
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => onStagePlan(item.plan as StrategyPlan)}
-                    >
-                      Stage in Trade
-                    </button>
-                  )}
-                </td>
+        <TableScroll label="Opportunity board">
+          <table className="judgment-table">
+            <thead>
+              <tr>
+                <th scope="col">Symbol</th>
+                <th scope="col">Score</th>
+                <th scope="col">Level</th>
+                <th scope="col">Conf.</th>
+                <th scope="col">Horizon</th>
+                <th scope="col">Lifecycle</th>
+                <th scope="col">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {opportunities.map((item) => (
+                <tr key={item.opportunity_id}>
+                  <th scope="row">{item.instrument_id}</th>
+                  <td>{item.score.toFixed(1)}</td>
+                  <td><span className={levelClass(item.level)}>{item.level}</span></td>
+                  <td>{(item.probability * 100).toFixed(0)}%</td>
+                  <td>{item.horizon}</td>
+                  <td>{item.lifecycle}</td>
+                  <td>
+                    {LIFECYCLE_ACTIONS.map((target) => (
+                      <button
+                        key={target}
+                        type="button"
+                        className="text-button"
+                        disabled={action === "saving" || item.lifecycle === target}
+                        onClick={() => void transition(item, target)}
+                      >
+                        {target === "WATCHING" ? "Watch" : "Dismiss"}
+                      </button>
+                    ))}
+                    {item.plan !== null && onStagePlan !== undefined && (
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => onStagePlan(item.plan as StrategyPlan)}
+                      >
+                        Stage in Trade
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
 
       {opportunities.length > 0 && (

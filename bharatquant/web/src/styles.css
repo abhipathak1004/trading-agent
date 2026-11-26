@@ -92,9 +92,15 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   background:
     radial-gradient(ellipse at 50% 40%, rgb(139 92 246 / 12%), transparent 48%),
@@ -374,9 +380,12 @@ h1 {
   font-size: 11px;
 }
 
+/* z-index scale: 30 backdrop, 40 sidebar drawer, 50 nothing above that yet. */
+
 .app-shell {
   display: grid;
   min-height: 100vh;
+  min-height: 100dvh;
   grid-template-columns: 232px minmax(0, 1fr);
 }
 
@@ -385,10 +394,22 @@ h1 {
   top: 0;
   display: flex;
   height: 100vh;
+  height: 100dvh;
   flex-direction: column;
   padding: 28px 18px 20px;
   border-right: 1px solid var(--line);
   background: var(--bg);
+}
+
+.nav-toggle,
+.sidebar-backdrop {
+  display: none;
+}
+
+.strip-mark {
+  display: none;
+  color: inherit;
+  text-decoration: none;
 }
 
 .sidebar-nav {
@@ -399,6 +420,18 @@ h1 {
   margin-top: 40px;
   overflow-y: auto;
   padding-right: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  overscroll-behavior-y: contain;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--border);
 }
 
 .nav-label {
@@ -539,6 +572,7 @@ a.nav-item:hover,
   display: grid;
   width: min(100%, 900px);
   min-height: min(680px, calc(100vh - 140px));
+  min-height: min(680px, calc(100dvh - 140px));
   grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
   align-items: center;
   gap: clamp(36px, 7vw, 96px);
@@ -591,6 +625,7 @@ a.nav-item:hover,
   display: grid;
   width: min(100%, 720px);
   min-height: min(580px, calc(100vh - 140px));
+  min-height: min(580px, calc(100dvh - 140px));
   align-content: center;
   margin: 0 auto;
   padding: 64px 0;
@@ -740,11 +775,11 @@ a.nav-item:hover,
   line-height: 1.6;
 }
 
-.dashboard-grid--settings {
+.dashboard-grid.dashboard-grid--settings {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.dashboard-grid--data {
+.dashboard-grid.dashboard-grid--data {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -937,7 +972,7 @@ a.nav-item:hover,
   letter-spacing: 0.06em;
 }
 
-.dashboard-grid--research {
+.dashboard-grid.dashboard-grid--research {
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -971,6 +1006,20 @@ a.nav-item:hover,
   margin-top: 8px;
 }
 
+/* A control used outside a form row still has to look like the rest. */
+.settings-panel > label > select,
+.settings-panel > label > input {
+  display: block;
+  width: min(100%, 320px);
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
 .config-feedback {
   margin: 0;
   color: var(--accent);
@@ -991,57 +1040,96 @@ a.nav-item:hover,
   outline-offset: 3px;
 }
 
-@media (max-width: 1100px) {
-  .dashboard-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 800px) {
+/* Tablet and below: the sidebar becomes an off-canvas drawer. */
+@media (max-width: 1024px) {
   .app-shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 24px;
-    padding: 14px 22px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 40;
+    width: min(86vw, 300px);
+    height: 100vh;
+    height: 100dvh;
+    overflow-y: auto;
+    padding-block: calc(20px + env(safe-area-inset-top))
+      calc(20px + env(safe-area-inset-bottom));
+    border-right: 1px solid var(--line);
+    transform: translateX(-100%);
+    transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .sidebar-nav {
-    display: flex;
-    flex: 1;
-    gap: 4px;
-    overflow-x: auto;
-    margin: 0;
+  .sidebar--open {
+    transform: translateX(0);
   }
 
-  .nav-label,
-  .nav-item--muted,
-  .sidebar-footer {
-    display: none;
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: block;
+    padding: 0;
+    border: 0;
+    background: rgb(11 8 18 / 62%);
+    cursor: pointer;
   }
 
-  .nav-item {
-    min-height: 36px;
+  .nav-toggle {
+    display: inline-flex;
+    width: 44px;
+    min-height: 44px;
     flex: 0 0 auto;
-    gap: 7px;
-    padding: 0 8px;
-    font-size: 12px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .nav-toggle span {
+    width: 16px;
+    height: 1.5px;
+    border-radius: 1px;
+    background: var(--muted-strong);
+  }
+
+  .nav-toggle:hover {
+    background: var(--surface-2);
+  }
+
+  .nav-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  .strip-mark {
+    display: inline-flex;
+  }
+
+  .strip-mark .wordmark-mark {
+    width: 30px;
+    height: 30px;
+  }
+
+  .status-strip {
+    gap: 12px;
   }
 
   .workspace {
-    padding-right: 22px;
-    padding-left: 22px;
+    padding-right: clamp(16px, 4vw, 24px);
+    padding-left: clamp(16px, 4vw, 24px);
   }
 
   .auth-workspace {
     min-height: calc(100vh - 155px);
+    min-height: calc(100dvh - 155px);
     grid-template-columns: 1fr;
     gap: 24px;
     align-content: center;
@@ -1053,78 +1141,9 @@ a.nav-item:hover,
   }
 }
 
-@media (max-width: 560px) {
+@media (prefers-reduced-motion: reduce) {
   .sidebar {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
-    padding: 12px 16px;
-  }
-
-  .sidebar-nav {
-    width: 100%;
-  }
-
-  .workspace {
-    padding-right: 16px;
-    padding-left: 16px;
-  }
-
-  .status-strip {
-    min-height: 64px;
-    flex-wrap: wrap;
-    gap: 8px 12px;
-    padding: 10px 0;
-  }
-
-  .status-strip__identity {
-    width: 100%;
-  }
-
-  .status-strip .service-status {
-    margin-right: auto;
-  }
-
-  .dashboard {
-    padding-top: 28px;
-  }
-
-  .page-header {
-    align-items: flex-start;
-  }
-
-  .page-header .status-badge {
-    margin-top: 4px;
-  }
-
-  .dashboard-grid {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
-  .dashboard-grid .data-panel {
-    padding: 16px;
-  }
-
-  .settings-facts {
-    grid-template-columns: 1fr;
-    gap: 2px 0;
-  }
-
-  .settings-facts dt {
-    margin-top: 10px;
-  }
-
-  .login-row {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .footer {
-    align-items: flex-start;
-    flex-direction: column;
-    justify-content: center;
-    padding: 18px 0;
+    transition: none;
   }
 }
 
@@ -1194,6 +1213,7 @@ a.nav-item:hover,
   gap: 14px;
   min-height: 220px;
   max-height: 60vh;
+  max-height: min(60dvh, 520px);
   overflow-y: auto;
   padding: 4px 2px 12px;
 }
@@ -1408,7 +1428,7 @@ a.nav-item:hover,
   height: 42px;
 }
 
-@media (max-width: 560px) {
+@media (max-width: 767px) {
   .agent-input {
     flex-direction: column;
   }
@@ -1723,7 +1743,7 @@ a.nav-item:hover,
   color: #f472b6;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 767px) {
   .agent-flow-step {
     grid-template-columns: 1fr;
     gap: 2px;
@@ -1812,6 +1832,36 @@ a.nav-item:hover,
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+}
+
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (max-width: 767px) {
+  .table-scroll .judgment-table {
+    min-width: 620px;
+  }
+
+  .table-scroll .judgment-table th:first-child,
+  .table-scroll .judgment-table td:first-child {
+    position: sticky;
+    inset-inline-start: 0;
+    z-index: 1;
+    background: var(--surface);
+  }
+
+  .table-scroll .judgment-table thead th:first-child {
+    background: var(--surface-2);
+  }
 }
 
 .judgment-table th,
@@ -2205,21 +2255,132 @@ a.nav-item:hover,
   outline-offset: 3px;
 }
 
-@media (max-width: 1100px) {
+@media (min-width: 768px) and (max-width: 1100px) {
   .overview-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 800px) {
-  .sidebar-nav {
-    overflow-x: auto;
-    overflow-y: hidden;
+/* ---------------------------------------------------------------------------
+   Responsive overrides. These sit last on purpose: a media query does not add
+   specificity, so an override declared before a base rule loses the cascade.
+   Keep every width-based adaptation below this line.
+   ------------------------------------------------------------------------ */
+
+@media (max-width: 1100px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 767px) {
+  .status-strip {
+    min-height: 64px;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 0;
+  }
+
+  .status-strip__identity {
+    width: 100%;
+  }
+
+  .status-strip .service-status {
+    margin-right: auto;
+  }
+
+  .dashboard {
+    padding-top: 28px;
+  }
+
+  .page-header {
+    align-items: flex-start;
+  }
+
+  .page-header .status-badge {
+    margin-top: 4px;
+  }
+
+  .dashboard-grid,
+  .dashboard-grid.dashboard-grid--data,
+  .dashboard-grid.dashboard-grid--settings {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .dashboard-grid .data-panel {
+    padding: 16px;
+  }
+
+  .settings-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px 0;
+  }
+
+  .settings-facts dt {
+    margin-top: 10px;
+  }
+
   .overview-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-form {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  }
+
+  .strategy-symbols {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+
+  .guide-toc {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+
+  .login-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .footer {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    padding: 18px 0 calc(18px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 480px) {
+  .sidebar {
+    padding-inline: 16px;
+  }
+
+  .workspace {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+/* 16px fields: iOS Safari zooms the viewport on focus below that. */
+@media (max-width: 639px) {
+  input,
+  select,
+  textarea {
+    font-size: 1rem;
+  }
+}
+
+@media (pointer: coarse) {
+  .nav-item {
+    min-height: 44px;
+  }
+
+  .tab-button {
+    min-height: 44px;
+  }
+
+  .text-button {
+    min-height: 32px;
+    padding-block: 4px;
   }
 }

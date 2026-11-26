@@ -797,10 +797,14 @@ foundation status (**v1.1, 26 Nov 2026**):
   Agent Lab now includes memory calibration in addition to prompts, semantic
   memory and playbooks.
 - The old welcome-page-only presentation is not the current UI.
-- A browser smoke check of owner access at 390px and 1440px found no
-  horizontal overflow in the pre-v1.1 layout; the v1.1 grouped sidebar is
-  responsive but has not been re-certified in a browser. This does not certify
-  WCAG AA or the full acceptance checklist.
+- A browser check of owner access found no horizontal overflow and a working
+  off-canvas drawer at 320px, 390px, 430px, 768px, 1024px, 1280px and 1440px
+  (v1.2, 26 Nov 2026); tablet and laptop checks were run with a signed-in
+  session across every mounted page. Below 1024px the grouped sidebar is a
+  labelled drawer with 44px targets, wide tables scroll inside a labelled
+  region with the first column pinned, and form fields are 16px so iOS Safari
+  does not zoom on focus. This does not certify WCAG AA or the full
+  acceptance checklist.
 - Settings draft/preview/history, command palette, per-agent Lab sub-tabs,
   replay/evals, experiments and feedback remain future work. The guide's
   target-state IA for those surfaces is unchanged.

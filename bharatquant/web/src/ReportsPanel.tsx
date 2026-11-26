@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { isRecord } from "./contracts.ts";
+import TableScroll from "./TableScroll";
 import { parseReport, parseReports } from "./reportContract.ts";
 import type { Report } from "./reportContract.ts";
 
@@ -143,34 +144,36 @@ export default function ReportsPanel({ csrfToken }: { csrfToken: string }) {
         <p className="panel-note">No reports saved yet.</p>
       )}
       {load.state === "ready" && load.reports.length > 0 && (
-        <table className="judgment-table">
-          <thead>
-            <tr>
-              <th scope="col">Date</th>
-              <th scope="col">Type</th>
-              <th scope="col">Status</th>
-              <th scope="col">Title</th>
-            </tr>
-          </thead>
-          <tbody>
-            {load.reports.map((report) => (
-              <tr key={report.report_id}>
-                <th scope="row">{report.report_date}</th>
-                <td>{report.report_type}</td>
-                <td>{report.status}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => void open(report)}
-                  >
-                    {report.title}
-                  </button>
-                </td>
+        <TableScroll label="Report archive">
+          <table className="judgment-table">
+            <thead>
+              <tr>
+                <th scope="col">Date</th>
+                <th scope="col">Type</th>
+                <th scope="col">Status</th>
+                <th scope="col">Title</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {load.reports.map((report) => (
+                <tr key={report.report_id}>
+                  <th scope="row">{report.report_date}</th>
+                  <td>{report.report_type}</td>
+                  <td>{report.status}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => void open(report)}
+                    >
+                      {report.title}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
       {selected !== null && (
         <article className="strategy-result">
@@ -189,58 +192,62 @@ export default function ReportsPanel({ csrfToken }: { csrfToken: string }) {
             </button>
           </div>
           {rows(selected, "predictions").length > 0 && (
-            <table className="judgment-table">
-              <caption>Frozen predictions</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Kind</th>
-                  <th scope="col">Target</th>
-                  <th scope="col">Probability</th>
-                  <th scope="col">Statement</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows(selected, "predictions").map((item, index) => (
-                  <tr key={`${item.kind}-${index}`}>
-                    <th scope="row">{item.kind}</th>
-                    <td>{item.target}</td>
-                    <td>
-                      {item.probability === null
-                        ? "n/a"
-                        : `${Math.round(item.probability * 100)}%`}
-                    </td>
-                    <td>{item.statement}</td>
+            <TableScroll label="Frozen predictions">
+              <table className="judgment-table">
+                <caption>Frozen predictions</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Kind</th>
+                    <th scope="col">Target</th>
+                    <th scope="col">Probability</th>
+                    <th scope="col">Statement</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows(selected, "predictions").map((item, index) => (
+                    <tr key={`${item.kind}-${index}`}>
+                      <th scope="row">{item.kind}</th>
+                      <td>{item.target}</td>
+                      <td>
+                        {item.probability === null
+                          ? "n/a"
+                          : `${Math.round(item.probability * 100)}%`}
+                      </td>
+                      <td>{item.statement}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
           {rows(selected, "outcomes").length > 0 && (
-            <table className="judgment-table">
-              <caption>Resolved outcomes</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Kind</th>
-                  <th scope="col">Target</th>
-                  <th scope="col">Probability</th>
-                  <th scope="col">Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows(selected, "outcomes").map((item, index) => (
-                  <tr key={`${item.kind}-${index}`}>
-                    <th scope="row">{item.kind}</th>
-                    <td>{item.target}</td>
-                    <td>
-                      {item.probability === null
-                        ? "n/a"
-                        : `${Math.round(item.probability * 100)}%`}
-                    </td>
-                    <td>{item.occurred === null ? "n/a" : item.occurred ? "HIT" : "MISS"}</td>
+            <TableScroll label="Resolved outcomes">
+              <table className="judgment-table">
+                <caption>Resolved outcomes</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Kind</th>
+                    <th scope="col">Target</th>
+                    <th scope="col">Probability</th>
+                    <th scope="col">Result</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows(selected, "outcomes").map((item, index) => (
+                    <tr key={`${item.kind}-${index}`}>
+                      <th scope="row">{item.kind}</th>
+                      <td>{item.target}</td>
+                      <td>
+                        {item.probability === null
+                          ? "n/a"
+                          : `${Math.round(item.probability * 100)}%`}
+                      </td>
+                      <td>{item.occurred === null ? "n/a" : item.occurred ? "HIT" : "MISS"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
           <pre className="working-memory-json">{selected.body_md}</pre>
         </article>

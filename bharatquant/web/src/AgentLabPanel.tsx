@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import TableScroll from "./TableScroll";
 
 import { parseDecisionPreview } from "./decisionContract";
 import type { DecisionPreview } from "./decisionContract";
@@ -395,38 +396,40 @@ function DecisionResult({ result }: { result: DecisionPreview }) {
       <p className="panel-note">{result.screener.reason}</p>
 
       <h3>Battery judgments</h3>
-      <table className="judgment-table">
-        <thead>
-          <tr>
-            <th scope="col">Question</th>
-            <th scope="col">Answer</th>
-            <th scope="col">Confidence</th>
-          </tr>
-        </thead>
-        <tbody>
-          {result.judgments.map((judgment) => (
-            <tr key={judgment.name}>
-              <th scope="row">{judgment.name}</th>
-              <td>
-                {judgment.kind === "choice"
-                  ? judgment.choice
-                  : judgment.kind === "score"
-                    ? judgment.score
-                    : judgment.noul !== null
-                      ? judgment.noul.toFixed(3)
-                      : "n/a"}
-              </td>
-              <td>
-                {judgment.confidence === null
-                  ? judgment.kind === "noul"
-                    ? "n/a (noul)"
-                    : "n/a"
-                  : judgment.confidence.toFixed(2)}
-              </td>
+      <TableScroll label="Battery judgments">
+        <table className="judgment-table">
+          <thead>
+            <tr>
+              <th scope="col">Question</th>
+              <th scope="col">Answer</th>
+              <th scope="col">Confidence</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {result.judgments.map((judgment) => (
+              <tr key={judgment.name}>
+                <th scope="row">{judgment.name}</th>
+                <td>
+                  {judgment.kind === "choice"
+                    ? judgment.choice
+                    : judgment.kind === "score"
+                      ? judgment.score
+                      : judgment.noul !== null
+                        ? judgment.noul.toFixed(3)
+                        : "n/a"}
+                </td>
+                <td>
+                  {judgment.confidence === null
+                    ? judgment.kind === "noul"
+                      ? "n/a (noul)"
+                      : "n/a"
+                    : judgment.confidence.toFixed(2)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableScroll>
 
       <h3>Route</h3>
       <dl className="settings-facts">

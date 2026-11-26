@@ -1,6 +1,8 @@
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
+import Sidebar from "./Sidebar";
+import type { NavView } from "./Sidebar";
 import DataStatus from "./DataStatus";
 import CalendarCoverage from "./CalendarCoverage";
 import SnapshotFreshness from "./SnapshotFreshness";
@@ -31,19 +33,7 @@ import ModelsConfigPanel from "./ModelsConfigPanel";
 import HowToUsePanel from "./HowToUsePanel";
 import TodayOverview from "./TodayOverview";
 
-type WorkspaceView =
-  | "today"
-  | "opportunities"
-  | "trade"
-  | "research"
-  | "technical"
-  | "reports"
-  | "strategy"
-  | "agents"
-  | "data"
-  | "schedules"
-  | "settings"
-  | "guide";
+type WorkspaceView = NavView;
 
 type SettingsTab = "overview" | "models" | "risk" | "runtime";
 
@@ -166,8 +156,10 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [view, setView] = useState<WorkspaceView>("today");
+  const [navOpen, setNavOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("overview");
   const [stagedPlan, setStagedPlan] = useState<StrategyPlan | null>(null);
+  const navToggleRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -348,50 +340,38 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar" aria-label="Primary navigation">
-        <a className="wordmark" href="/" aria-label="BharatQuant home">
-          <span className="wordmark-mark" aria-hidden="true">BQ</span>
-          <span>BharatQuant</span>
-        </a>
-
-        {session.state === "signed_in" && (
-          <nav className="sidebar-nav" aria-label="Workspace">
-            {NAV_GROUPS.map((group, index) => (
-              <Fragment key={group.label}>
-                <p
-                  className={`nav-label${index > 0 ? " nav-label--secondary" : ""}`}
-                >
-                  {group.label}
-                </p>
-                {group.items.map((item) => (
-                  <button
-                    key={item.view}
-                    type="button"
-                    className={`nav-item nav-item--button${view === item.view ? " nav-item--active" : ""}`}
-                    aria-current={view === item.view ? "page" : undefined}
-                    onClick={() => setView(item.view)}
-                  >
-                    <span aria-hidden="true">{item.icon}</span>
-                    {item.label}
-                  </button>
-                ))}
-              </Fragment>
-            ))}
-          </nav>
-        )}
-
-        <div className="sidebar-footer">
-          <span className="local-dot" aria-hidden="true" />
-          <div>
-            <strong>Local workspace</strong>
-            <span>Loopback only</span>
-          </div>
-        </div>
-      </aside>
+      <Sidebar
+        groups={NAV_GROUPS}
+        view={view}
+        signedIn={session.state === "signed_in"}
+        open={navOpen}
+        onSelect={(next) => {
+          setView(next);
+          setNavOpen(false);
+        }}
+        onClose={() => setNavOpen(false)}
+        toggleRef={navToggleRef}
+      />
 
       <div className="workspace">
         <header className="status-strip" aria-label="System status">
+          <button
+            ref={navToggleRef}
+            type="button"
+            className="nav-toggle"
+            aria-expanded={navOpen}
+            aria-controls="app-sidebar"
+            aria-label={navOpen ? "Close navigation" : "Open navigation"}
+            onClick={() => setNavOpen((value) => !value)}
+          >
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </button>
           <div className="status-strip__identity">
+            <a className="strip-mark" href="/" aria-label="BharatQuant home">
+              <span className="wordmark-mark" aria-hidden="true">BQ</span>
+            </a>
             <span className="breadcrumb">{VIEW_LABELS[view]}</span>
             <span className="mode-label">PAPER ONLY</span>
           </div>

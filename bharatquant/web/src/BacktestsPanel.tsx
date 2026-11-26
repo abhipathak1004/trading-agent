@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import TableScroll from "./TableScroll";
 
 import { parseBacktest, parseBacktests, parseStrategies } from "./backtestContract.ts";
 import type { BacktestRun, BacktestTrade, StrategyRecord } from "./backtestContract.ts";
@@ -280,31 +281,33 @@ export default function BacktestsPanel({ csrfToken }: { csrfToken: string }) {
             </div>
           </dl>
           {selected.trades.length > 0 && (
-            <table className="judgment-table">
-              <caption>Archived trades</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Symbol</th>
-                  <th scope="col">Entry</th>
-                  <th scope="col">Exit</th>
-                  <th scope="col">Qty</th>
-                  <th scope="col">Net</th>
-                  <th scope="col">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selected.trades.map((trade: BacktestTrade, index) => (
-                  <tr key={`${trade.symbol}-${index}`}>
-                    <th scope="row">{trade.symbol}</th>
-                    <td>{trade.entry_at.slice(0, 10)}</td>
-                    <td>{trade.exit_at.slice(0, 10)}</td>
-                    <td>{trade.quantity}</td>
-                    <td>{formatPaise(trade.net_pnl_paise)}</td>
-                    <td>{trade.exit_reason}</td>
+            <TableScroll label="Archived trades">
+              <table className="judgment-table">
+                <caption>Archived trades</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Symbol</th>
+                    <th scope="col">Entry</th>
+                    <th scope="col">Exit</th>
+                    <th scope="col">Qty</th>
+                    <th scope="col">Net</th>
+                    <th scope="col">Reason</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {selected.trades.map((trade: BacktestTrade, index) => (
+                    <tr key={`${trade.symbol}-${index}`}>
+                      <th scope="row">{trade.symbol}</th>
+                      <td>{trade.entry_at.slice(0, 10)}</td>
+                      <td>{trade.exit_at.slice(0, 10)}</td>
+                      <td>{trade.quantity}</td>
+                      <td>{formatPaise(trade.net_pnl_paise)}</td>
+                      <td>{trade.exit_reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
           <div className="models-grid models-grid--compact">
             <label htmlFor="backtest-note">
@@ -342,40 +345,42 @@ export default function BacktestsPanel({ csrfToken }: { csrfToken: string }) {
       )}
 
       {runs.length > 0 && (
-        <table className="judgment-table">
-          <caption>Recent backtest runs</caption>
-          <thead>
-            <tr>
-              <th scope="col">Strategy</th>
-              <th scope="col">Engine</th>
-              <th scope="col">Trades</th>
-              <th scope="col">Net</th>
-              <th scope="col">Review</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((run) => (
-              <tr key={run.run_id}>
-                <th scope="row">
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => {
-                      setSelected(run);
-                      setNote(run.review_note ?? "");
-                    }}
-                  >
-                    {run.strategy_id} v{run.version}
-                  </button>
-                </th>
-                <td>{run.engine}</td>
-                <td>{run.metrics.trades}</td>
-                <td>{formatPaise(run.metrics.net_pnl_paise)}</td>
-                <td>{run.review_decision ?? "—"}</td>
+        <TableScroll label="Recent backtest runs">
+          <table className="judgment-table">
+            <caption>Recent backtest runs</caption>
+            <thead>
+              <tr>
+                <th scope="col">Strategy</th>
+                <th scope="col">Engine</th>
+                <th scope="col">Trades</th>
+                <th scope="col">Net</th>
+                <th scope="col">Review</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {runs.map((run) => (
+                <tr key={run.run_id}>
+                  <th scope="row">
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => {
+                        setSelected(run);
+                        setNote(run.review_note ?? "");
+                      }}
+                    >
+                      {run.strategy_id} v{run.version}
+                    </button>
+                  </th>
+                  <td>{run.engine}</td>
+                  <td>{run.metrics.trades}</td>
+                  <td>{formatPaise(run.metrics.net_pnl_paise)}</td>
+                  <td>{run.review_decision ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
     </section>
   );

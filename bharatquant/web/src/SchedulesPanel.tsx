@@ -11,6 +11,7 @@ import type {
   ScheduleConfig,
   ScheduledJobRun,
 } from "./schedulerContract.ts";
+import TableScroll from "./TableScroll";
 
 type LoadState =
   | { state: "loading" | "error" }
@@ -454,26 +455,28 @@ export default function SchedulesPanel({ csrfToken }: { csrfToken: string }) {
             </button>
           </div>
           {history[schedule.schedule_id] !== undefined && (
-            <table className="judgment-table">
-              <thead>
-                <tr>
-                  <th scope="col">Job</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Attempts</th>
-                  <th scope="col">Failure</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history[schedule.schedule_id].map((run) => (
-                  <tr key={run.run_id}>
-                    <th scope="row">{run.job_id}</th>
-                    <td>{run.status}</td>
-                    <td>{run.attempts}/{run.max_attempts}</td>
-                    <td>{run.failure_code ?? "—"}</td>
+            <TableScroll label="Schedule run history">
+              <table className="judgment-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Job</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Attempts</th>
+                    <th scope="col">Failure</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {history[schedule.schedule_id].map((run) => (
+                    <tr key={run.run_id}>
+                      <th scope="row">{run.job_id}</th>
+                      <td>{run.status}</td>
+                      <td>{run.attempts}/{run.max_attempts}</td>
+                      <td>{run.failure_code ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </article>
       ))}

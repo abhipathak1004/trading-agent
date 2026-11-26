@@ -107,6 +107,9 @@ dies when you press **Stop tunnel** or quit the server.
 - The default posture is unchanged: with no tunnel active, only `127.0.0.1` is
   accepted and non-loopback Host/Origin requests are rejected. While a tunnel is
   live its host and origin are allow-listed, and the session cookie is `Secure`.
+- On a phone or tablet the sidebar becomes a drawer: use the three-line toggle
+  in the top bar. Wide tables scroll inside their own card with the first
+  column pinned, so the page itself never scrolls sideways.
 - `cloudflared` resolves from `BQ_CLOUDFLARED`, then `PATH`, then `BQ_HOME/bin`.
   On the first Start the app may download the official release into `BQ_HOME/bin`
   (verified with `cloudflared --version`) instead of asking you to install it.

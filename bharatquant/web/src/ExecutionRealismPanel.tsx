@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import TableScroll from "./TableScroll";
 
 import { parsePaperRealism } from "./executionContract.ts";
 import type { PaperRealism } from "./executionContract.ts";
@@ -248,90 +249,96 @@ export default function ExecutionRealismPanel({
       </dl>
 
       {realism.product_positions.length > 0 && (
-        <table className="judgment-table">
-          <caption>Product positions</caption>
-          <thead>
-            <tr>
-              <th scope="col">Instrument</th>
-              <th scope="col">Product</th>
-              <th scope="col">Quantity</th>
-            </tr>
-          </thead>
-          <tbody>
-            {realism.product_positions.map((item) => (
-              <tr key={`${item.instrument_id}-${item.product}`}>
-                <th scope="row">{item.instrument_id}</th>
-                <td>{item.product}</td>
-                <td>{item.quantity}</td>
+        <TableScroll label="Product positions">
+          <table className="judgment-table">
+            <caption>Product positions</caption>
+            <thead>
+              <tr>
+                <th scope="col">Instrument</th>
+                <th scope="col">Product</th>
+                <th scope="col">Quantity</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {realism.product_positions.map((item) => (
+                <tr key={`${item.instrument_id}-${item.product}`}>
+                  <th scope="row">{item.instrument_id}</th>
+                  <td>{item.product}</td>
+                  <td>{item.quantity}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
 
       {realism.tax_lots.length > 0 && (
-        <table className="judgment-table">
-          <caption>Open tax lots</caption>
-          <thead>
-            <tr>
-              <th scope="col">Instrument</th>
-              <th scope="col">Product</th>
-              <th scope="col">Remaining</th>
-              <th scope="col">Settles</th>
-              <th scope="col">Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {realism.tax_lots.map((lot) => (
-              <tr key={lot.lot_id}>
-                <th scope="row">{lot.instrument_id}</th>
-                <td>{lot.product}</td>
-                <td>
-                  {lot.remaining_quantity} / {lot.quantity}
-                </td>
-                <td>{lot.settles_on}</td>
-                <td>{formatPaise(lot.cost_paise)}</td>
+        <TableScroll label="Open tax lots">
+          <table className="judgment-table">
+            <caption>Open tax lots</caption>
+            <thead>
+              <tr>
+                <th scope="col">Instrument</th>
+                <th scope="col">Product</th>
+                <th scope="col">Remaining</th>
+                <th scope="col">Settles</th>
+                <th scope="col">Cost</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {realism.tax_lots.map((lot) => (
+                <tr key={lot.lot_id}>
+                  <th scope="row">{lot.instrument_id}</th>
+                  <td>{lot.product}</td>
+                  <td>
+                    {lot.remaining_quantity} / {lot.quantity}
+                  </td>
+                  <td>{lot.settles_on}</td>
+                  <td>{formatPaise(lot.cost_paise)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
 
       {pending.length > 0 && (
-        <table className="judgment-table">
-          <caption>Orders waiting for owner approval</caption>
-          <thead>
-            <tr>
-              <th scope="col">Order</th>
-              <th scope="col">Reason</th>
-              <th scope="col">Decision</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pending.map((item) => (
-              <tr key={item.approval_id}>
-                <th scope="row">{item.order_id}</th>
-                <td>{item.reason}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => void decide(item.order_id, true)}
-                  >
-                    Approve
-                  </button>{" "}
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => void decide(item.order_id, false)}
-                  >
-                    Reject
-                  </button>
-                </td>
+        <TableScroll label="Orders waiting for owner approval">
+          <table className="judgment-table">
+            <caption>Orders waiting for owner approval</caption>
+            <thead>
+              <tr>
+                <th scope="col">Order</th>
+                <th scope="col">Reason</th>
+                <th scope="col">Decision</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {pending.map((item) => (
+                <tr key={item.approval_id}>
+                  <th scope="row">{item.order_id}</th>
+                  <td>{item.reason}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => void decide(item.order_id, true)}
+                    >
+                      Approve
+                    </button>{" "}
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => void decide(item.order_id, false)}
+                    >
+                      Reject
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
 
       <form className="config-form" onSubmit={(event) => void createStop(event)}>
@@ -412,50 +419,52 @@ export default function ExecutionRealismPanel({
       </form>
 
       {realism.stops.length > 0 && (
-        <table className="judgment-table">
-          <caption>Server-side stops</caption>
-          <thead>
-            <tr>
-              <th scope="col">Instrument</th>
-              <th scope="col">Qty</th>
-              <th scope="col">Stop</th>
-              <th scope="col">Target</th>
-              <th scope="col">Status</th>
-              <th scope="col">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {realism.stops.map((item) => (
-              <tr key={item.stop_id}>
-                <th scope="row">{item.instrument_id}</th>
-                <td>{item.quantity}</td>
-                <td>{formatPaise(item.stop_price_paise)}</td>
-                <td>
-                  {item.target_price_paise === null
-                    ? "—"
-                    : formatPaise(item.target_price_paise)}
-                </td>
-                <td>
-                  {item.status}
-                  {item.trigger_kind === null ? "" : ` · ${item.trigger_kind}`}
-                </td>
-                <td>
-                  {item.status === "ACTIVE" ? (
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => void cancelStop(item.stop_id)}
-                    >
-                      Cancel
-                    </button>
-                  ) : (
-                    "—"
-                  )}
-                </td>
+        <TableScroll label="Server-side stops">
+          <table className="judgment-table">
+            <caption>Server-side stops</caption>
+            <thead>
+              <tr>
+                <th scope="col">Instrument</th>
+                <th scope="col">Qty</th>
+                <th scope="col">Stop</th>
+                <th scope="col">Target</th>
+                <th scope="col">Status</th>
+                <th scope="col">Action</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {realism.stops.map((item) => (
+                <tr key={item.stop_id}>
+                  <th scope="row">{item.instrument_id}</th>
+                  <td>{item.quantity}</td>
+                  <td>{formatPaise(item.stop_price_paise)}</td>
+                  <td>
+                    {item.target_price_paise === null
+                      ? "—"
+                      : formatPaise(item.target_price_paise)}
+                  </td>
+                  <td>
+                    {item.status}
+                    {item.trigger_kind === null ? "" : ` · ${item.trigger_kind}`}
+                  </td>
+                  <td>
+                    {item.status === "ACTIVE" ? (
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => void cancelStop(item.stop_id)}
+                      >
+                        Cancel
+                      </button>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
       )}
 
       {message !== "" && (
