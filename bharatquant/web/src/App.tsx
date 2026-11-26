@@ -32,6 +32,7 @@ import CloudflareTunnelPanel from "./CloudflareTunnelPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
 import HowToUsePanel from "./HowToUsePanel";
 import TodayOverview from "./TodayOverview";
+import CampaignPanel from "./CampaignPanel";
 
 type WorkspaceView = NavView;
 
@@ -45,6 +46,7 @@ const NAV_GROUPS: {
     label: "Daily",
     items: [
       { view: "today", label: "Today", icon: "◫" },
+      { view: "campaign", label: "Campaign", icon: "◈" },
       { view: "opportunities", label: "Opportunities", icon: "◉" },
       { view: "trade", label: "Trade", icon: "◇" },
     ],
@@ -82,6 +84,7 @@ const NAV_GROUPS: {
 
 const VIEW_LABELS: Record<WorkspaceView, string> = {
   today: "Today",
+  campaign: "Campaign",
   opportunities: "Opportunities",
   trade: "Trade",
   research: "Research",
@@ -562,6 +565,38 @@ export default function App() {
                 </button>
               </div>
             </section>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "campaign" && (
+          <section className="dashboard" id="campaign" aria-labelledby="campaign-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">NEWS CATALYST CAMPAIGN</p>
+                <h1 id="campaign-page-title">Today&rsquo;s campaign</h1>
+                <p className="intro">
+                  Collect the news, keep the positive catalysts, shortlist 5–10
+                  names, freeze deterministic technical plans and wait for a
+                  breakout at the open. Paper fills only.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Campaign scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Delayed candles, deliberate rules</strong>
+                <p>
+                  Yahoo 5-minute NSE candles are delayed by about 15 minutes, so a
+                  breakout is confirmed and filled on the delayed candle. Stops,
+                  targets, sizing and weights are computed in code; the model never
+                  sees a price it can change.
+                </p>
+              </div>
+            </section>
+
+            <CampaignPanel csrfToken={session.csrfToken} />
           </section>
         )}
 

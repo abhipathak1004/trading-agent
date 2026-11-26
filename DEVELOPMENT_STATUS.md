@@ -6,23 +6,49 @@ task. History lives in git and
 
 ## Current state
 
-- **Responsive UI (26 Nov 2026):** the shell now works on phones and tablets.
-  Below 1024px the sidebar is an off-canvas drawer — `web/src/Sidebar.tsx`
-  (wrapping `App.tsx`) owns the state, a backdrop, `inert` when closed, body
-  scroll lock, ESC/backdrop/item-select close, focus onto the active item and
-  back to the toggle, and a 44px target floor. The old ≤800px horizontal
-  nav strip and its `.nav-label` suppression are gone, so group headings
-  survive at every width. All 22 `.judgment-table` instances (11 panels) are
-  wrapped in `web/src/TableScroll.tsx`, a labelled, focusable
-  `role="region"`; under 768px the table keeps a 620px minimum and the first
-  column is sticky, so data scrolls inside the card and the page never
-  scrolls sideways. `web/index.html` carries `viewport-fit=cover`, `100dvh`
-  pairs back every `100vh`, safe-area insets pad the sidebar/footer, and
-  fields are 16px under 640px so iOS Safari no longer zooms on focus.
-  Verified in Chrome via CDP with a signed-in session at 320/390/430/768/1024/
-  1280/1440 across all 10 mounted pages: **zero horizontal overflow**, drawer
-  open/close/focus/labels correct at every width ≤1024, desktop unchanged.
-  `web/tests/responsive.test.mjs` guards the invariants.
+- **Catalyst campaign delivered (26 Nov 2026):** the news → catalyst →
+  shortlist → deterministic TA/plan → breakout-trigger → paper fill → 5pm review
+  loop is wired end to end. Migration **038** adds `equity_master`,
+  `news_catalysts`, `campaigns`, `campaign_items`, `campaign_item_events`.
+  New modules: `data/equity_master.py` + `infra/equity_listing.py` (bounded NSE
+  listing), `catalysts.py` (event taxonomy, polarity, ₹-crore strength, alias
+  attribution), `shortlist.py`, `campaign_config.py`, `campaign.py`,
+  `triggers.py`, `campaign_feedback.py`, and `analysis/builder.py` (shared
+  pipeline builder; `api.py` delegates to it). Yahoo is registered for
+  `BARS_INTRADAY`, so delayed 5-minute NSE candles work without Kite.
+  - Entry is a breakout above the previous session high with a 0.5% chase cap.
+    Plans are swing/CNC, so exits are T+1 (delivery settlement) — the trigger
+    engine manages entries and exits from 09:15 to 15:15 every 5 minutes; the
+    campaign owns its stop/target (no duplicate `paper_stops` row).
+  - Default analysis is `deterministic` (no LLM, zero token cost for 8 names);
+    `analysis_depth="full"` opts into the existing debate pipeline.
+  - The evening report now carries a "Campaign review — what to change tomorrow"
+    section with per-catalyst hit rates and the Bayesian-smoothed weights the
+    next shortlist applies.
+  - UI: new Daily → **Campaign** tab (pipeline stages, candidates, trigger
+    levels, fills, review, settings) and a Today status card. API:
+    `/api/v1/campaign/*`, `/api/v1/settings/campaign`,
+    `/api/v1/equity-master/*`. Jobs: `campaign.research` 08:05 and
+    `campaign.triggers` every 5 minutes.
+  - News is multi-source by default: Pulse plus two Google News `when:7d`
+    queries for order wins and results. Lookback is 96 hours; publisher suffixes
+    are stripped, listicle headlines are skipped, and the longest company name
+    wins over a parent ticker. Residual attribution errors are visible in the
+    candidate table and are what the 5pm hit-rate table is meant to correct.
+  - Caveats surfaced in UI/report: Yahoo candles are ~15 min delayed;
+    `calendar_sessions` is empty so session gating uses a weekday/time fallback;
+    unmatched corporate headlines are counted.
+- **Live paper run (26 Nov 2026, 21:05 IST):** migration 038 applied to the
+  owner DB (backup at `~/Backups/bq-pre-campaign-20261126.db`). `paper-main`
+  created with ₹10,00,000. Schedules version 1 seeded: `campaign.research`
+  08:05, `campaign.triggers` every 5 min 09:15–15:15, plus news/morning/stops/
+  square-off/evening/memory. The 27 Nov campaign `camp_20261127` is **ACTIVE**:
+  7 names shortlisted, 2 actionable — **LT** breakout above 4160.00 (stop
+  4008.88, target 4386.68) and **LCCPROJECT** above 136.63 (stop 121.45, target
+  159.40); DBL/NBCC/EMSLIMITED/TEXRAIL/ALEMBICLTD were rejected by the
+  deterministic gate. Server is running at `127.0.0.1:8000` (background task
+  `s83v01hj`). Next: 08:05 forced rebuild, 09:15–15:15 scans, 17:00 campaign
+  review. Run `just run` if the background process is gone.
 - Cloudflare tunnel fixed (26 Nov 2026): the panel never left "Waiting for
   Cloudflare" and the tunnel had **never** once reached live (audit DB: 3 ×
   `tunnel.start_failed`, 0 × `tunnel.started`). Two independent causes:
@@ -35,10 +61,10 @@ task. History lives in git and
      negatively cached by the ISP resolver (measured: system resolver NXDOMAIN
      for ~80 s; Cloudflare DoH resolved in ~16 s), so the probe failed the whole
      `HEALTH_TIMEOUT_SECONDS` window and killed a perfectly good tunnel.
-- Fix: the panel re-arms its poll effect until a terminal state (bounded
-  `MAX_POLLS`, keeps last known status through fetch errors, both buttons usable
-  when stalled). The manager now gates on cloudflared's `Registered tunnel
-  connection` line and probes the **loopback origin**, not the public name;
+- Fix: the panel polls for as long as the backend reports a busy state, keeps
+  the last known status through fetch errors and retries, and leaves Stop usable
+  in any non-terminal state. The manager now gates on cloudflared's `Registered
+  tunnel connection` line and probes the **loopback origin**, not the public name;
   failures append the last cloudflared `ERR` line; log lines bound at 600 chars;
   `request_start` is a no-op while live. Start/health budgets: 60 s / 20 s.
 - Verified end-to-end against real cloudflared: reaches **live in 6–8 s**, poll
@@ -62,7 +88,7 @@ task. History lives in git and
   Today is a read-only command center of linked summary cards. `SchedulesPanel`
   and `OpportunitiesPanel` were previously built but never mounted; both are
   now wired. `PaperAccountStatus.tsx` was removed as redundant. Frontend
-  typecheck, 116 tests and the production build pass.
+  typecheck, 119 tests and the production build pass.
 - Single-owner, paper-only Indian equities system. **No broker order path**; Kite
   is read-only. Paper execution is the only execution path.
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
@@ -73,7 +99,7 @@ task. History lives in git and
 - **mypy:** 90 pre-existing errors across `cli.py`, `paper_performance.py`,
   `infra/scheduler.py` and the tunnel test fakes. Do not “fix” them as part of
   maintenance; the tunnel change adds none.
-- **Next migration number:** `038` if a new migration is needed.
+- **Next migration number:** `039` if a new migration is needed.
 
 ## Phase 19 delivered
 
@@ -130,6 +156,7 @@ maintenance/optional breadth:
 | Research | `bq/research_expansion.py`, `bq/fundamentals.py` |
 | Strategies | `bq/strategy_dsl.py`, `bq/backtest.py` |
 | Execution | `bq/paper_trading.py`, `bq/execution/` |
+| Campaign | `bq/campaign.py`, `bq/catalysts.py`, `bq/shortlist.py`, `bq/triggers.py`, `bq/campaign_feedback.py`, `bq/data/equity_master.py`, `web/src/CampaignPanel.tsx` |
 
 ## Commands
 
@@ -146,4 +173,12 @@ npm test && npm run typecheck && npm run build
 # operations
 BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq bench
 BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq db backup --output "$HOME/Backups/bq.db"
+
+# campaign (first run creates paper-main, saves defaults, seeds schedules)
+uv run --locked bq campaign init
+uv run --locked bq campaign refresh-master
+uv run --locked bq campaign research
+uv run --locked bq campaign scan
+uv run --locked bq campaign status
+uv run --locked bq campaign review
 ```

@@ -5,6 +5,7 @@ const DRAWER_QUERY = "(max-width: 1024px)";
 
 export type NavView =
   | "today"
+  | "campaign"
   | "opportunities"
   | "trade"
   | "research"

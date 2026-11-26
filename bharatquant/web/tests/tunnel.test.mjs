@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  MAX_POLLS,
-  isBusy,
-  parseTunnelStatus,
-  shouldPoll,
-} from "../src/tunnelContract.ts";
+import { isBusy, parseTunnelStatus } from "../src/tunnelContract.ts";
 
 function status(state, url = null) {
   return {
@@ -59,25 +54,18 @@ test("malformed payloads are rejected", () => {
   assert.throws(() => parseTunnelStatus({ ...status("stopped"), error: 42 }));
 });
 
-test("busy states keep polling until the cap", () => {
+test("busy states keep polling", () => {
   for (const state of ["downloading", "starting", "stopping"]) {
-    const parsed = parseTunnelStatus(status(state));
-    assert.equal(isBusy(parsed), true);
-    assert.equal(shouldPoll(parsed, 0), true);
-    assert.equal(shouldPoll(parsed, MAX_POLLS - 1), true);
-    assert.equal(shouldPoll(parsed, MAX_POLLS), false);
+    assert.equal(isBusy(parseTunnelStatus(status(state))), true);
   }
 });
 
 test("terminal states never poll", () => {
   for (const state of ["stopped", "error"]) {
-    const parsed = parseTunnelStatus(status(state));
-    assert.equal(isBusy(parsed), false);
-    assert.equal(shouldPoll(parsed, 0), false);
+    assert.equal(isBusy(parseTunnelStatus(status(state))), false);
   }
   const live = parseTunnelStatus(
     status("live", "https://brave-unit-4821.trycloudflare.com"),
   );
   assert.equal(isBusy(live), false);
-  assert.equal(shouldPoll(live, 0), false);
 });

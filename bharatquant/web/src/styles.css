@@ -1008,7 +1008,8 @@ a.nav-item:hover,
 
 /* A control used outside a form row still has to look like the rest. */
 .settings-panel > label > select,
-.settings-panel > label > input {
+.settings-panel > label > input,
+.settings-panel > label > textarea {
   display: block;
   width: min(100%, 320px);
   margin-top: 6px;
@@ -2383,4 +2384,64 @@ a.nav-item:hover,
     min-height: 32px;
     padding-block: 4px;
   }
+}
+
+/* Campaign ------------------------------------------------------------ */
+
+.campaign-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+
+.campaign-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--muted-strong);
+}
+
+.campaign-stage strong {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.campaign-stage--done {
+  border-color: rgb(52 211 153 / 45%);
+}
+
+.campaign-stage--active {
+  border-color: rgb(251 191 36 / 55%);
+}
+
+.campaign-stage--pending {
+  opacity: 0.6;
+}
+
+.status-badge--ok {
+  border-color: rgb(52 211 153 / 45%);
+  color: var(--ok);
+}
+
+.status-badge--warn {
+  border-color: rgb(251 191 36 / 45%);
+  color: var(--warn);
+}
+
+.status-badge--danger {
+  border-color: rgb(244 114 182 / 45%);
+  color: var(--danger);
+}
+
+.status-badge--muted {
+  color: var(--muted);
 }

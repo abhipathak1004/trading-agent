@@ -23,7 +23,6 @@ export type TunnelStatus = {
 const TUNNEL_URL = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
 
 export const POLL_MS = 1500;
-export const MAX_POLLS = 80;
 
 export function isBusy(status: TunnelStatus): boolean {
   return (
@@ -31,10 +30,6 @@ export function isBusy(status: TunnelStatus): boolean {
     status.state === "starting" ||
     status.state === "stopping"
   );
-}
-
-export function shouldPoll(status: TunnelStatus, polls: number): boolean {
-  return isBusy(status) && polls < MAX_POLLS;
 }
 
 function isState(value: unknown): value is TunnelState {

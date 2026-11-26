@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import {
-  POLL_MS,
-  isBusy,
-  parseTunnelStatus,
-  shouldPoll,
-} from "./tunnelContract.ts";
+import { POLL_MS, isBusy, parseTunnelStatus } from "./tunnelContract.ts";
 import type { TunnelStatus } from "./tunnelContract.ts";
 
 type BusyState = "idle" | "starting" | "stopping";
@@ -42,7 +37,7 @@ export default function CloudflareTunnelPanel({
 }) {
   const [status, setStatus] = useState<TunnelStatus | null>(null);
   const [unavailable, setUnavailable] = useState(false);
-  const [polls, setPolls] = useState(0);
+  const [tick, setTick] = useState(0);
   const [busy, setBusy] = useState<BusyState>("idle");
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -59,15 +54,15 @@ export default function CloudflareTunnelPanel({
   }, []);
 
   useEffect(() => {
-    if (status === null || !shouldPoll(status, polls)) {
+    if (status !== null && !unavailable && !isBusy(status)) {
       return;
     }
     const timer = setTimeout(() => {
-      setPolls((count) => count + 1);
+      setTick((count) => count + 1);
       void refresh();
     }, POLL_MS);
     return () => clearTimeout(timer);
-  }, [status, polls, refresh]);
+  }, [status, unavailable, tick, refresh]);
 
   useEffect(() => {
     void refresh();
@@ -76,7 +71,6 @@ export default function CloudflareTunnelPanel({
   async function act(kind: "start" | "stop") {
     setBusy(kind === "start" ? "starting" : "stopping");
     setNotice(null);
-    setPolls(0);
     try {
       const response = await fetch(`/api/v1/settings/tunnel/${kind}`, {
         method: "POST",
@@ -124,15 +118,12 @@ export default function CloudflareTunnelPanel({
   }
 
   const live = status.state === "live" && status.url !== null;
-  const stalled = isBusy(status) && !shouldPoll(status, polls);
   const working = busy !== "idle" || isBusy(status);
   const displayNotice =
     notice ??
-    (stalled
-      ? "The tunnel is taking longer than expected. Stop and try again."
-      : unavailable
-        ? "Lost contact with the server; showing the last known state."
-        : null);
+    (unavailable
+      ? "Lost contact with the server; showing the last known state."
+      : null);
 
   return (
     <section className="settings-panel" aria-labelledby="tunnel-title">
@@ -182,7 +173,7 @@ export default function CloudflareTunnelPanel({
             : status.state === "downloading"
               ? "Downloading the official cloudflared build into your BharatQuant home."
               : status.state === "starting"
-                ? "Cloudflare is assigning a public URL and waiting for it to answer."
+                ? "Cloudflare is assigning a public URL and registering the connection."
                 : "No tunnel is running. Local access stays on 127.0.0.1."}
         </p>
       )}
@@ -210,10 +201,7 @@ export default function CloudflareTunnelPanel({
           type="button"
           className="text-button"
           onClick={() => void act("stop")}
-          disabled={
-            busy === "stopping" ||
-            (!live && status.state !== "error" && !stalled)
-          }
+          disabled={status.state === "stopped" || status.state === "stopping"}
         >
           {busy === "stopping" ? "Stopping..." : "Stop tunnel"}
         </button>

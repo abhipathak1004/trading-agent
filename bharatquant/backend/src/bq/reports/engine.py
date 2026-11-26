@@ -13,6 +13,7 @@ from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from bq.campaign_feedback import campaign_review, resolve_outcomes
 from bq.core import Clock, SystemClock, canonical_digest
 from bq.data.symbols import SymbolError
 from bq.data.symbols import resolve as resolve_symbol
@@ -317,6 +318,11 @@ class ReportEngine:
             except Exception as exc:  # noqa: BLE001 - one bad vendor call is isolated
                 notes.append(f"{prediction.prediction_id}: {type(exc).__name__}")
         scores = score_binary_outcomes(tuple(outcomes))
+        try:
+            resolve_outcomes(self.path, self.router, as_of=instant, horizon_days=5)
+        except Exception as exc:  # noqa: BLE001 - the report must still publish
+            notes.append(f"campaign reconciliation: {type(exc).__name__}")
+        campaign = campaign_review(self.path, trade_date=instant.astimezone(IST).date())
         report_id = (
             "report_"
             + canonical_digest(
@@ -333,6 +339,7 @@ class ReportEngine:
             "resolved": len(resolved),
             "outcomes": resolved,
             "scores": asdict(scores),
+            "campaign": campaign,
             "notes": notes,
         }
         lines = [
@@ -359,6 +366,7 @@ class ReportEngine:
                 f"outcome rate: {scores.outcome_rate if scores.outcome_rate is not None else 'n/a'}.",
             ]
         )
+        lines.extend(_campaign_lines(campaign))
         if notes:
             lines.extend(["", "## Notes", ""] + [f"- {note}" for note in notes])
         return self.reports.record(
@@ -424,6 +432,77 @@ class ReportEngine:
         else:
             raise ReportEngineError("unknown prediction kind")
         return occurred, result.source
+
+
+def _campaign_lines(review: dict[str, object]) -> list[str]:
+    campaign = review.get("campaign")
+    lines = ["", "## Campaign review — what to change tomorrow", ""]
+    if not isinstance(campaign, dict):
+        lines.append("- No campaign for this session.")
+        return lines
+    realized = int(review.get("realized_pnl_paise") or 0)
+    lines.append(
+        f"- Campaign **{campaign['campaign_id']}** ({campaign['status']}), "
+        f"trade date {campaign['trade_date']}; realised P&L "
+        f"₹{realized / 100:,.2f}."
+    )
+    items = review.get("items") or []
+    lines.extend(
+        [
+            "",
+            "| Symbol | Catalyst | Status | Entry | Exit | R |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
+    for item in items[:12] if isinstance(items, list) else []:
+        events = sorted(
+            {
+                str(event.get("event"))
+                for event in item.get("events", [])
+                if isinstance(event, dict) and int(event.get("polarity") or 0) > 0
+            }
+        )
+        entry = item.get("entry_paise")
+        exit_paise = item.get("exit_paise")
+        r_multiple = item.get("r_multiple")
+        lines.append(
+            "| {symbol} | {events} | {status} | {entry} | {exit_} | {r} |".format(
+                symbol=item.get("symbol", "—"),
+                events=", ".join(events) or "—",
+                status=item.get("status", "—"),
+                entry="—" if entry is None else f"₹{int(entry) / 100:,.2f}",
+                exit_=("—" if exit_paise is None else f"₹{int(exit_paise) / 100:,.2f}"),
+                r=("—" if r_multiple is None else f"{float(r_multiple):+.2f}R"),
+            )
+        )
+    if not isinstance(items, list) or not items:
+        lines.append("| — | — | — | — | — | — |")
+    lines.extend(["", "### Catalyst hit rates", ""])
+    stats = review.get("event_stats") or []
+    if isinstance(stats, list) and stats:
+        for stat in stats[:14]:
+            low, high = stat["hit_rate_wilson_95"]
+            lines.append(
+                f"- **{stat['event']}** — {stat['closed']} closed, "
+                f"hit {float(stat['hit_rate']):.0%} "
+                f"(95% {float(low):.0%}–{float(high):.0%}), "
+                f"avg {float(stat['avg_r']):+.2f}R"
+            )
+    else:
+        lines.append("- No closed campaign outcomes yet; weights stay neutral.")
+    weights = review.get("weights") or {}
+    if isinstance(weights, dict) and weights:
+        lines.extend(
+            [
+                "",
+                "Applied weights: "
+                + ", ".join(
+                    f"{name} {float(value):.2f}"
+                    for name, value in sorted(weights.items())
+                ),
+            ]
+        )
+    return lines
 
 
 __all__ = ["ReportEngine", "ReportEngineError"]

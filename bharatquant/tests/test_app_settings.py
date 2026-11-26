@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from bq.campaign_config import CampaignConfig
 from bq.infra.database import migrate
 from bq.news import DEFAULT_MEMORY_TTL, PULSE_FEED_URL
 from bq.risk.policy import RiskLimits
@@ -42,6 +43,7 @@ def test_defaults_are_empty_and_deterministic(tmp_path: Path) -> None:
     assert config.api_keys == ()
     assert config.model_route_configured is False
     assert config.api_keys_configured is False
+    assert config.campaign == CampaignConfig()
     assert config.updated_at is None
 
 
@@ -227,3 +229,15 @@ def test_risk_limits_are_absent_until_saved_and_clearable(tmp_path: Path) -> Non
     assert _store(tmp_path).load().risk_limits == limits
     cleared = store.clear_risk_limits()
     assert cleared.risk_limits is None
+
+
+def test_campaign_settings_round_trip(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    saved = store.save_campaign(
+        CampaignConfig(top_n=6, max_chase_bps=80, skip_dates=("2026-01-26",))
+    )
+    assert saved.campaign.top_n == 6
+    assert saved.campaign.max_chase_bps == 80
+    assert saved.campaign.skip_dates == ("2026-01-26",)
+    assert store.load().campaign.top_n == 6
+    assert store.clear_campaign().campaign == CampaignConfig()

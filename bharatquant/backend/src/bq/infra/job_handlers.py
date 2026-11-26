@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from bq.analysis.wiring import build_analysis_router
+from bq.campaign import CampaignService
 from bq.infra.job_worker import JobHandler
 from bq.infra.jobs import JobRun
 from bq.memory import EpisodicMemoryStore, OutcomeResolver
@@ -15,6 +16,7 @@ from bq.paper_stops import PaperStopStore
 from bq.reports.engine import ReportEngine
 from bq.reports.store import ReportStore
 from bq.settings import SettingsStore
+from bq.triggers import TriggerEngine
 
 MEMORY_RESOLVE_JOB = "memory.resolve"
 NEWS_INGEST_JOB = "news.ingest"
@@ -22,6 +24,8 @@ REPORT_MORNING_JOB = "report.morning"
 REPORT_EVENING_JOB = "report.evening_accuracy"
 PAPER_STOPS_JOB = "paper.stops"
 PAPER_SQUARE_OFF_JOB = "paper.square_off"
+CAMPAIGN_RESEARCH_JOB = "campaign.research"
+CAMPAIGN_TRIGGERS_JOB = "campaign.triggers"
 DEFAULT_RESOLVE_HORIZON_DAYS = 5
 DEFAULT_RESOLVE_MAX_EPISODES = 50
 
@@ -89,6 +93,19 @@ def build_job_handlers(
             raise
         return report.to_dict()
 
+    def campaign_research(run: JobRun) -> dict[str, object]:
+        campaign = CampaignService(database_path, settings).research(
+            as_of=run.scheduled_at, force=True
+        )
+        return campaign.to_dict()
+
+    def campaign_triggers(run: JobRun) -> dict[str, object]:
+        return (
+            TriggerEngine(database_path, settings)
+            .scan(as_of=run.scheduled_at)
+            .to_dict()
+        )
+
     def evaluate_stops(run: JobRun) -> dict[str, object]:
         router = build_analysis_router(database_path, settings.load())
         result = PaperStopStore(database_path).evaluate(router, as_of=run.scheduled_at)
@@ -116,6 +133,8 @@ def build_job_handlers(
         REPORT_EVENING_JOB: evening_report,
         PAPER_STOPS_JOB: evaluate_stops,
         PAPER_SQUARE_OFF_JOB: square_off,
+        CAMPAIGN_RESEARCH_JOB: campaign_research,
+        CAMPAIGN_TRIGGERS_JOB: campaign_triggers,
     }
 
 

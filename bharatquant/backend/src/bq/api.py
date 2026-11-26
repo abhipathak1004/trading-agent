@@ -31,16 +31,9 @@ from bq.agent_prompts import (
     PromptStore,
 )
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
-from bq.analysis.confidence_engine import ConfidenceEngine
-from bq.analysis.debate import Debate
+from bq.analysis.builder import build_analysis_pipeline
 from bq.analysis.decision import TradePlan, TradePlanError, trade_plan_from_json
-from bq.analysis.evidence import EvidenceVerifier
-from bq.analysis.final_gate import FinalGate
-from bq.analysis.fundamental import FundamentalEventsAgent
-from bq.analysis.news_context import NewsContextAgent
 from bq.analysis.pipeline import AnalysisPipeline, AnalysisResult, PipelineError
-from bq.analysis.regime import MarketRegimeAgent
-from bq.analysis.risk_team import RiskAnalyst
 from bq.analysis.run_settings import AnalysisRunError, AnalysisRunStore
 from bq.analysis.technical import TechnicalReport
 from bq.analysis.wiring import build_analysis_router
@@ -53,6 +46,8 @@ from bq.auth import (
     OwnerNotConfigured,
 )
 from bq.backtest import BacktestEngineName, BacktestError, run_backtest
+from bq.campaign import CampaignError, CampaignNotFound, CampaignService
+from bq.campaign_config import CampaignConfig, CampaignConfigError
 from bq.confidence import ConfidenceLevel
 from bq.core import CurrencyPaise, Quantity, canonical_digest, paise_from_price
 from bq.data.calendar import (
@@ -61,6 +56,7 @@ from bq.data.calendar import (
     SessionState,
     validate_coverage_query,
 )
+from bq.data.equity_master import EquityMasterError, EquityMasterStore
 from bq.data.freshness import (
     DelayedDataMode,
     FreshnessStatus,
@@ -91,6 +87,7 @@ from bq.fundamentals import (
     FundamentalSource,
     ValuationAssumptions,
 )
+from bq.infra.equity_listing import ListingFetchError
 from bq.infra.job_catalogue import AVAILABLE_JOBS, JOB_CATALOGUE
 from bq.infra.job_handlers import MEMORY_RESOLVE_JOB, build_job_handlers
 from bq.infra.job_worker import JobWorker, JobWorkerLoop
@@ -119,7 +116,6 @@ from bq.memory.procedural import MAX_CONTENT_CHARS
 from bq.model_router import (
     DecisionUnavailable,
     ModelRouter,
-    RoutedModelCaller,
     decision_policy_for,
 )
 from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsError, NewsStore
@@ -205,6 +201,7 @@ from bq.strategy_store import (
 )
 from bq.super_agent import StrategyError, SuperAgent
 from bq.tools.base import ToolBlocked, ToolError, ToolSpec
+from bq.triggers import TriggerEngine
 
 WEB_ROOT = Path(__file__).with_name("static")
 COOKIE_NAME = "bq_session"
@@ -994,6 +991,20 @@ class AnalysisRunRequest(BaseModel):
     risk_basis_points: int = Field(default=100, ge=0, le=10_000, strict=True)
 
 
+class CampaignResearchRequest(BaseModel):
+    as_of: str | None = None
+    force: bool = False
+    top_n: int | None = Field(default=None, ge=1, le=10)
+
+
+class CampaignScanRequest(BaseModel):
+    as_of: str | None = None
+
+
+class CampaignSettingsRequest(BaseModel):
+    config: dict[str, object]
+
+
 class BatchAnalysisRequest(BaseModel):
     """Analyse several symbols in one submission.
 
@@ -1721,49 +1732,6 @@ def _app_config_status(config: AppConfig) -> AppConfigStatus:
         decision_route=config.decision_route,
         configured_tiers=[name.value for name in config.configured_tiers],
         decision_preview=config.decision_preview,
-    )
-
-
-def _analysis_pipeline(
-    database_path: Path, config: AppConfig, settings_store: SettingsStore
-) -> AnalysisPipeline:
-    """Build a ready-to-run pipeline for this configuration.
-
-    One builder so the single and batch routes cannot drift apart in how they
-    wire the debate, or in whether they attach a model at all.
-    """
-    router = build_analysis_router(database_path, config)
-    prompts = PromptStore(settings_store.path)
-    news_store = NewsStore(settings_store.path)
-    model_router = ModelRouter(settings_store, prompts=prompts)
-    gate = FinalGate(model_router, decision_policy_for(config))
-    if config.any_tier_configured:
-        caller = RoutedModelCaller(model_router)
-        return AnalysisPipeline(
-            router,
-            debate=Debate(caller, prompts=prompts),
-            risk_analyst=RiskAnalyst(caller, prompts=prompts),
-            routing=caller,
-            news=NewsContextAgent(news_store),
-            regime=MarketRegimeAgent(router),
-            fundamental=FundamentalEventsAgent(news_store),
-            final_gate=gate,
-            evidence=EvidenceVerifier(news_store, router=model_router),
-            confidence=ConfidenceEngine(settings_store.path),
-        )
-    service = LLMService(settings_store) if config.model_route_configured else None
-    return AnalysisPipeline(
-        router,
-        debate=Debate(service, prompts=prompts) if service is not None else None,
-        risk_analyst=(
-            RiskAnalyst(service, prompts=prompts) if service is not None else None
-        ),
-        news=NewsContextAgent(news_store),
-        regime=MarketRegimeAgent(router),
-        fundamental=FundamentalEventsAgent(news_store),
-        final_gate=gate,
-        evidence=EvidenceVerifier(news_store, router=model_router),
-        confidence=ConfidenceEngine(settings_store.path),
     )
 
 
@@ -4039,7 +4007,7 @@ def create_app(
             config = settings.load()
             prompt_store = PromptStore(database_path)
             agent = SuperAgent(
-                pipeline_factory=lambda: _analysis_pipeline(
+                pipeline_factory=lambda: build_analysis_pipeline(
                     database_path, config, settings
                 ),
                 router_factory=lambda: ModelRouter(settings, prompts=prompt_store),
@@ -4136,6 +4104,164 @@ def create_app(
             except ReportError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             return ReportStatus.model_validate(report.to_dict())
+
+        def _campaign_service() -> CampaignService:
+            return CampaignService(database_path, settings)
+
+        def _parse_instant(raw: str | None) -> datetime | None:
+            if raw is None:
+                return None
+            try:
+                value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422, detail="Invalid as_of timestamp."
+                ) from exc
+            if value.utcoffset() is None:
+                raise HTTPException(
+                    status_code=422, detail="as_of must include a timezone."
+                )
+            return value
+
+        @app.get("/api/v1/campaign/latest")
+        def campaign_latest(request: Request) -> dict[str, object]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            service = _campaign_service()
+            campaign = service.latest()
+            master = EquityMasterStore(database_path).latest_as_of()
+            return {
+                "campaign": None if campaign is None else campaign.to_dict(),
+                "config": service.config.to_dict(),
+                "master_as_of": None if master is None else master.isoformat(),
+            }
+
+        @app.get("/api/v1/campaign/{campaign_id}")
+        def campaign_detail(request: Request, campaign_id: str) -> dict[str, object]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                return _campaign_service().get(campaign_id).to_dict()
+            except CampaignNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        @app.get("/api/v1/campaign/{campaign_id}/review")
+        def campaign_review_route(
+            request: Request, campaign_id: str
+        ) -> dict[str, object]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                return _campaign_service().review(campaign_id)
+            except CampaignNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        @app.post("/api/v1/campaign/research")
+        def campaign_research(
+            request: Request, body: CampaignResearchRequest
+        ) -> dict[str, object]:
+            require_write(request)
+            try:
+                campaign = _campaign_service().research(
+                    as_of=_parse_instant(body.as_of),
+                    force=body.force,
+                    top_n=body.top_n,
+                )
+            except CampaignError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except (ListingFetchError, EquityMasterError, NewsError) as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return campaign.to_dict()
+
+        @app.post("/api/v1/campaign/{campaign_id}/scan")
+        def campaign_scan(
+            request: Request, campaign_id: str, body: CampaignScanRequest
+        ) -> dict[str, object]:
+            require_write(request)
+            try:
+                _campaign_service().get(campaign_id)
+            except CampaignNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return (
+                TriggerEngine(database_path, settings)
+                .scan(as_of=_parse_instant(body.as_of))
+                .to_dict()
+            )
+
+        @app.post("/api/v1/campaign/{campaign_id}/cancel")
+        def campaign_cancel(
+            request: Request, campaign_id: str, body: CampaignScanRequest
+        ) -> dict[str, object]:
+            require_write(request)
+            try:
+                campaign = _campaign_service().cancel(
+                    campaign_id, as_of=_parse_instant(body.as_of)
+                )
+            except CampaignNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return campaign.to_dict()
+
+        @app.get("/api/v1/settings/campaign")
+        def campaign_settings(request: Request) -> dict[str, object]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return {"config": settings.load().campaign.to_dict()}
+
+        @app.put("/api/v1/settings/campaign")
+        def update_campaign_settings(
+            request: Request, body: CampaignSettingsRequest
+        ) -> dict[str, object]:
+            require_write(request)
+            try:
+                config = CampaignConfig.from_mapping(body.config)
+            except CampaignConfigError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            saved = settings.save_campaign(config)
+            return {"config": saved.campaign.to_dict()}
+
+        @app.delete("/api/v1/settings/campaign")
+        def reset_campaign_settings(request: Request) -> dict[str, object]:
+            require_write(request)
+            return {"config": settings.clear_campaign().campaign.to_dict()}
+
+        @app.post("/api/v1/equity-master/refresh")
+        def equity_master_refresh(request: Request) -> dict[str, object]:
+            require_write(request)
+            try:
+                inserted = _campaign_service().refresh_master()
+            except ListingFetchError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except EquityMasterError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            master = EquityMasterStore(database_path).latest_as_of()
+            return {
+                "inserted": inserted,
+                "as_of": None if master is None else master.isoformat(),
+            }
+
+        @app.get("/api/v1/equity-master")
+        def equity_master_search(
+            request: Request, q: str = "", limit: int = 50
+        ) -> dict[str, object]:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            if not q.strip():
+                return {"rows": []}
+            try:
+                rows = EquityMasterStore(database_path).search(q, limit=limit)
+            except EquityMasterError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return {
+                "rows": [
+                    {
+                        "symbol": row.symbol,
+                        "company_name": row.company_name,
+                        "series": row.series,
+                        "isin": row.isin,
+                    }
+                    for row in rows
+                ]
+            }
 
         @app.get("/api/v1/opportunities")
         def opportunity_list(
@@ -4637,7 +4763,7 @@ def create_app(
                     detail="Indices can be analysed as context but not traded.",
                 )
 
-            pipeline = _analysis_pipeline(database_path, config, settings)
+            pipeline = build_analysis_pipeline(database_path, config, settings)
             try:
                 result = pipeline.run(
                     symbol=symbol,
@@ -4737,7 +4863,7 @@ def create_app(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
             config = settings.load()
-            pipeline = _analysis_pipeline(database_path, config, settings)
+            pipeline = build_analysis_pipeline(database_path, config, settings)
             try:
                 batch = BatchAnalyst(pipeline).run(
                     symbols=symbols,

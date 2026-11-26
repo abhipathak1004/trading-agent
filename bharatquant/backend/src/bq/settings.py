@@ -24,6 +24,7 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from bq.campaign_config import CampaignConfig, CampaignConfigError
 from bq.core import (
     Clock,
     SystemClock,
@@ -92,6 +93,7 @@ KEY_AGENT_ROUTING = "agent_routing"
 KEY_DECISION_POLICY = "decision_policy"
 KEY_PIPELINE = "pipeline"
 KEY_RISK_LIMITS = "risk_limits"
+KEY_CAMPAIGN = "campaign"
 
 MAX_AGENT_ROUTING_ENTRIES = 32
 MAX_AGENT_ID_CHARS = 64
@@ -221,6 +223,7 @@ class AppConfig:
     decision_route: DecisionRoute = DecisionRoute.AUTO
     decision_policy: DecisionPolicyConfig = DecisionPolicyConfig()
     risk_limits: RiskLimits | None = None
+    campaign: CampaignConfig = CampaignConfig()
 
     def tier(self, name: TierName) -> TierConfig | None:
         for key, value in self.tiers:
@@ -880,6 +883,16 @@ def _load_risk_limits(rows: Mapping[str, str]) -> RiskLimits | None:
         return None
 
 
+def _load_campaign(rows: Mapping[str, str]) -> CampaignConfig:
+    raw = rows.get(KEY_CAMPAIGN)
+    if raw is None:
+        return CampaignConfig()
+    try:
+        return CampaignConfig.from_mapping(json.loads(raw))
+    except (CampaignConfigError, TypeError, ValueError):
+        return CampaignConfig()
+
+
 def _safe_execution_mode(value: object, default: str) -> str:
     if not isinstance(value, str) or value not in {"PAPER", "SANDBOX", "LIVE_APPROVAL"}:
         return default
@@ -948,6 +961,7 @@ class SettingsStore:
             decision_route=_load_decision_route(rows),
             decision_policy=_load_decision_policy(rows),
             risk_limits=_load_risk_limits(rows),
+            campaign=_load_campaign(rows),
         )
 
     def api_key(self, provider: Provider | str) -> str | None:
@@ -1065,6 +1079,55 @@ class SettingsStore:
                     action="settings.risk_limits.cleared",
                     object_type="app_settings",
                     object_id=KEY_RISK_LIMITS,
+                    payload={},
+                )
+        return self.load()
+
+    def save_campaign(self, config: CampaignConfig) -> AppConfig:
+        if not isinstance(config, CampaignConfig):
+            raise SettingsError("Campaign settings are required.")
+        value = json.dumps(config.to_dict(), sort_keys=True, separators=(",", ":"))
+        if len(value) > MAX_SETTING_CHARS:
+            raise SettingsError("Campaign settings exceed the storage limit.")
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "INSERT INTO app_settings (setting_key, setting_value, updated_at) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(setting_key) DO UPDATE SET "
+                    "setting_value = excluded.setting_value, "
+                    "updated_at = excluded.updated_at",
+                    (KEY_CAMPAIGN, value, _timestamp(updated_at)),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.campaign.updated",
+                    object_type="app_settings",
+                    object_id=KEY_CAMPAIGN,
+                    payload=json.loads(value),
+                )
+        return self.load()
+
+    def clear_campaign(self) -> AppConfig:
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "DELETE FROM app_settings WHERE setting_key = ?",
+                    (KEY_CAMPAIGN,),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.campaign.cleared",
+                    object_type="app_settings",
+                    object_id=KEY_CAMPAIGN,
                     payload={},
                 )
         return self.load()

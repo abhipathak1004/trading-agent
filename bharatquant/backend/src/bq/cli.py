@@ -6,8 +6,8 @@ import platform
 import sqlite3
 import sys
 import warnings
-from dataclasses import asdict
-from datetime import date, datetime, timedelta
+from dataclasses import asdict, replace
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -26,7 +26,8 @@ from bq.analysis.risk_team import RiskAnalyst
 from bq.analysis.wiring import build_analysis_router
 from bq.api import WEB_ROOT, create_app
 from bq.auth import OwnerAlreadyConfigured, OwnerAuth
-from bq.core import SystemClock
+from bq.campaign import CampaignService
+from bq.core import EXCHANGE_TIMEZONE, CurrencyPaise, SystemClock
 from bq.data.calendar import (
     CalendarSession,
     ExchangeCalendar,
@@ -41,6 +42,7 @@ from bq.data.eod_quality import (
     inspect_eod_import,
     inspect_eod_import_with_calendar,
 )
+from bq.data.equity_master import EquityMasterStore
 from bq.data.freshness import (
     DelayedDataMode,
     freshness_policy_from_seconds,
@@ -53,14 +55,19 @@ from bq.data.vendors import DataDomain
 from bq.data.yahoo import YahooDataClient
 from bq.execution.paper_executor import ExecutionContext, PaperExecutor
 from bq.infra.database import DatabaseError, check_database, migrate
+from bq.infra.job_catalogue import AVAILABLE_JOBS
 from bq.infra.model_attempts import ModelAttemptStore
+from bq.infra.schedules import ScheduleStore
 from bq.llm_service import LLMService
 from bq.model_router import ModelRouter, RoutedModelCaller, decision_policy_for
 from bq.news import NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
+from bq.paper_accounts import PaperAccountError, PaperAccountStatus, PaperAccountStore
 from bq.risk.policy import KillSwitchLevel, RiskLimits
 from bq.runtime import backup_database, benchmark, restore_database
+from bq.schedules import DailySchedule, IntervalSchedule, WakePolicy
 from bq.settings import SettingsStore
+from bq.triggers import TriggerEngine
 
 
 def _default_home() -> Path:
@@ -69,6 +76,208 @@ def _default_home() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "BharatQuant"
     raise ValueError("Set BQ_HOME to a local development directory on this platform.")
+
+
+WEEKDAYS = (0, 1, 2, 3, 4)
+
+
+def _default_schedules() -> tuple[DailySchedule, ...]:
+    def daily(
+        schedule_id: str,
+        job_id: str,
+        scheduled: time,
+        start: time,
+        end: time,
+        *,
+        attempts: int = 2,
+    ) -> DailySchedule:
+        return DailySchedule(
+            schedule_id=schedule_id,
+            job_id=job_id,
+            enabled=True,
+            timezone="Asia/Kolkata",
+            local_time=scheduled,
+            window_start=start,
+            window_end=end,
+            wake_policy=WakePolicy.ALWAYS_RUN,
+            wake_within_seconds=None,
+            max_attempts=attempts,
+            weekdays=WEEKDAYS,
+        )
+
+    return (
+        daily(
+            "news-ingest",
+            "news.ingest",
+            time(7, 45),
+            time(7, 30),
+            time(9, 0),
+            attempts=3,
+        ),
+        daily("report-morning", "report.morning", time(8, 0), time(7, 45), time(9, 0)),
+        daily(
+            "campaign-research",
+            "campaign.research",
+            time(8, 5),
+            time(7, 50),
+            time(9, 10),
+        ),
+        IntervalSchedule(
+            schedule_id="campaign-triggers",
+            job_id="campaign.triggers",
+            enabled=True,
+            timezone="Asia/Kolkata",
+            local_time=time(9, 15),
+            window_start=time(9, 15),
+            window_end=time(15, 15),
+            wake_policy=WakePolicy.ALWAYS_RUN,
+            wake_within_seconds=None,
+            max_attempts=1,
+            weekdays=WEEKDAYS,
+            interval_minutes=5,
+        ),
+        daily(
+            "paper-stops",
+            "paper.stops",
+            time(15, 20),
+            time(9, 20),
+            time(15, 25),
+            attempts=3,
+        ),
+        daily(
+            "paper-square-off",
+            "paper.square_off",
+            time(15, 25),
+            time(15, 10),
+            time(15, 35),
+        ),
+        daily(
+            "report-evening",
+            "report.evening_accuracy",
+            time(17, 0),
+            time(16, 45),
+            time(17, 30),
+        ),
+        daily(
+            "memory-resolve", "memory.resolve", time(18, 0), time(17, 0), time(19, 0)
+        ),
+    )
+
+
+def _cli_instant(raw: str | None) -> datetime | None:
+    if raw is None:
+        return None
+    value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if value.utcoffset() is None:
+        value = value.replace(tzinfo=EXCHANGE_TIMEZONE)
+    return value
+
+
+def _campaign_init(path: Path, args: argparse.Namespace, migrated: int) -> None:
+    if args.equity_paise <= 0:
+        raise ValueError("Equity must be positive paise.")
+    settings = SettingsStore(path)
+    config = replace(
+        settings.load().campaign,
+        equity_paise=args.equity_paise,
+        available_cash_paise=args.equity_paise * 9 // 10,
+        account_id=args.account_id,
+    )
+    settings.save_campaign(config)
+    accounts = PaperAccountStore(path)
+    try:
+        accounts.get_balance(config.account_id)
+        account_created = False
+    except PaperAccountError:
+        accounts.create(
+            account_id=config.account_id,
+            name="Paper main",
+            opening_balance_paise=CurrencyPaise(config.equity_paise),
+            status=PaperAccountStatus.ACTIVE,
+        )
+        account_created = True
+    schedules = ScheduleStore(path, available_jobs=AVAILABLE_JOBS)
+    snapshot = schedules.load()
+    existing = {item.schedule_id for item in snapshot.schedules}
+    additions = tuple(
+        item for item in _default_schedules() if item.schedule_id not in existing
+    )
+    if additions:
+        snapshot = schedules.save(
+            snapshot.schedules + additions, expected_version=snapshot.version
+        )
+    print(
+        json.dumps(
+            {
+                "migrations_applied": migrated,
+                "account_id": config.account_id,
+                "account_created": account_created,
+                "equity_paise": config.equity_paise,
+                "schedule_version": snapshot.version,
+                "schedules": [item.schedule_id for item in snapshot.schedules],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def _run_campaign(path: Path, args: argparse.Namespace) -> None:
+    settings = SettingsStore(path)
+    service = CampaignService(path, settings)
+    action = args.campaign_action
+    if action == "refresh-master":
+        inserted = service.refresh_master()
+        master = EquityMasterStore(path).latest_as_of()
+        print(
+            json.dumps(
+                {
+                    "inserted": inserted,
+                    "as_of": None if master is None else master.isoformat(),
+                },
+                sort_keys=True,
+            )
+        )
+        return
+    if action == "research":
+        campaign = service.research(
+            as_of=_cli_instant(args.as_of), force=args.force, top_n=args.top
+        )
+        print(json.dumps(campaign.to_dict(), sort_keys=True, default=str))
+        return
+    if action == "scan":
+        result = TriggerEngine(path, settings).scan(as_of=_cli_instant(args.as_of))
+        print(json.dumps(result.to_dict(), sort_keys=True, default=str))
+        return
+    if action == "status":
+        campaign = service.latest()
+        master = EquityMasterStore(path).latest_as_of()
+        print(
+            json.dumps(
+                {
+                    "config": settings.load().campaign.to_dict(),
+                    "campaign": None if campaign is None else campaign.to_dict(),
+                    "master_as_of": None if master is None else master.isoformat(),
+                },
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        )
+        return
+    if action == "review":
+        campaign = service.latest()
+        if campaign is None:
+            print(json.dumps({"campaign": None}, sort_keys=True))
+            return
+        campaign_id = args.campaign_id or campaign.campaign_id
+        print(
+            json.dumps(
+                service.review(campaign_id), indent=2, sort_keys=True, default=str
+            )
+        )
+        return
+    raise ValueError(f"Unknown campaign action: {action}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -152,6 +361,32 @@ def main(argv: list[str] | None = None) -> int:
     settings_actions.add_parser(
         "show", help="Print the configured model, feed and API key status as JSON."
     )
+    campaign_actions = actions.add_parser("campaign").add_subparsers(
+        dest="campaign_action", required=True
+    )
+    campaign_init = campaign_actions.add_parser(
+        "init", help="Create the paper account, save defaults and seed schedules."
+    )
+    campaign_init.add_argument("--equity-paise", type=int, default=100_000_000)
+    campaign_init.add_argument("--account-id", default="paper-main")
+    campaign_actions.add_parser(
+        "refresh-master", help="Fetch the NSE listing used for news attribution."
+    )
+    campaign_research = campaign_actions.add_parser(
+        "research", help="Build today's catalyst shortlist, plans and trigger levels."
+    )
+    campaign_research.add_argument("--as-of", default=None)
+    campaign_research.add_argument("--force", action="store_true")
+    campaign_research.add_argument("--top", type=int, default=None)
+    campaign_scan = campaign_actions.add_parser(
+        "scan", help="Run the market-open trigger scan once."
+    )
+    campaign_scan.add_argument("--as-of", default=None)
+    campaign_actions.add_parser("status", help="Print the latest campaign as JSON.")
+    campaign_review = campaign_actions.add_parser(
+        "review", help="Print the campaign review, fills and learned weights."
+    )
+    campaign_review.add_argument("--campaign-id", default=None)
     tools_actions = actions.add_parser("tools").add_subparsers(
         dest="tools_action", required=True
     )
@@ -328,6 +563,10 @@ def main(argv: list[str] | None = None) -> int:
             home.mkdir(mode=0o700, parents=True, exist_ok=True)
             count = migrate(path, create=True)
             print(f"Initialized {path} ({count} migration(s) applied).")
+        elif args.action == "campaign" and args.campaign_action == "init":
+            home.mkdir(mode=0o700, parents=True, exist_ok=True)
+            count = migrate(path, create=True)
+            _campaign_init(path, args, count)
         elif args.action == "db":
             if args.db_action == "backup":
                 backup_payload = backup_database(path, Path(args.output).expanduser())
@@ -629,6 +868,8 @@ def main(argv: list[str] | None = None) -> int:
                         sort_keys=True,
                     )
                 )
+            elif args.action == "campaign":
+                _run_campaign(path, args)
             elif args.action == "settings":
                 config = SettingsStore(path).load()
                 print(

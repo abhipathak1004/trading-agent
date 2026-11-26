@@ -57,11 +57,9 @@ class Spawner:
     def __init__(self, lines: list[str]) -> None:
         self.lines = lines
         self.calls = 0
-        self.argv: list[str] = []
 
     async def __call__(self, argv: object) -> FakeProcess:
-        assert isinstance(argv, (list, tuple))
-        self.argv = [str(item) for item in argv]
+        del argv
         self.calls += 1
         return FakeProcess(self.lines)
 

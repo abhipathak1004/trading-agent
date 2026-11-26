@@ -44,6 +44,10 @@ def build_analysis_router(database_path: Path, config: object) -> VendorRouter:
     router.register_vendor(DataDomain.BARS_DAILY, yahoo, priority=0)
     router.register_vendor(DataDomain.QUOTES_LIVE, yahoo)
     router.register_vendor(DataDomain.INDICES, yahoo)
+    # Yahoo's intraday candles are delayed (15-minute floor by the vendor's own
+    # contract) but they are the only intraday source on a Kite-less install.
+    # Kite is inserted at position 0 below, so enabling it silently wins.
+    router.register_vendor(DataDomain.BARS_INTRADAY, yahoo)
 
     enabled = bool(getattr(config, "kite_enabled", False))
     credentials = BrokerCredentialStore(database_path).credentials()

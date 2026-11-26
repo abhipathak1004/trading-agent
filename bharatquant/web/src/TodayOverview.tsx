@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
-export type TodayTarget = "trade" | "data" | "schedules" | "settings";
+import { parseEnvelope } from "./campaignContract.ts";
+
+export type TodayTarget = "campaign" | "trade" | "data" | "schedules" | "settings";
 
 type Tone = "ok" | "warn" | "danger" | "muted";
 
@@ -145,6 +147,35 @@ function schedulesCard(value: unknown): Card {
   };
 }
 
+function campaignCard(value: unknown): Card {
+  const envelope = parseEnvelope(value);
+  if (envelope.campaign === null) {
+    return {
+      key: "campaign",
+      title: "Campaign",
+      value: "Not built",
+      detail: "Build today's news-catalyst shortlist.",
+      tone: "warn",
+      action: "Open Campaign",
+      target: "campaign",
+    };
+  }
+  const campaign = envelope.campaign;
+  const watching = campaign.items.filter((item) => item.status === "WATCHING").length;
+  const filled = campaign.items.filter((item) =>
+    ["FILLED", "CLOSED"].includes(item.status),
+  ).length;
+  return {
+    key: "campaign",
+    title: "Campaign",
+    value: `${campaign.items.length} name(s)`,
+    detail: `${watching} watching · ${filled} filled · ${campaign.status}`,
+    tone: filled > 0 ? "ok" : campaign.items.length > 0 ? "warn" : "muted",
+    action: "Open Campaign",
+    target: "campaign",
+  };
+}
+
 function runtimeCard(value: unknown): Card {
   if (!isRecord(value) || typeof value.status !== "string") {
     return {
@@ -188,12 +219,14 @@ export default function TodayOverview({
   useEffect(() => {
     const controller = new AbortController();
     async function load() {
-      const [paper, data, schedules, runtime] = await Promise.allSettled([
-        read("/api/v1/paper/accounts/paper-main"),
-        read("/api/v1/data/status"),
-        read("/api/v1/schedules/status"),
-        read("/api/v1/system/status"),
-      ]);
+      const [paper, data, schedules, runtime, campaign] =
+        await Promise.allSettled([
+          read("/api/v1/paper/accounts/paper-main"),
+          read("/api/v1/data/status"),
+          read("/api/v1/schedules/status"),
+          read("/api/v1/system/status"),
+          read("/api/v1/campaign/latest"),
+        ]);
       if (controller.signal.aborted) {
         return;
       }
@@ -214,6 +247,9 @@ export default function TodayOverview({
         runtime.status === "fulfilled"
           ? runtimeCard(runtime.value)
           : unavailable("runtime", "Runtime", "settings"),
+        campaign.status === "fulfilled"
+          ? campaignCard(campaign.value)
+          : unavailable("campaign", "Campaign", "campaign"),
       ];
       setState({ state: "ready", cards });
     }
@@ -228,7 +264,7 @@ export default function TodayOverview({
   if (state.state === "loading") {
     return (
       <section className="overview-grid" aria-label="Today overview">
-        {[0, 1, 2, 3].map((key) => (
+        {[0, 1, 2, 3, 4].map((key) => (
           <div className="overview-card" key={key}>
             <p role="status">Checking status...</p>
           </div>

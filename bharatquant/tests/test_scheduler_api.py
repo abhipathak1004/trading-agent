@@ -55,6 +55,8 @@ def test_scheduler_catalogue_crud_dry_run_and_run(tmp_path: Path) -> None:
             assert {item["job_id"] for item in catalogue.json()["jobs"]} == {
                 "memory.resolve",
                 "news.ingest",
+                "campaign.research",
+                "campaign.triggers",
                 "report.morning",
                 "report.evening_accuracy",
                 "paper.stops",

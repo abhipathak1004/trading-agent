@@ -48,6 +48,34 @@ JOB_CATALOGUE: tuple[JobDefinition, ...] = (
         max_attempts=3,
     ),
     JobDefinition(
+        job_id="campaign.research",
+        label="Build today's campaign",
+        description=(
+            "Extract news catalysts, shortlist 5-10 names and freeze their "
+            "deterministic trade plans and breakout trigger levels."
+        ),
+        resource_class="LIGHT",
+        timezone="Asia/Kolkata",
+        local_time="08:05",
+        window_start="07:50",
+        window_end="09:10",
+        max_attempts=2,
+    ),
+    JobDefinition(
+        job_id="campaign.triggers",
+        label="Scan campaign triggers",
+        description=(
+            "Every 5 minutes from 09:15: fill a triggered breakout through the "
+            "paper risk gate and manage campaign stop/target exits."
+        ),
+        resource_class="LIGHT",
+        timezone="Asia/Kolkata",
+        local_time="09:15",
+        window_start="09:15",
+        window_end="15:15",
+        max_attempts=1,
+    ),
+    JobDefinition(
         job_id="report.morning",
         label="Morning report",
         description="Freeze the day's predictions and save the morning research report.",

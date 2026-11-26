@@ -78,3 +78,23 @@ typecheck:
     cd bharatquant && uv run --locked mypy
 
 check: lint format-check typecheck test
+
+# ---- catalyst campaign ----
+# First run: creates paper-main, saves defaults and seeds the daily schedules.
+campaign-init:
+    cd bharatquant && uv run --locked bq campaign init
+
+campaign-refresh:
+    cd bharatquant && uv run --locked bq campaign refresh-master
+
+campaign-research:
+    cd bharatquant && uv run --locked bq campaign research
+
+campaign-scan:
+    cd bharatquant && uv run --locked bq campaign scan
+
+campaign-status:
+    cd bharatquant && uv run --locked bq campaign status
+
+campaign-review:
+    cd bharatquant && uv run --locked bq campaign review
