@@ -27,6 +27,7 @@ import SemanticMemoryPanel from "./SemanticMemoryPanel";
 import PlaybookPanel from "./PlaybookPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
+import LoggingPanel from "./LoggingPanel";
 import RiskLimitsPanel from "./RiskLimitsPanel";
 import CloudflareTunnelPanel from "./CloudflareTunnelPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
@@ -36,7 +37,7 @@ import CampaignPanel from "./CampaignPanel";
 
 type WorkspaceView = NavView;
 
-type SettingsTab = "overview" | "models" | "risk" | "runtime";
+type SettingsTab = "overview" | "models" | "risk" | "runtime" | "logging";
 
 const NAV_GROUPS: {
   label: string;
@@ -890,8 +891,8 @@ export default function App() {
                 <p className="eyebrow">SETTINGS</p>
                 <h1 id="settings-title">Settings</h1>
                 <p className="intro">
-                  Models and keys, risk limits, runtime health and network access.
-                  Data and Schedules have their own tabs.
+                  Models and keys, risk limits, operational logs, runtime health
+                  and network access. Data and Schedules have their own tabs.
                 </p>
               </div>
               <span className="status-badge status-badge--provisional">OWNER</span>
@@ -916,6 +917,7 @@ export default function App() {
                   ["models", "Models & keys"],
                   ["risk", "Risk & execution"],
                   ["runtime", "Runtime & network"],
+                  ["logging", "Logging"],
                 ] as [SettingsTab, string][]
               ).map(([key, label]) => (
                 <button
@@ -948,6 +950,10 @@ export default function App() {
                 <RuntimePanel />
                 <CloudflareTunnelPanel csrfToken={session.csrfToken} />
               </>
+            )}
+
+            {settingsTab === "logging" && (
+              <LoggingPanel csrfToken={session.csrfToken} />
             )}
           </section>
         )}

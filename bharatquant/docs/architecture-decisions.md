@@ -1444,3 +1444,33 @@ restore.
 the lease or accounting contracts. v1 has no persisted WebSocket event log,
 automated backup retention, Playwright E2E or external alerting; those are
 maintenance extensions, not changes to the immutable data boundaries.
+
+## ADR-047: Operational logs are file-backed, bounded and separate from `audit_events`
+
+**Status:** Accepted; implemented by `bq/logbook.py`.
+
+**Context:** Debugging model behaviour needs the full prompt, response and the
+decision around it. The hash-chained `audit_events` table records state-changing
+owner actions and must stay small; storing prompts there would bloat it and mix
+telemetry with the audit contract.
+
+**Decision:** Add a file-backed operational logbook separate from `audit_events`.
+
+- Every LLM call is recorded at the transport choke points
+  (`LLMService.complete`, `ModelRouter._complete_route`, and native Jev) with
+  provider, model, task, agent, latency, tokens, outcome and the full
+  system/prompt/response text.
+- Every decision is recorded at the deterministic choke points: the model decision
+  router, the final gate, campaign research, and the intraday trigger scan.
+- Entries append to `.pending.jsonl` and flush to dated JSONL files every 15
+  minutes by default. Three drivers exist: a record-time fallback, an asyncio
+  loop in `bq serve`, and a `logs.flush` job.
+- Text fields, entries and files are bounded. Retention is owner-configurable
+  (1–3650 days, default 14). Bearer/API-key-shaped substrings are redacted.
+- `/api/v1/logs` is owner-authenticated and `no-store`; log files live outside
+  the static web root.
+
+**Consequences:** The owner can reconstruct exactly what a model saw and answered
+without touching immutable accounting or audit tables. Full prompts are stored in
+plain text under the local app-data directory, so the UI says so plainly. Losing
+logs cannot affect trading state or the audit chain.

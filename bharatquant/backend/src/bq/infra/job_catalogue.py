@@ -119,6 +119,21 @@ JOB_CATALOGUE: tuple[JobDefinition, ...] = (
         window_end="15:35",
         max_attempts=2,
     ),
+    JobDefinition(
+        job_id="logs.flush",
+        label="Flush operational logs",
+        description=(
+            "Move buffered LLM-call and decision logs into dated files and prune "
+            "files past the configured retention window."
+        ),
+        resource_class="LIGHT",
+        timezone="Asia/Kolkata",
+        local_time="00:00",
+        window_start="00:00",
+        window_end="23:59",
+        enabled_by_default=True,
+        max_attempts=2,
+    ),
 )
 
 CATALOGUE_BY_ID = {item.job_id: item for item in JOB_CATALOGUE}

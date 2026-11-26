@@ -39,6 +39,7 @@ from bq.core import (
     utc as core_utc,
 )
 from bq.infra.audit import append_event
+from bq.logbook import LoggingConfig, LoggingConfigError
 from bq.news import DEFAULT_MEMORY_TTL, PULSE_FEED_URL
 from bq.risk.policy import RiskLimits
 
@@ -94,6 +95,7 @@ KEY_DECISION_POLICY = "decision_policy"
 KEY_PIPELINE = "pipeline"
 KEY_RISK_LIMITS = "risk_limits"
 KEY_CAMPAIGN = "campaign"
+KEY_LOGGING = "logging"
 
 MAX_AGENT_ROUTING_ENTRIES = 32
 MAX_AGENT_ID_CHARS = 64
@@ -224,6 +226,7 @@ class AppConfig:
     decision_policy: DecisionPolicyConfig = DecisionPolicyConfig()
     risk_limits: RiskLimits | None = None
     campaign: CampaignConfig = CampaignConfig()
+    logging: LoggingConfig = LoggingConfig()
 
     def tier(self, name: TierName) -> TierConfig | None:
         for key, value in self.tiers:
@@ -893,6 +896,22 @@ def _load_campaign(rows: Mapping[str, str]) -> CampaignConfig:
         return CampaignConfig()
 
 
+def _load_logging(rows: Mapping[str, str]) -> LoggingConfig:
+    raw = rows.get(KEY_LOGGING)
+    if raw is None:
+        return LoggingConfig()
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return LoggingConfig()
+    if not isinstance(parsed, dict):
+        return LoggingConfig()
+    try:
+        return LoggingConfig.from_mapping(parsed)
+    except LoggingConfigError:
+        return LoggingConfig()
+
+
 def _safe_execution_mode(value: object, default: str) -> str:
     if not isinstance(value, str) or value not in {"PAPER", "SANDBOX", "LIVE_APPROVAL"}:
         return default
@@ -962,6 +981,7 @@ class SettingsStore:
             decision_policy=_load_decision_policy(rows),
             risk_limits=_load_risk_limits(rows),
             campaign=_load_campaign(rows),
+            logging=_load_logging(rows),
         )
 
     def api_key(self, provider: Provider | str) -> str | None:
@@ -1128,6 +1148,57 @@ class SettingsStore:
                     action="settings.campaign.cleared",
                     object_type="app_settings",
                     object_id=KEY_CAMPAIGN,
+                    payload={},
+                )
+        return self.load()
+
+    def save_logging(self, config: LoggingConfig) -> AppConfig:
+        if not isinstance(config, LoggingConfig):
+            raise SettingsError("A logging configuration is required.")
+        try:
+            validated = LoggingConfig.from_mapping(config.to_dict())
+        except LoggingConfigError as exc:
+            raise SettingsError(str(exc)) from exc
+        value = json.dumps(validated.to_dict(), sort_keys=True, separators=(",", ":"))
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "INSERT INTO app_settings (setting_key, setting_value, updated_at) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(setting_key) DO UPDATE SET "
+                    "setting_value = excluded.setting_value, "
+                    "updated_at = excluded.updated_at",
+                    (KEY_LOGGING, value, _timestamp(updated_at)),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.logging.updated",
+                    object_type="app_settings",
+                    object_id=KEY_LOGGING,
+                    payload=json.loads(value),
+                )
+        return self.load()
+
+    def clear_logging(self) -> AppConfig:
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "DELETE FROM app_settings WHERE setting_key = ?",
+                    (KEY_LOGGING,),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.logging.cleared",
+                    object_type="app_settings",
+                    object_id=KEY_LOGGING,
                     payload={},
                 )
         return self.load()

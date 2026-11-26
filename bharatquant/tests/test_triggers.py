@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -9,6 +10,7 @@ from bq.core import EXCHANGE_TIMEZONE, CurrencyPaise
 from bq.data.vendors.base import Bar, BarInterval
 from bq.data.vendors.router import VendorResult
 from bq.infra.database import migrate
+from bq.logbook import LoggingConfig, configure_logbook, reset_logbook
 from bq.news import FeedEntry, NewsStore
 from bq.paper_accounts import PaperAccountStore
 from bq.settings import SettingsStore
@@ -308,3 +310,36 @@ def test_missing_paper_account_blocks_instead_of_crashing(tmp_path: Path) -> Non
     result = _engine(path, session).scan(as_of=SCAN)
     assert result.entries_blocked == 1
     assert _row(path, "SELECT COUNT(*) FROM paper_orders") == 0
+
+
+def test_scan_writes_decision_log_entries(tmp_path: Path) -> None:
+    reset_logbook()
+    _campaign, path, level, _stop = _setup(tmp_path)
+    session = (
+        _session_bar(
+            40,
+            open_paise=level - 100,
+            high_paise=level + 600,
+            low_paise=level - 200,
+            close_paise=level + 500,
+        ),
+    )
+    book = configure_logbook(tmp_path, LoggingConfig())
+    try:
+        _engine(path, session).scan(as_of=SCAN)
+    finally:
+        reset_logbook()
+    book.flush()
+
+    entries = [
+        json.loads(line)
+        for log_path in sorted((tmp_path / "logs").glob("bq-*.jsonl"))
+        for line in log_path.read_text().splitlines()
+    ]
+    decisions = [entry["data"] for entry in entries if entry["kind"] == "decision"]
+    scopes = [item["scope"] for item in decisions]
+    assert "trigger_scan" in scopes
+    assert "trigger_outcome" in scopes
+    outcome = next(item for item in decisions if item["scope"] == "trigger_outcome")
+    assert outcome["symbol"] == "RELIANCE"
+    assert outcome["status"] == "FILLED"

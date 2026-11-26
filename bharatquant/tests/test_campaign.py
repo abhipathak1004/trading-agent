@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +19,7 @@ from bq.data.equity_master import EquityMasterStore
 from bq.data.vendors.base import Bar, BarInterval
 from bq.data.vendors.router import VendorResult
 from bq.infra.database import migrate
+from bq.logbook import LoggingConfig, configure_logbook, reset_logbook
 from bq.news import FeedEntry, NewsStore
 from bq.settings import SettingsStore
 
@@ -264,3 +266,32 @@ def test_news_is_ingested_when_stale(tmp_path: Path) -> None:
     assert campaign.summary["news"]["feeds"] == 3
     assert campaign.summary["news"]["stored"] == 1
     assert any(item.symbol == "RELIANCE" for item in campaign.items)
+
+
+def test_research_writes_decision_log_entries(tmp_path: Path) -> None:
+    reset_logbook()
+    service, _ = _service(tmp_path)
+    book = configure_logbook(tmp_path, LoggingConfig())
+    try:
+        service.research(as_of=AS_OF)
+    finally:
+        reset_logbook()
+    book.flush()
+
+    entries = [
+        json.loads(line)
+        for log_path in sorted((tmp_path / "logs").glob("bq-*.jsonl"))
+        for line in log_path.read_text().splitlines()
+    ]
+    decisions = [entry["data"] for entry in entries if entry["kind"] == "decision"]
+    scopes = [item["scope"] for item in decisions]
+    assert "campaign_candidate" in scopes
+    assert "campaign_summary" in scopes
+    candidate = next(
+        item for item in decisions if item["scope"] == "campaign_candidate"
+    )
+    assert candidate["symbol"] in {"RELIANCE", "SUNPHARMA", "BEARISH"}
+    assert isinstance(candidate["reasons"], list)
+    summary = next(item for item in decisions if item["scope"] == "campaign_summary")
+    assert summary["shortlisted"] == 3
+    assert summary["status"] == "ACTIVE"

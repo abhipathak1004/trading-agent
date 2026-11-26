@@ -1,7 +1,7 @@
 import asyncio
 import re
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from hmac import compare_digest
@@ -99,6 +99,20 @@ from bq.infra.task_registry import TaskRegistry
 from bq.infra.tunnel import TunnelManager, TunnelState, TunnelStatus
 from bq.llm_client import LLMClientError, LLMNotConfigured
 from bq.llm_service import LLMService
+from bq.logbook import (
+    DEFAULT_FLUSH_MINUTES,
+    DEFAULT_RETENTION_DAYS,
+    MAX_FLUSH_MINUTES,
+    MAX_RETENTION_DAYS,
+    MIN_FLUSH_MINUTES,
+    MIN_RETENTION_DAYS,
+    Logbook,
+    LoggingConfig,
+    LoggingConfigError,
+    NullLogbook,
+    configure_logbook,
+    get_logbook,
+)
 from bq.memory import (
     EpisodicMemoryStore,
     MissingPlaybook,
@@ -1508,6 +1522,46 @@ class AppConfigUpdate(BaseModel):
     news_memory_ttl_days: int = Field(strict=True)
 
 
+class LogFileStatus(BaseModel):
+    name: str
+    size_bytes: int
+    modified_at: datetime
+
+
+class LogEntryStatus(BaseModel):
+    ts: str
+    kind: str
+    level: str
+    truncated: bool
+    data: dict[str, object]
+
+
+class LoggingStatus(BaseModel):
+    enabled: bool
+    retention_days: int
+    flush_minutes: int
+    directory: str
+    pending_bytes: int
+    dropped: int
+    files: list[LogFileStatus]
+    recent: list[LogEntryStatus]
+
+
+class LoggingUpdate(BaseModel):
+    enabled: bool = Field(strict=True)
+    retention_days: int = Field(
+        ge=MIN_RETENTION_DAYS, le=MAX_RETENTION_DAYS, strict=True
+    )
+    flush_minutes: int = Field(ge=MIN_FLUSH_MINUTES, le=MAX_FLUSH_MINUTES, strict=True)
+
+
+class LogFlushResult(BaseModel):
+    written: int
+    files: list[str]
+    pruned: list[str]
+    status: LoggingStatus
+
+
 class TunnelStatusView(BaseModel):
     state: TunnelState
     url: str | None
@@ -1650,6 +1704,66 @@ def _token_usage_status(usage: TokenUsage) -> TokenUsageStatus:
         estimated_tokens=str(usage.estimated_tokens),
         estimated_count=usage.estimated_count,
         unknown_count=usage.unknown_count,
+    )
+
+
+def _logging_status(book: Logbook | NullLogbook) -> LoggingStatus:
+    snapshot = book.status()
+    files: list[LogFileStatus] = []
+    raw_files = snapshot.get("files")
+    if isinstance(raw_files, list):
+        for item in raw_files:
+            if not isinstance(item, dict):
+                continue
+            try:
+                modified_at = datetime.fromisoformat(
+                    str(item.get("modified_at", "")).replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            size = item.get("size_bytes")
+            files.append(
+                LogFileStatus(
+                    name=str(item.get("name", "")),
+                    size_bytes=size if isinstance(size, int) else 0,
+                    modified_at=modified_at,
+                )
+            )
+    recent: list[LogEntryStatus] = []
+    raw_recent = snapshot.get("recent")
+    if isinstance(raw_recent, list):
+        for item in raw_recent:
+            if not isinstance(item, dict):
+                continue
+            data = item.get("data")
+            recent.append(
+                LogEntryStatus(
+                    ts=str(item.get("ts", "")),
+                    kind=str(item.get("kind", "system")),
+                    level=str(item.get("level", "info")),
+                    truncated=bool(item.get("truncated", False)),
+                    data=data if isinstance(data, dict) else {},
+                )
+            )
+    enabled = snapshot.get("enabled")
+    retention = snapshot.get("retention_days")
+    flush_minutes = snapshot.get("flush_minutes")
+    pending = snapshot.get("pending_bytes")
+    dropped = snapshot.get("dropped")
+    directory = snapshot.get("directory")
+    return LoggingStatus(
+        enabled=enabled if isinstance(enabled, bool) else True,
+        retention_days=(
+            retention if isinstance(retention, int) else DEFAULT_RETENTION_DAYS
+        ),
+        flush_minutes=(
+            flush_minutes if isinstance(flush_minutes, int) else DEFAULT_FLUSH_MINUTES
+        ),
+        directory=directory if isinstance(directory, str) else "",
+        pending_bytes=pending if isinstance(pending, int) else 0,
+        dropped=dropped if isinstance(dropped, int) else 0,
+        files=files,
+        recent=recent,
     )
 
 
@@ -1937,6 +2051,28 @@ class StreamingResponseLike(Protocol):
     body_iterator: AsyncIterable[str | bytes | memoryview]
 
 
+async def _log_flush_loop(store: SettingsStore) -> None:
+    """Flush the operational logbook at the configured cadence.
+
+    Sleeping in <=60 s steps keeps shutdown responsive without re-reading SQLite
+    on every tick. The first flush happens at startup so a spool left behind by a
+    restart is picked up immediately.
+    """
+    while True:
+        config = LoggingConfig()
+        try:
+            config = store.load().logging
+            get_logbook().configure(config)
+            await asyncio.to_thread(get_logbook().flush)
+        except Exception:  # noqa: BLE001 - logging must never stop the server
+            config = LoggingConfig()
+        remaining = float(config.flush_minutes * 60)
+        while remaining > 0:
+            step = min(remaining, 60.0)
+            await asyncio.sleep(step)
+            remaining -= step
+
+
 def create_app(
     web_root: Path | None = None,
     *,
@@ -1945,6 +2081,8 @@ def create_app(
 ) -> FastAPI:
     scheduler: SchedulerLoop | None = None
     worker_loop: JobWorkerLoop | None = None
+    settings_store: SettingsStore | None = None
+    flush_task: asyncio.Task[None] | None = None
     tunnel = tunnel_manager
     if tunnel is None and database_path is not None:
         # Built before add_middleware so the host gate sees this same instance.
@@ -1952,14 +2090,21 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        nonlocal flush_task
         del app
         if scheduler is not None:
             scheduler.start()
         if worker_loop is not None:
             worker_loop.start()
+        if settings_store is not None:
+            flush_task = asyncio.create_task(_log_flush_loop(settings_store))
         try:
             yield
         finally:
+            if flush_task is not None:
+                flush_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await flush_task
             if tunnel is not None:
                 await tunnel.stop()
             if worker_loop is not None:
@@ -1993,6 +2138,7 @@ def create_app(
                 "/api/v1/calendar/",
                 "/api/v1/data/",
                 "/api/v1/llm/",
+                "/api/v1/logs",
                 "/api/v1/news/",
                 "/api/v1/schedules",
                 "/api/v1/settings/",
@@ -2067,6 +2213,11 @@ def create_app(
         paper_accounts = PaperAccountStore(database_path)
         paper_trading = PaperTradingStore(database_path)
         settings = SettingsStore(database_path)
+        settings_store = settings
+        try:
+            configure_logbook(database_path.parent, settings.load().logging)
+        except Exception:  # noqa: BLE001 - startup must not fail on logging
+            configure_logbook(database_path.parent, LoggingConfig())
         job_store = JobRunStore(database_path)
         scheduler = SchedulerLoop(
             SchedulerRunner(
@@ -3237,6 +3388,41 @@ def create_app(
             except SettingsError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             return _app_config_status(config)
+
+        @app.get("/api/v1/logs")
+        def get_logs(request: Request) -> LoggingStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return _logging_status(get_logbook())
+
+        @app.put("/api/v1/logs")
+        def update_logs(request: Request, body: LoggingUpdate) -> LoggingStatus:
+            require_write(request)
+            try:
+                config = settings.save_logging(
+                    LoggingConfig(
+                        enabled=body.enabled,
+                        retention_days=body.retention_days,
+                        flush_minutes=body.flush_minutes,
+                    )
+                )
+            except (SettingsError, LoggingConfigError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return _logging_status(
+                configure_logbook(database_path.parent, config.logging)
+            )
+
+        @app.post("/api/v1/logs/flush")
+        def flush_logs(request: Request) -> LogFlushResult:
+            require_write(request)
+            book = get_logbook()
+            result = book.flush()
+            return LogFlushResult(
+                written=result.written,
+                files=list(result.files),
+                pruned=list(result.pruned),
+                status=_logging_status(book),
+            )
 
         @app.get("/api/v1/settings/risk-limits")
         def get_risk_limits(request: Request) -> RiskLimitsStatus:

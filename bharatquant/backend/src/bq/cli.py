@@ -59,6 +59,7 @@ from bq.infra.job_catalogue import AVAILABLE_JOBS
 from bq.infra.model_attempts import ModelAttemptStore
 from bq.infra.schedules import ScheduleStore
 from bq.llm_service import LLMService
+from bq.logbook import LoggingConfig, configure_logbook
 from bq.model_router import ModelRouter, RoutedModelCaller, decision_policy_for
 from bq.news import NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
@@ -160,6 +161,19 @@ def _default_schedules() -> tuple[DailySchedule, ...]:
         ),
         daily(
             "memory-resolve", "memory.resolve", time(18, 0), time(17, 0), time(19, 0)
+        ),
+        IntervalSchedule(
+            schedule_id="logs-flush",
+            job_id="logs.flush",
+            enabled=True,
+            timezone="Asia/Kolkata",
+            local_time=time(0, 0),
+            window_start=time(0, 0),
+            window_end=time(23, 59),
+            wake_policy=WakePolicy.ALWAYS_RUN,
+            wake_within_seconds=None,
+            max_attempts=2,
+            interval_minutes=15,
         ),
     )
 
@@ -559,6 +573,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         home = _default_home()
         path = home / "bq.db"
+        try:
+            configure_logbook(home, SettingsStore(path).load().logging)
+        except Exception:  # noqa: BLE001 - a fresh DB must not block the CLI
+            configure_logbook(home, LoggingConfig())
         if args.action == "init":
             home.mkdir(mode=0o700, parents=True, exist_ok=True)
             count = migrate(path, create=True)

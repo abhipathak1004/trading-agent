@@ -8,6 +8,8 @@ the only place that knows this order (ADR-016, ADR-017, ADR-018).
 
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -31,6 +33,7 @@ from bq.llm_service import (
     HOSTED_CLASSES,
     CompletionOutcome,
 )
+from bq.logbook import record_decision, record_llm_call
 from bq.model_routing import (
     DataClassification,
     ModelCandidate,
@@ -264,7 +267,7 @@ class ModelRouter:
 
         if self._jev_available(config):
             try:
-                outcome = self._decide_jev(config, state, battery, questions)
+                outcome = self._decide_jev(config, state, battery, questions, agent_id)
                 self._record_decision(agent_id, label, outcome)
                 return outcome
             except (JevError, LLMNotConfigured, ValueError) as exc:
@@ -329,20 +332,59 @@ class ModelRouter:
         state: DecisionState | Mapping[str, object],
         battery: str,
         questions: Sequence[Question],
+        agent_id: str,
     ) -> DecisionOutcome:
         tier = config.tier(TierName.DECISION)
         if tier is None or tier.provider is not Provider.TYPESAFE_JEV:
             raise LLMNotConfigured("The decision tier is not configured for Jev.")
         api_key = self._key(Provider.TYPESAFE_JEV)
         client = self._jev or JevClient(transport=self._transport)
-        judgments = client.decide(
-            model=tier.model,
-            api_key=api_key,
-            state=self._state_payload(state),
-            questions=questions,
-            timeout=tier.timeout_ms / 1000.0,
-            max_attempts=tier.max_attempts,
+        payload = self._state_payload(state)
+        started = time.monotonic()
+        try:
+            judgments = client.decide(
+                model=tier.model,
+                api_key=api_key,
+                state=payload,
+                questions=questions,
+                timeout=tier.timeout_ms / 1000.0,
+                max_attempts=tier.max_attempts,
+                battery=battery,
+            )
+        except Exception as exc:
+            record_llm_call(
+                provider=Provider.TYPESAFE_JEV.value,
+                model=tier.model,
+                task_id=f"decision.{battery}",
+                agent_id=agent_id,
+                tier=TierName.DECISION.value,
+                battery=battery,
+                latency_ms=(time.monotonic() - started) * 1000.0,
+                ok=False,
+                error=type(exc).__name__,
+                prompt=json.dumps(
+                    payload, sort_keys=True, separators=(",", ":"), default=str
+                ),
+                response="",
+            )
+            raise
+        record_llm_call(
+            provider=Provider.TYPESAFE_JEV.value,
+            model=judgments.model,
+            task_id=f"decision.{battery}",
+            agent_id=agent_id,
+            tier=TierName.DECISION.value,
             battery=battery,
+            latency_ms=(time.monotonic() - started) * 1000.0,
+            ok=True,
+            input_tokens=judgments.input_tokens,
+            output_tokens=judgments.output_tokens,
+            prompt=json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), default=str
+            ),
+            response=json.dumps(
+                judgments.to_dict(), sort_keys=True, separators=(",", ":"), default=str
+            ),
         )
         return DecisionOutcome(
             judgments=judgments,
@@ -501,12 +543,48 @@ class ModelRouter:
             raise LLMNotConfigured(str(exc)) from exc
         except RoutingError as exc:
             raise LLMNotConfigured(str(exc)) from exc
-        result = self._client(route.provider).complete(
+        started = time.monotonic()
+        try:
+            result = self._client(route.provider).complete(
+                model=route.model,
+                api_key=api_key,
+                system=system,
+                prompt=prompt,
+                timeout=(
+                    route.timeout_ms / 1000.0 if timeout is None else float(timeout)
+                ),
+            )
+        except Exception as exc:
+            record_llm_call(
+                provider=route.provider.value,
+                model=route.model,
+                task_id=task_id or f"agent.{route.agent_id}",
+                task_version=task_version,
+                agent_id=route.agent_id,
+                tier=route.tier.value,
+                latency_ms=(time.monotonic() - started) * 1000.0,
+                ok=False,
+                error=type(exc).__name__,
+                system=system,
+                prompt=prompt,
+            )
+            raise
+        record_llm_call(
+            provider=route.provider.value,
             model=route.model,
-            api_key=api_key,
+            task_id=task_id or f"agent.{route.agent_id}",
+            task_version=task_version,
+            agent_id=route.agent_id,
+            tier=route.tier.value,
+            latency_ms=(time.monotonic() - started) * 1000.0,
+            ok=True,
+            finish_reason=result.finish_reason,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
             system=system,
             prompt=prompt,
-            timeout=(route.timeout_ms / 1000.0 if timeout is None else float(timeout)),
+            response=result.text,
+            reasoning=result.reasoning,
         )
         return CompletionOutcome(
             provider=route.provider, model=route.model, result=result
@@ -533,6 +611,25 @@ class ModelRouter:
                 model_mismatch=outcome.judgments.model_mismatch,
                 state_hash=outcome.state_hash,
             )
+        )
+        record_decision(
+            "model_decision",
+            agent_id=agent_id,
+            task_id=task_id,
+            battery=outcome.judgments.battery,
+            tier=outcome.tier,
+            provider=outcome.provider,
+            model=outcome.model,
+            source=outcome.source,
+            fallback_used=outcome.fallback_used,
+            fallback_from=outcome.fallback_from,
+            latency_ms=outcome.judgments.latency_ms,
+            request_id=outcome.judgments.request_id,
+            model_mismatch=outcome.judgments.model_mismatch,
+            state_hash=outcome.state_hash,
+            answers={
+                name: answer.to_dict() for name, answer in outcome.judgments.answers
+            },
         )
 
 

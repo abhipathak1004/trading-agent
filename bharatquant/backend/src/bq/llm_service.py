@@ -17,6 +17,7 @@ Design choices:
   ``LLMClientError``, never a raw provider traceback.
 """
 
+import time
 from dataclasses import dataclass
 
 from bq.llm_client import (
@@ -27,6 +28,7 @@ from bq.llm_client import (
     client_for,
 )
 from bq.llm_result import LLMResult as ModelResult
+from bq.logbook import record_llm_call
 from bq.model_routing import (
     DataClassification,
     ModelCandidate,
@@ -156,12 +158,42 @@ class LLMService:
         api_key = self.store.api_key(config.provider)
         if api_key is None:  # defensive; _resolve already checked
             raise LLMNotConfigured("API key disappeared between checks.")
-        completion = client.complete(
+        started = time.monotonic()
+        try:
+            completion = client.complete(
+                model=model,
+                api_key=api_key,
+                system=system,
+                prompt=prompt,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            record_llm_call(
+                provider=config.provider.value,
+                model=model,
+                task_id=task_id,
+                task_version=task_version,
+                latency_ms=(time.monotonic() - started) * 1000.0,
+                ok=False,
+                error=type(exc).__name__,
+                system=system,
+                prompt=prompt,
+            )
+            raise
+        record_llm_call(
+            provider=config.provider.value,
             model=model,
-            api_key=api_key,
+            task_id=task_id,
+            task_version=task_version,
+            latency_ms=(time.monotonic() - started) * 1000.0,
+            ok=True,
+            finish_reason=completion.finish_reason,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
             system=system,
             prompt=prompt,
-            timeout=timeout,
+            response=completion.text,
+            reasoning=completion.reasoning,
         )
         return CompletionOutcome(
             provider=config.provider,

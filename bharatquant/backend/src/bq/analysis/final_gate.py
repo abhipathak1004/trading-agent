@@ -17,6 +17,7 @@ from bq.decision.battery import FINAL_GATE
 from bq.decision.policy import DecisionPolicy, FinalDecision
 from bq.decision.state import DecisionState, build_decision_state
 from bq.decision.types import DecisionOutcome
+from bq.logbook import record_decision
 
 
 class DecisionRouterLike(Protocol):
@@ -83,6 +84,24 @@ class FinalGate:
             task_id="analysis.final_gate",
         )
         decision = self.policy.compose_final(outcome.judgments, source=outcome.source)
+        record_decision(
+            "final_gate",
+            symbol=report.symbol,
+            plan_symbol=plan.symbol,
+            signal=plan.signal.value,
+            action=decision.verdict.value,
+            execute=decision.execute,
+            size_scale=decision.size_scale,
+            reason=decision.reason,
+            conviction=decision.conviction,
+            source=outcome.source,
+            provider=outcome.provider,
+            model=outcome.model,
+            tier=outcome.tier,
+            fallback_used=outcome.fallback_used,
+            fallback_from=outcome.fallback_from,
+            state_hash=outcome.state_hash,
+        )
         return FinalGateResult(outcome=outcome, decision=decision, state=state)
 
 

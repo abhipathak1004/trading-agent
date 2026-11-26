@@ -6,6 +6,14 @@ task. History lives in git and
 
 ## Current state
 
+- **Operational logging (26 Nov 2026):** `bq/logbook.py` records every LLM call
+  (full system/prompt/response, provider/model/tokens/latency/outcome) and every
+  model, final-gate, campaign and trigger decision. Entries buffer in
+  `<BQ_HOME>/logs/.pending.jsonl` and flush to `bq-YYYY-MM-DD.jsonl` every 15
+  minutes (asyncio loop + `logs.flush` job + record-time fallback); retention
+  defaults to 14 days and is owner-configurable. Controls and a log viewer live
+  in **Settings → Logging**; API `GET/PUT /api/v1/logs` and
+  `POST /api/v1/logs/flush`. No migration: settings live in `app_settings.logging`.
 - **Catalyst campaign delivered (26 Nov 2026):** the news → catalyst →
   shortlist → deterministic TA/plan → breakout-trigger → paper fill → 5pm review
   loop is wired end to end. Migration **038** adds `equity_master`,
@@ -94,11 +102,12 @@ task. History lives in git and
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
   execution/realism, memory, confidence, opportunities/shadows, scheduler,
   reports, backtests, research dossiers and runtime hardening.
-- **Verification:** 872 backend tests, 119 frontend tests; ruff/format clean;
+- **Verification:** 945 backend tests, 131 frontend tests; ruff/format clean;
   frontend typecheck/build clean; fresh DB applies **37 migrations**.
-- **mypy:** 90 pre-existing errors across `cli.py`, `paper_performance.py`,
-  `infra/scheduler.py` and the tunnel test fakes. Do not “fix” them as part of
-  maintenance; the tunnel change adds none.
+- **mypy:** pre-existing errors remain in `cli.py`, `triggers.py`, `campaign.py`,
+  `campaign_feedback.py`, `catalysts.py`, `reports/engine.py`,
+  `infra/scheduler.py` and some test fakes. Do not “fix” them as part of
+  maintenance; the logging change adds none.
 - **Next migration number:** `039` if a new migration is needed.
 
 ## Phase 19 delivered
@@ -157,6 +166,7 @@ maintenance/optional breadth:
 | Strategies | `bq/strategy_dsl.py`, `bq/backtest.py` |
 | Execution | `bq/paper_trading.py`, `bq/execution/` |
 | Campaign | `bq/campaign.py`, `bq/catalysts.py`, `bq/shortlist.py`, `bq/triggers.py`, `bq/campaign_feedback.py`, `bq/data/equity_master.py`, `web/src/CampaignPanel.tsx` |
+| Logging | `bq/logbook.py`, `bq/infra/job_handlers.py` (`logs.flush`), `web/src/LoggingPanel.tsx`, `web/src/loggingContract.ts` |
 
 ## Commands
 
@@ -173,6 +183,9 @@ npm test && npm run typecheck && npm run build
 # operations
 BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq bench
 BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq db backup --output "$HOME/Backups/bq.db"
+
+# operational logs (Settings -> Logging flushes manually; the loop runs every 15 min)
+tail -n 5 "$HOME/Library/Application Support/BharatQuant/logs"/bq-*.jsonl
 
 # campaign (first run creates paper-main, saves defaults, seeds schedules)
 uv run --locked bq campaign init

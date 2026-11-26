@@ -67,6 +67,7 @@ from bq.data.vendors import VendorRouter
 from bq.data.vendors.base import BarInterval
 from bq.infra.equity_listing import fetch_listing
 from bq.infra.news_feed import fetch_feed
+from bq.logbook import record_decision
 from bq.news import (
     MAX_ITEMS_PER_INGEST,
     NewsError,
@@ -733,6 +734,17 @@ class CampaignService:
             summary["notes"] = ["No qualifying positive catalyst for this session."]
             self.store.set_summary(campaign_id, summary)
             self.store.set_status(campaign_id, "READY")
+            record_decision(
+                "campaign_summary",
+                campaign_id=campaign_id,
+                trade_date=trade_date.isoformat(),
+                status="READY",
+                shortlisted=0,
+                candidates=0,
+                blocked=0,
+                errors=0,
+                note="no qualifying positive catalyst",
+            )
             return self.store.get(campaign_id)
 
         equity, cash = self._equity_and_cash(config)
@@ -804,6 +816,20 @@ class CampaignService:
                 open_positions += 1
             else:
                 blocked += 1
+            record_decision(
+                "campaign_candidate",
+                campaign_id=campaign_id,
+                trade_date=trade_date.isoformat(),
+                symbol=item.symbol,
+                rank=rank,
+                verdict=verdict,
+                status=status,
+                reasons=list(reasons),
+                signal=None if result.plan is None else result.plan.signal.value,
+                composite=result.report.composite,
+                catalyst_score=item.score,
+                negative_strength=item.negative_strength,
+            )
             self.store.upsert_item(
                 campaign_id=campaign_id,
                 symbol=item.symbol,
@@ -842,7 +868,18 @@ class CampaignService:
             }
         )
         self.store.set_summary(campaign_id, summary)
-        self.store.set_status(campaign_id, "ACTIVE" if candidates else "READY")
+        final_status = "ACTIVE" if candidates else "READY"
+        self.store.set_status(campaign_id, final_status)
+        record_decision(
+            "campaign_summary",
+            campaign_id=campaign_id,
+            trade_date=trade_date.isoformat(),
+            status=final_status,
+            shortlisted=len(shortlist.items),
+            candidates=candidates,
+            blocked=blocked,
+            errors=errors,
+        )
         return self.store.get(campaign_id)
 
     def latest(self) -> Campaign | None:

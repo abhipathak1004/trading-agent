@@ -58,6 +58,7 @@ from bq.data.vendors.base import BarInterval
 from bq.data.vendors.errors import VendorError
 from bq.execution.context import ExecutionContextError, build_execution_context
 from bq.execution.paper_executor import PaperExecutor, PaperExecutorError
+from bq.logbook import record_decision
 from bq.paper_trading import (
     PaperOrderType,
     PaperProduct,
@@ -248,6 +249,26 @@ class TriggerEngine:
                         exits += 1
             self._refresh_campaign_status(campaign)
 
+        for outcome in outcomes:
+            record_decision(
+                "trigger_outcome",
+                campaign_id=outcome.campaign_id,
+                symbol=outcome.symbol,
+                status=outcome.status,
+                detail=outcome.detail[:MAX_REASON_CHARS],
+            )
+        record_decision(
+            "trigger_scan",
+            as_of=instant.isoformat(),
+            session_open=open_now,
+            session_source=source,
+            campaigns=len(campaigns),
+            entries_triggered=entries,
+            entries_blocked=blocked,
+            exits=exits,
+            expired=expired,
+            notes=list(notes[:MAX_SCAN_NOTES]),
+        )
         return ScanResult(
             as_of=instant,
             session_open=open_now,

@@ -61,6 +61,7 @@ def test_scheduler_catalogue_crud_dry_run_and_run(tmp_path: Path) -> None:
                 "report.evening_accuracy",
                 "paper.stops",
                 "paper.square_off",
+                "logs.flush",
             }
 
             initial = await client.get("/api/v1/schedules")

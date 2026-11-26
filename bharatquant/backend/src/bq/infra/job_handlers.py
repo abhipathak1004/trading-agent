@@ -9,6 +9,7 @@ from bq.analysis.wiring import build_analysis_router
 from bq.campaign import CampaignService
 from bq.infra.job_worker import JobHandler
 from bq.infra.jobs import JobRun
+from bq.logbook import configure_logbook
 from bq.memory import EpisodicMemoryStore, OutcomeResolver
 from bq.news_agent import NewsResearchAgent
 from bq.paper_square_off import PaperSquareOff
@@ -26,6 +27,7 @@ PAPER_STOPS_JOB = "paper.stops"
 PAPER_SQUARE_OFF_JOB = "paper.square_off"
 CAMPAIGN_RESEARCH_JOB = "campaign.research"
 CAMPAIGN_TRIGGERS_JOB = "campaign.triggers"
+LOGS_FLUSH_JOB = "logs.flush"
 DEFAULT_RESOLVE_HORIZON_DAYS = 5
 DEFAULT_RESOLVE_MAX_EPISODES = 50
 
@@ -106,6 +108,10 @@ def build_job_handlers(
             .to_dict()
         )
 
+    def flush_logs(_run: JobRun) -> dict[str, object]:
+        config = settings.load().logging
+        return configure_logbook(database_path.parent, config).flush().to_dict()
+
     def evaluate_stops(run: JobRun) -> dict[str, object]:
         router = build_analysis_router(database_path, settings.load())
         result = PaperStopStore(database_path).evaluate(router, as_of=run.scheduled_at)
@@ -135,12 +141,14 @@ def build_job_handlers(
         PAPER_SQUARE_OFF_JOB: square_off,
         CAMPAIGN_RESEARCH_JOB: campaign_research,
         CAMPAIGN_TRIGGERS_JOB: campaign_triggers,
+        LOGS_FLUSH_JOB: flush_logs,
     }
 
 
 __all__ = [
     "DEFAULT_RESOLVE_HORIZON_DAYS",
     "DEFAULT_RESOLVE_MAX_EPISODES",
+    "LOGS_FLUSH_JOB",
     "MEMORY_RESOLVE_JOB",
     "NEWS_INGEST_JOB",
     "PAPER_SQUARE_OFF_JOB",

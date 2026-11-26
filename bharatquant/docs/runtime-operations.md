@@ -61,6 +61,27 @@ crash.
 
 The Today page Runtime card polls the status endpoint every 30 seconds.
 
+## Operational logs
+
+The logbook records every LLM call and trading decision under
+`$BQ_HOME/logs/` (normally `~/Library/Application Support/BharatQuant/logs/`).
+
+- `.pending.jsonl` — append-only buffer; survives restarts.
+- `bq-YYYY-MM-DD.jsonl` — flushed daily files (segments `.1`, `.2` when a file
+  exceeds 50 MB).
+- Flush cadence and retention are configurable in **Settings → Logging**.
+  Defaults: every 15 minutes, keep 14 days.
+- Entries are one JSON object per line with `v`, `ts`, `kind` (`llm_call`,
+  `decision`, `system`) and `data`. Full prompts and responses are included;
+  each text field is capped at 256 KiB and a whole entry at 1 MiB.
+- Bearer/API-key-shaped substrings are redacted, but the files are not encrypted.
+  They are local plain text for a single owner.
+- Flush manually with **Settings → Logging → Flush now**
+  (`POST /api/v1/logs/flush`) or the `logs.flush` scheduled job. Files older than
+  the retention window are deleted on every flush.
+- These files are operational telemetry, not the audit chain. The hash-chained
+  `audit_events` table remains the record of state-changing owner actions.
+
 ## Backup and restore
 
 ```sh
