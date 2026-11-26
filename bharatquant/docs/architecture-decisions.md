@@ -540,3 +540,41 @@ small store and injection surface; because defaults are code and the store is
 append-only, a bad prompt cannot erase the baseline. Phase 3 agents will add
 their prompt definitions to the same registry instead of inventing another
 configuration path.
+
+## ADR-020: The Super Agent ranks; the coordinator gates and never delegates a BUY
+
+**Status:** Accepted; Strategy desk implements it.
+
+**Context:** The owner wants to supply a strategy and have the Super Agent use
+the specialist agents. Letting a model choose the universe, invent a trade the
+deterministic pipeline rejected, or resize a plan would move policy into a
+prompt. Running one broken symbol must also not destroy the whole run.
+
+**Decision:** The coordinator is code (`bq/super_agent.py`); the Super Agent is a
+bounded synthesis step.
+
+- The coordinator resolves and caps the universe, runs the existing per-symbol
+  pipeline, and records a per-symbol error instead of aborting the run.
+- Only a deterministic BUY plan is a candidate. The coordinator accepts plans in
+  composite/confidence order until `max_positions` or available cash is reached;
+  it never changes the sizer's quantity. A plan that does not fit is rejected
+  with a reason.
+- The reasoning tier receives the strategy, constraints and one compact payload
+  per candidate. It may rank, downgrade to HOLD/AVOID, and comment; it may not
+  create a BUY, invent a symbol or alter a number. A rank for an unknown symbol
+  is ignored; a BUY for a non-candidate is impossible because only accepted plans
+  are rendered.
+- With no reasoning answer the run falls back to a rules ranking by composite and
+  confidence, labelled `source="rules"` / `fallback_from="reasoning"`.
+- The Super Agent prompt (`super_agent_cio`) is editable in Agent Lab with
+  required placeholders validated before save. Thresholds, sizing and risk stay
+  in code.
+- Accepted plans are research output. The endpoint does not touch the broker and
+  does not create paper orders; a future execution step must go through the
+  existing risk gate and paper executor.
+
+**Consequences:** A strategy can be explored end to end from the browser without
+letting a model override risk or manufacturing a trade. The cost is a sequential
+per-symbol run (bounded to eight) and a second reasoning call per strategy. The
+per-symbol traces and route ledger make it clear which agents actually
+contributed and which model answered.

@@ -50,6 +50,37 @@ DECISION_SYSTEM = (
     "supplied state. Do not explain."
 )
 
+SUPER_AGENT_SYSTEM = """\
+You are the Super Agent / portfolio manager for a paper-only Indian equity desk.
+You receive a strategy brief, hard constraints, and one structured summary per
+candidate produced by the specialist agents. Your job is to rank what to do with
+each candidate and explain the portfolio view.
+
+Hard rules:
+- Every number you need is in the candidate payload. Do not calculate, adjust or
+  estimate prices, quantities, R:R or returns.
+- A candidate may only be "BUY" when its deterministic plan is a BUY. You may
+  downgrade it to "HOLD" or "AVOID"; you may not create a new BUY.
+- Respect the position cap and the strategy's intent. Long-only; no orders are
+  placed by this component.
+- Reply with exactly one JSON object matching the supplied schema. No prose.
+"""
+
+SUPER_AGENT_TEMPLATE = """\
+STRATEGY
+{strategy}
+
+TIMEFRAME
+{timeframe}
+
+CONSTRAINTS
+{constraints}
+
+CANDIDATES
+{candidates}
+
+Return the ranked action JSON now."""
+
 
 class PromptError(ValueError):
     pass
@@ -109,6 +140,17 @@ DEFINITIONS: tuple[PromptDefinition, ...] = (
         system=RISK_SYSTEM,
         template=RISK_TEMPLATE,
         required_fields=("symbol", "timeframe", "as_of", "facts"),
+    ),
+    PromptDefinition(
+        agent_id="super_agent_cio",
+        label="Super Agent (CIO)",
+        description=(
+            "Ranks the specialist results against the owner's strategy and writes "
+            "the portfolio view. Cannot create a BUY the deterministic plan rejects."
+        ),
+        system=SUPER_AGENT_SYSTEM,
+        template=SUPER_AGENT_TEMPLATE,
+        required_fields=("strategy", "timeframe", "constraints", "candidates"),
     ),
     PromptDefinition(
         agent_id="decision_screener",
@@ -392,6 +434,8 @@ __all__ = [
     "PromptNotFound",
     "PromptSource",
     "PromptStore",
+    "SUPER_AGENT_SYSTEM",
+    "SUPER_AGENT_TEMPLATE",
     "default_prompt",
     "resolve_prompt",
     "validate_agent_id",

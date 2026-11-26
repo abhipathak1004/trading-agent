@@ -12,11 +12,20 @@ import AgentConsole from "./AgentConsole";
 import AnalysisPanel from "./AnalysisPanel";
 import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
 import AgentLabPanel from "./AgentLabPanel";
+import StrategyPanel from "./StrategyPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
+import HowToUsePanel from "./HowToUsePanel";
 
-type WorkspaceView = "today" | "technical" | "agents" | "research" | "settings";
+type WorkspaceView =
+  | "today"
+  | "technical"
+  | "agents"
+  | "strategy"
+  | "research"
+  | "settings"
+  | "guide";
 
 type ServiceState = "checking" | "online" | "offline";
 type SessionState =
@@ -315,11 +324,27 @@ export default function App() {
             </button>
             <button
               type="button"
+              className={`nav-item nav-item--button${view === "strategy" ? " nav-item--active" : ""}`}
+              aria-current={view === "strategy" ? "page" : undefined}
+              onClick={() => setView("strategy")}
+            >
+              <span aria-hidden="true">⬡</span>Strategy
+            </button>
+            <button
+              type="button"
               className={`nav-item nav-item--button${view === "settings" ? " nav-item--active" : ""}`}
               aria-current={view === "settings" ? "page" : undefined}
               onClick={() => setView("settings")}
             >
               <span aria-hidden="true">⚙</span>Settings
+            </button>
+            <button
+              type="button"
+              className={`nav-item nav-item--button${view === "guide" ? " nav-item--active" : ""}`}
+              aria-current={view === "guide" ? "page" : undefined}
+              onClick={() => setView("guide")}
+            >
+              <span aria-hidden="true">?</span>How to use
             </button>
             <p className="nav-label nav-label--secondary">Not available yet</p>
             <span className="nav-item nav-item--muted" aria-disabled="true">
@@ -347,9 +372,13 @@ export default function App() {
                     ? "Technical Analysis"
                     : view === "agents"
                       ? "Agent Lab"
-                      : view === "research"
-                        ? "Research"
-                        : "Today"}
+                      : view === "strategy"
+                        ? "Strategy"
+                        : view === "research"
+                          ? "Research"
+                          : view === "guide"
+                          ? "How to use"
+                          : "Today"}
             </span>
             <span className="mode-label">PAPER ONLY</span>
           </div>
@@ -566,6 +595,36 @@ export default function App() {
           </section>
         )}
 
+        {serviceState === "online" && session.state === "signed_in" && view === "strategy" && (
+          <section className="dashboard" id="strategy" aria-labelledby="strategy-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">STRATEGY</p>
+                <h1 id="strategy-page-title">Strategy desk</h1>
+                <p className="intro">
+                  Give the Super Agent a brief. It runs the specialist agents on
+                  each symbol, ranks the results, and gates the portfolio.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Strategy scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>The Super Agent ranks; the code gates</strong>
+                <p>
+                  The Super Agent cannot create a BUY the deterministic plan did
+                  not produce. Position count and cash are enforced in code, and
+                  accepted plans are research output only — no orders are placed.
+                </p>
+              </div>
+            </section>
+
+            <StrategyPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
         {serviceState === "online" && session.state === "signed_in" && view === "research" && (
           <section className="dashboard" id="research" aria-labelledby="research-page-title">
             <header className="page-header">
@@ -640,6 +699,12 @@ export default function App() {
               <ScheduleStatus />
               <UsageStatus />
             </div>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "guide" && (
+          <section className="dashboard" id="guide" aria-labelledby="guide-page-title">
+            <HowToUsePanel />
           </section>
         )}
 

@@ -7,7 +7,29 @@ Start here when resuming work. This file lives in the workspace and does not dep
 Updated 26 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
 
-**Latest slice — Agent Lab: test the decision agent and edit every prompt from the UI.**
+**Latest slice — Strategy desk: give the Super Agent a brief and run the whole agent team.**
+A new **Strategy** tab sends an owner-written strategy through a deterministic coordinator. The Super Agent ranks the results; code gates the portfolio; nothing places an order.
+
+- **Coordinator** — `bq/super_agent.py` resolves the requested symbols, runs the existing per-symbol pipeline (technical → news context → bull/bear → judge → risk team → sizer → decision), and collects each symbol's plan and agent trace. One broken symbol becomes a per-symbol error, not a failed run.
+- **Deterministic gate** — only a plan whose signal is BUY can become a candidate. Accepted plans are capped by `max_positions` and cumulative notional ≤ available cash. The plan's sized quantity is never changed; a plan that does not fit is rejected with a reason.
+- **Super Agent synthesis** — the reasoning tier ranks candidates and writes the portfolio view through a strict JSON schema. It may downgrade a BUY to HOLD/AVOID but cannot create a BUY the deterministic plan did not produce; unknown symbols are ignored. With no reasoning model, a rules synthesis ranks by composite/confidence and labels itself `rules` / `fallback_from=reasoning`.
+- **Prompt editing** — `super_agent_cio` is now a first-class prompt in Agent Lab, with required placeholders (`strategy`, `timeframe`, `constraints`, `candidates`) validated before saving.
+- **API/UI** — `POST /api/v1/strategy/run` (owner-only, origin + CSRF, no-store). The Strategy tab takes the brief, symbols, timeframe, equity/cash, risk bps and max positions, then shows ranked actions, accepted paper plans, rejected names with reasons, per-symbol agent traces, and portfolio/risk notes. Accepted plans are research output only.
+- **Bounds** — at most 8 symbols and 10 positions per run; single-owner sequential execution.
+
+Verification: **748 backend tests** (9 new: 6 Super Agent orchestration, 3 strategy API), **52 frontend tests** (2 new), ruff and format clean, frontend typecheck and build clean. mypy remains at the same 25 pre-existing errors in untouched files.
+
+Next: Phase 3 — news wiring, Fundamental/Events and Market Regime specialists, four-layer memory, shadow trades and source/model-bucketed Brier, then the Jev final gate.
+
+**Latest slice — "How to use" tab: an in-app guide to every screen and agent.**
+A new **How to use** sidebar tab renders a long-form, static documentation page covering the whole UI and every agent.
+
+- **Content** — `bharatquant/web/src/howToUseContent.ts` exports typed `GUIDE_SECTIONS` (welcome/operating model, getting started, Today, Research, Technical, Agent Lab, Settings, model routing/decision ladder, glossary, guardrails, troubleshooting) and `AGENT_DOCS` (orchestrator, technical analyst, bull, bear, research judge, risk analyst, news research agent, research agent, decision screener, heuristic judge, sizing/TradePlan, batch analyst).
+- **Renderer** — `HowToUsePanel.tsx` is pure static (no fetch, no props): page header, scope banner, in-page TOC with anchor links, one `.settings-panel` per section and agent cards with inputs/outputs/model/tools/limits. Reuses existing design classes; adds a small `.guide*` CSS block.
+- **Wiring** — `WorkspaceView` gains `"guide"`, a sidebar button after Settings, a breadcrumb label and a `view === "guide"` section. No new API endpoints, no model calls, no runtime data fetches.
+- **Verification** — frontend typecheck and build clean; all **50** frontend tests pass. Content is static and marked last reviewed 2026-11-26, so it must be updated when the UI changes.
+
+**Previous slice — Agent Lab: test the decision agent and edit every prompt from the UI.**
 The inert Agent Lab placeholder is now a working tab with two surfaces: a decision-agent runner and a versioned prompt editor.
 
 - **Decision agent runner** — `POST /api/v1/decision/preview` resolves the symbol, runs the deterministic front half of the pipeline, builds the dense `DecisionState`, runs the screener battery through the configured ladder (Jev → Flash → Reasoning → heuristic → rules-only), applies `DecisionPolicy`, and returns the state, judgments, policy verdict and exact route (source/model/latency/request id/state hash). It does not place an order.

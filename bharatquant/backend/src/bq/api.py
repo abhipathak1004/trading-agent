@@ -104,6 +104,7 @@ from bq.settings import (
     TierConfig,
     TierName,
 )
+from bq.super_agent import StrategyError, SuperAgent
 from bq.tools.base import ToolBlocked, ToolError, ToolSpec
 
 WEB_ROOT = Path(__file__).with_name("static")
@@ -478,6 +479,28 @@ class PromptList(BaseModel):
 class PromptUpdate(BaseModel):
     system: str = Field(min_length=1, max_length=MAX_PROMPT_CHARS, strict=True)
     template: str = Field(default="", max_length=MAX_PROMPT_CHARS, strict=True)
+
+
+class StrategyRunRequest(BaseModel):
+    strategy: str = Field(min_length=1, max_length=2_000, strict=True)
+    symbols: str = Field(min_length=1, max_length=512, strict=True)
+    timeframe: Literal["intraday", "swing"] = "swing"
+    equity_paise: int = Field(gt=0, le=10**13, strict=True)
+    available_cash_paise: int = Field(ge=0, le=10**13, strict=True)
+    risk_basis_points: int = Field(default=100, ge=0, le=10_000, strict=True)
+    max_positions: int = Field(default=2, ge=1, le=10, strict=True)
+
+
+class StrategyRunResponse(BaseModel):
+    strategy: str
+    timeframe: str
+    as_of: str
+    spec: dict[str, object]
+    symbols: list[dict[str, object]]
+    decision: dict[str, object]
+    accepted: list[dict[str, object]]
+    rejected: list[dict[str, object]]
+    notes: list[str]
 
 
 class AnalysisRunResponse(BaseModel):
@@ -907,6 +930,7 @@ def create_app(
                 "/api/v1/agent/",
                 "/api/v1/analysis/",
                 "/api/v1/decision/",
+                "/api/v1/strategy/",
                 "/api/v1/prompts/",
             )
         ):
@@ -1499,6 +1523,42 @@ def create_app(
                 route=route,
                 notes=list(notes),
             )
+
+        @app.post("/api/v1/strategy/run")
+        def run_strategy(
+            request: Request, body: StrategyRunRequest
+        ) -> StrategyRunResponse:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            config = settings.load()
+            prompt_store = PromptStore(database_path)
+            agent = SuperAgent(
+                pipeline_factory=lambda: _analysis_pipeline(
+                    database_path, config, settings
+                ),
+                router_factory=lambda: ModelRouter(settings, prompts=prompt_store),
+                prompts=prompt_store,
+            )
+            try:
+                run = agent.run(
+                    strategy=body.strategy,
+                    symbols=body.symbols,
+                    timeframe=body.timeframe,
+                    equity_paise=body.equity_paise,
+                    available_cash_paise=body.available_cash_paise,
+                    risk_basis_points=body.risk_basis_points,
+                    max_positions=body.max_positions,
+                )
+            except StrategyError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return StrategyRunResponse.model_validate(run.to_dict())
 
         @app.get("/api/v1/news/digest")
         def news_digest(request: Request) -> NewsDigest:

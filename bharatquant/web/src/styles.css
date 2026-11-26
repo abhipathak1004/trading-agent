@@ -1864,3 +1864,131 @@ a.nav-item:hover,
   line-height: 1.55;
   resize: vertical;
 }
+
+/* How to use guide --------------------------------------------------- */
+
+.guide {
+  display: grid;
+  gap: 16px;
+}
+
+.guide-toc {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgb(22 16 34 / 78%);
+}
+
+.guide-toc a {
+  color: var(--muted-strong);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.guide-toc a:hover,
+.guide-toc a:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.guide-section {
+  scroll-margin-top: 96px;
+}
+
+.guide-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.guide-list li {
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.guide-list--compact {
+  margin: 0;
+  gap: 3px;
+}
+
+.guide-agents {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.guide-agent {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.guide-agent h3 {
+  margin-top: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.guide-agent .eyebrow {
+  margin: 2px 0 8px;
+}
+
+.guide-agent p {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.guide-agent .settings-facts {
+  margin-top: 10px;
+}
+
+@media (max-width: 900px) {
+  .guide-agents {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Strategy desk ------------------------------------------------------ */
+
+.strategy-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+.strategy-result {
+  margin-top: 16px;
+}
+
+.strategy-symbols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.strategy-symbol {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.strategy-symbol--failed {
+  border-color: rgb(239 68 68 / 45%);
+}
+
+.strategy-symbol-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
