@@ -7,7 +7,20 @@ Start here when resuming work. This file lives in the workspace and does not dep
 Updated 26 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
 
-**Latest slice — Strategy desk: give the Super Agent a brief and run the whole agent team.**
+**Latest slice — Phase 3A: real news context, market regime and corporate-event specialists.**
+The analysis DAG now runs three Stage 1 specialists before the debate, and their facts reach the bull, bear, judge and risk prompts.
+
+- **News context** — `bq/analysis/news_context.py` replaces the placeholder. It reads the deterministic news store point-in-time (`NewsStore.recent(..., as_of=...)` plus active long-term memories), matches the symbol's trading name, and emits a typed `SpecialistBrief` with source ids. No model call and no article fetch. `NewsStore.recent` gained an `as_of` filter.
+- **Market regime** — `bq/analysis/regime.py` reads NIFTY 50, NIFTY Bank and India VIX through the existing `INDICES` vendor domain, computes SMA/ADX/ATR/returns in code and classifies `trend_up | trend_down | range | high_vol_stress`. It never asks a model to label the regime.
+- **Fundamental & corporate events** — `bq/analysis/fundamental.py` extracts symbol-specific results/dividend/split/buyback headlines already in the news store. It is deliberately narrow until a verifiable fundamentals vendor exists; it does not invent earnings dates or valuations.
+- **Contracts and propagation** — new `bq/analysis/briefs.py` (`SpecialistBrief`, `Claim`). The three nodes are optional: a missing/failed specialist records a degraded trace and the run continues. Up to 18 specialist facts are appended to the debate/risk prompts, alongside the existing technical facts.
+- **Surfaces** — `AnalysisResult.to_dict()` now includes `specialists`; the Technical tab shows each brief, its status, source and facts. Existing `AnalysisRun`/`AnalysisRunStore` payloads remain valid.
+
+Verification: **755 backend tests** (7 new specialist/PIT tests), **54 frontend tests** (2 new contract tests), ruff and format clean, frontend typecheck and build clean. mypy remains at the same 25 pre-existing errors in untouched files.
+
+Next: the memory slice — `episodic_memory` with shadow trades and source/model-bucketed Brier, semantic FTS5 with a capability fallback, the evidence verifier, and the Jev final gate.
+
+**Previous slice — Strategy desk: give the Super Agent a brief and run the whole agent team.**
 A new **Strategy** tab sends an owner-written strategy through a deterministic coordinator. The Super Agent ranks the results; code gates the portfolio; nothing places an order.
 
 - **Coordinator** — `bq/super_agent.py` resolves the requested symbols, runs the existing per-symbol pipeline (technical → news context → bull/bear → judge → risk team → sizer → decision), and collects each symbol's plan and agent trace. One broken symbol becomes a per-symbol error, not a failed run.

@@ -20,6 +20,7 @@ Three design commitments:
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -175,6 +176,7 @@ class Debate:
         system: str,
         template: str,
         side: str,
+        extra_facts: Sequence[str] = (),
     ) -> Argument:
         resolved_system, resolved_template = resolve_prompt(
             self._prompts, agent_id, system, template
@@ -183,7 +185,7 @@ class Debate:
             symbol=report.symbol,
             timeframe=report.timeframe,
             as_of=report.as_of.isoformat(),
-            facts="\n".join(report.facts()),
+            facts="\n".join((*report.facts(), *extra_facts)),
         )
         payload = _extract_json(
             self._call(
@@ -198,22 +200,28 @@ class Debate:
             points=_points(payload.get("strongest_points")),
         )
 
-    def bull(self, report: TechnicalReport) -> Argument:
+    def bull(
+        self, report: TechnicalReport, *, extra_facts: Sequence[str] = ()
+    ) -> Argument:
         return self._side(
             report,
             agent_id="bull_debater",
             system=BULL_SYSTEM,
             template=BULL_TEMPLATE,
             side="bull",
+            extra_facts=extra_facts,
         )
 
-    def bear(self, report: TechnicalReport) -> Argument:
+    def bear(
+        self, report: TechnicalReport, *, extra_facts: Sequence[str] = ()
+    ) -> Argument:
         return self._side(
             report,
             agent_id="bear_debater",
             system=BEAR_SYSTEM,
             template=BEAR_TEMPLATE,
             side="bear",
+            extra_facts=extra_facts,
         )
 
     def judge(
@@ -223,6 +231,7 @@ class Debate:
         bull: Argument,
         bear: Argument,
         ceiling: float,
+        extra_facts: Sequence[str] = (),
     ) -> Verdict:
         judge_system, judge_template = resolve_prompt(
             self._prompts, "research_judge", JUDGE_SYSTEM, JUDGE_TEMPLATE
@@ -232,7 +241,7 @@ class Debate:
             timeframe=report.timeframe,
             as_of=report.as_of.isoformat(),
             confidence_ceiling=ceiling,
-            facts="\n".join(report.facts()),
+            facts="\n".join((*report.facts(), *extra_facts)),
             bull=json.dumps(bull.to_dict(), ensure_ascii=False),
             bear=json.dumps(bear.to_dict(), ensure_ascii=False),
         )

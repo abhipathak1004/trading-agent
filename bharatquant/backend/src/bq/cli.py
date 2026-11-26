@@ -16,7 +16,10 @@ import uvicorn
 from bq.agent_prompts import PromptStore
 from bq.analysis.debate import Debate
 from bq.analysis.decision import trade_plan_from_json
+from bq.analysis.fundamental import FundamentalEventsAgent
+from bq.analysis.news_context import NewsContextAgent
 from bq.analysis.pipeline import AnalysisPipeline
+from bq.analysis.regime import MarketRegimeAgent
 from bq.analysis.risk_team import RiskAnalyst
 from bq.analysis.wiring import build_analysis_router
 from bq.api import WEB_ROOT, create_app
@@ -51,7 +54,7 @@ from bq.infra.database import DatabaseError, check_database, migrate
 from bq.infra.model_attempts import ModelAttemptStore
 from bq.llm_service import LLMService
 from bq.model_router import ModelRouter, RoutedModelCaller
-from bq.news import NewsError
+from bq.news import NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
 from bq.risk.policy import KillSwitchLevel, RiskLimits
 from bq.settings import SettingsStore
@@ -289,22 +292,23 @@ def main(argv: list[str] | None = None) -> int:
         choices=[item.value for item in DelayedDataMode],
     )
     arguments = list(sys.argv[1:] if argv is None else argv)
-    # Opaque record ids are URL-safe and may begin with "-", which argparse would
-    # read as an option. Parse a safe placeholder, then restore the real id, so
+    # Opaque IDs are URL-safe and may begin with "-", which argparse would read
+    # as an option. Parse a safe placeholder, then restore the real id, so
     # options after the positional still parse normally.
-    dashed_record_id: str | None = None
+    _ID_POSITIONALS = {"inspect-eod": "import_id", "inspect-snapshot": "record_id"}
+    dashed_id: tuple[str, str] | None = None
     if (
         len(arguments) >= 3
         and arguments[0] == "data"
-        and arguments[1] == "inspect-snapshot"
+        and arguments[1] in _ID_POSITIONALS
         and arguments[2].startswith("-")
         and arguments[2] != "--"
     ):
-        dashed_record_id = arguments[2]
-        arguments[2] = "_pending_record_id"
+        dashed_id = (_ID_POSITIONALS[arguments[1]], arguments[2])
+        arguments[2] = "_pending_id"
     args = parser.parse_args(arguments)
-    if dashed_record_id is not None:
-        args.record_id = dashed_record_id
+    if dashed_id is not None:
+        setattr(args, dashed_id[0], dashed_id[1])
 
     try:
         home = _default_home()
@@ -719,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
                 config = settings_store.load()
                 router = build_analysis_router(path, config)
                 prompts = PromptStore(path)
+                news_store = NewsStore(path)
                 if config.any_tier_configured:
                     caller = RoutedModelCaller(
                         ModelRouter(settings_store, prompts=prompts)
@@ -728,6 +733,9 @@ def main(argv: list[str] | None = None) -> int:
                         debate=Debate(caller, prompts=prompts),
                         risk_analyst=RiskAnalyst(caller, prompts=prompts),
                         routing=caller,
+                        news=NewsContextAgent(news_store),
+                        regime=MarketRegimeAgent(router),
+                        fundamental=FundamentalEventsAgent(news_store),
                     )
                 else:
                     service = (
@@ -747,6 +755,9 @@ def main(argv: list[str] | None = None) -> int:
                             if service is not None
                             else None
                         ),
+                        news=NewsContextAgent(news_store),
+                        regime=MarketRegimeAgent(router),
+                        fundamental=FundamentalEventsAgent(news_store),
                     )
                 analysis = pipeline.run(
                     symbol=resolve_symbol(args.symbol),

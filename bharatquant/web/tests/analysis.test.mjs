@@ -314,3 +314,52 @@ test("a batch of payloads without run_ids parses end to end", () => {
 test("a non-string run_id is still rejected", () => {
   assert.throws(() => parseAnalysisRun({ ...analysisWithAgents, run_id: 42 }));
 });
+
+const specialistBriefs = [
+  {
+    agent: "news",
+    symbol: "NSE:RELIANCE",
+    as_of: "2026-11-25T09:15:00Z",
+    facts: ["News 2026-11-24: Reliance wins an order [CORPORATE]"],
+    claims: [
+      { statement: "News item: Reliance wins an order", evidence_ids: ["n1"], verified: false },
+    ],
+    degraded: false,
+    source: "news_store",
+  },
+  {
+    agent: "market_regime",
+    symbol: "INDEX:NIFTY 50",
+    as_of: "2026-11-25T09:15:00Z",
+    facts: ["Regime: trend_up."],
+    claims: [],
+    degraded: false,
+    source: "indices:yahoo",
+  },
+];
+
+test("specialist briefs are parsed and optional", () => {
+  assert.deepEqual(parseAnalysisRun(run).specialists, []);
+  const parsed = parseAnalysisRun({ ...run, specialists: specialistBriefs });
+  assert.equal(parsed.specialists.length, 2);
+  assert.equal(parsed.specialists[0].agent, "news");
+  assert.equal(parsed.specialists[0].claims[0].evidence_ids[0], "n1");
+  assert.equal(parsed.specialists[1].degraded, false);
+});
+
+test("malformed specialist briefs are rejected", () => {
+  for (const brief of [
+    { ...specialistBriefs[0], facts: Array.from({ length: 11 }, () => "f") },
+    { ...specialistBriefs[0], degraded: "no" },
+    { ...specialistBriefs[0], claims: [{ statement: "x", evidence_ids: [] }] },
+    { ...specialistBriefs[0], facts: [1] },
+  ]) {
+    assert.throws(() => parseAnalysisRun({ ...run, specialists: [brief] }));
+  }
+  assert.throws(() =>
+    parseAnalysisRun({
+      ...run,
+      specialists: Array.from({ length: 5 }, () => specialistBriefs[0]),
+    }),
+  );
+});

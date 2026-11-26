@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from bq.agents import AgentCycleResult, AgentDAG, AgentDAGError, AgentNode
+from bq.analysis.briefs import SPECIALIST_ORDER, SpecialistBrief
 from bq.analysis.debate import (
     Argument,
     Debate,
@@ -43,6 +44,9 @@ from bq.analysis.decision import (
     TradePlanError,
     build_plan,
 )
+from bq.analysis.fundamental import FundamentalEventsAgent
+from bq.analysis.news_context import NewsContextAgent
+from bq.analysis.regime import MarketRegimeAgent
 from bq.analysis.risk_team import (
     RiskAnalyst,
     RiskAssessment,
@@ -79,6 +83,7 @@ class PipelineContext:
     vendor_quotes: str = ""
     is_realtime: bool = False
     news_facts: tuple[str, ...] = ()
+    specialists: dict[str, SpecialistBrief] = field(default_factory=dict)
     report: TechnicalReport | None = None
     bull: Argument | None = None
     bear: Argument | None = None
@@ -102,6 +107,15 @@ class PipelineContext:
             if self.is_realtime
             else DataFreshness.DELAYED_YAHOO
         )
+
+    @property
+    def specialist_facts(self) -> tuple[str, ...]:
+        facts: list[str] = []
+        for name in SPECIALIST_ORDER:
+            brief = self.specialists.get(name)
+            if brief is not None:
+                facts.extend(brief.facts)
+        return tuple(facts[:18])
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +151,8 @@ class AgentTrace:
 AGENT_ROLES: dict[str, str] = {
     "gather_data": "Market data",
     "news_context": "News context",
+    "market_regime": "Market regime",
+    "fundamental_events": "Fundamental & events",
     "technical": "Technical analyst",
     "bull": "Bull advocate",
     "bear": "Bear advocate",
@@ -151,6 +167,8 @@ AGENT_ROLES: dict[str, str] = {
 AGENT_ORDER: tuple[str, ...] = (
     "gather_data",
     "news_context",
+    "market_regime",
+    "fundamental_events",
     "technical",
     "bull",
     "bear",
@@ -186,6 +204,7 @@ class AnalysisResult:
     skipped_nodes: tuple[str, ...]
     trace: tuple[AgentTrace, ...] = ()
     model_routing: tuple[RouteUse, ...] = ()
+    specialists: tuple[SpecialistBrief, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -217,6 +236,7 @@ class AnalysisResult:
             "skipped_nodes": list(self.skipped_nodes),
             "agents": [entry.to_dict() for entry in self.trace],
             "model_routing": [use.to_dict() for use in self.model_routing],
+            "specialists": [brief.to_dict() for brief in self.specialists],
         }
 
 
@@ -292,6 +312,9 @@ class AnalysisPipeline:
         analyst: TechnicalAnalyst | None = None,
         clock: Clock | None = None,
         routing: RoutedModelCaller | None = None,
+        news: NewsContextAgent | None = None,
+        regime: MarketRegimeAgent | None = None,
+        fundamental: FundamentalEventsAgent | None = None,
     ) -> None:
         self.router = router
         self.debate = debate
@@ -299,6 +322,9 @@ class AnalysisPipeline:
         self.analyst = analyst or TechnicalAnalyst()
         self.clock = clock or SystemClock()
         self.routing = routing
+        self.news = news
+        self.regime = regime
+        self.fundamental = fundamental
 
     # -- nodes ------------------------------------------------------------
 
@@ -334,15 +360,76 @@ class AnalysisPipeline:
         )
 
     def _news_context(self, ctx: PipelineContext) -> None:
-        """Placeholder for the news stage; deliberately produces no facts yet.
+        if self.news is None:
+            ctx.news_facts = ()
+            ctx.notes.append("news context: not configured")
+            self._record(ctx, "news_context", "degraded", "not configured")
+            return
+        try:
+            brief = self.news.brief(ctx.symbol, as_of=ctx.as_of)
+        except Exception as exc:  # an optional specialist must not kill a run
+            ctx.notes.append(f"news context: unavailable ({type(exc).__name__})")
+            self._record(
+                ctx,
+                "news_context",
+                "degraded",
+                f"news unavailable ({type(exc).__name__})",
+            )
+            return
+        ctx.specialists["news"] = brief
+        ctx.news_facts = brief.facts
+        self._record(
+            ctx,
+            "news_context",
+            "degraded" if brief.degraded else "ok",
+            f"{len(brief.facts)} fact(s) from {brief.source or 'news'}",
+        )
 
-        News is wired in a later slice. It exists as a node now so the DAG shape
-        and the parallel root are real, and so the run record already has a place
-        to describe news provenance.
-        """
-        ctx.news_facts = ()
-        ctx.notes.append("news context: not wired in this slice")
-        self._record(ctx, "news_context", "degraded", "not wired in this slice")
+    def _market_regime(self, ctx: PipelineContext) -> None:
+        if self.regime is None:
+            self._record(ctx, "market_regime", "degraded", "not configured")
+            return
+        try:
+            brief = self.regime.brief(as_of=ctx.as_of)
+        except Exception as exc:
+            ctx.notes.append(f"market regime: unavailable ({type(exc).__name__})")
+            self._record(
+                ctx,
+                "market_regime",
+                "degraded",
+                f"regime unavailable ({type(exc).__name__})",
+            )
+            return
+        ctx.specialists["market_regime"] = brief
+        self._record(
+            ctx,
+            "market_regime",
+            "degraded" if brief.degraded else "ok",
+            f"{len(brief.facts)} fact(s) from {brief.source or 'indices'}",
+        )
+
+    def _fundamental_events(self, ctx: PipelineContext) -> None:
+        if self.fundamental is None:
+            self._record(ctx, "fundamental_events", "degraded", "not configured")
+            return
+        try:
+            brief = self.fundamental.brief(ctx.symbol, as_of=ctx.as_of)
+        except Exception as exc:
+            ctx.notes.append(f"fundamental events: unavailable ({type(exc).__name__})")
+            self._record(
+                ctx,
+                "fundamental_events",
+                "degraded",
+                f"events unavailable ({type(exc).__name__})",
+            )
+            return
+        ctx.specialists["fundamental_events"] = brief
+        self._record(
+            ctx,
+            "fundamental_events",
+            "degraded" if brief.degraded else "ok",
+            f"{len(brief.facts)} fact(s) from {brief.source or 'news'}",
+        )
 
     def _technical(self, ctx: PipelineContext) -> None:
         if not ctx.bars:
@@ -394,7 +481,7 @@ class AnalysisPipeline:
             self._degrade(ctx, "bull", DebateUnavailable("no debate configured"))
             return
         try:
-            ctx.bull = self.debate.bull(ctx.report)
+            ctx.bull = self.debate.bull(ctx.report, extra_facts=ctx.specialist_facts)
             ctx.debate_attempted = True
             points = len(ctx.bull.points)
             self._record(ctx, "bull", "ok", f"bull case argued ({points} key point(s))")
@@ -406,7 +493,7 @@ class AnalysisPipeline:
             self._degrade(ctx, "bear", DebateUnavailable("no debate configured"))
             return
         try:
-            ctx.bear = self.debate.bear(ctx.report)
+            ctx.bear = self.debate.bear(ctx.report, extra_facts=ctx.specialist_facts)
             ctx.debate_attempted = True
             points = len(ctx.bear.points)
             self._record(ctx, "bear", "ok", f"bear case argued ({points} key point(s))")
@@ -430,7 +517,11 @@ class AnalysisPipeline:
             return
         try:
             ctx.verdict = self.debate.judge(
-                ctx.report, bull=ctx.bull, bear=ctx.bear, ceiling=ctx.ceiling
+                ctx.report,
+                bull=ctx.bull,
+                bear=ctx.bear,
+                ceiling=ctx.ceiling,
+                extra_facts=ctx.specialist_facts,
             )
             ctx.debate_rounds_run += 1
             clamped = (
@@ -451,7 +542,9 @@ class AnalysisPipeline:
             self._degrade(ctx, "risk_team", DebateUnavailable("no risk analyst"))
             return
         try:
-            ctx.risk = self.risk_analyst.assess(ctx.report)
+            ctx.risk = self.risk_analyst.assess(
+                ctx.report, extra_facts=ctx.specialist_facts
+            )
             ctx.debate_rounds_run += 1
             warnings = len(ctx.risk.early_warnings)
             self._record(
@@ -569,9 +662,23 @@ class AnalysisPipeline:
         nodes: tuple[AgentNode[PipelineContext, object], ...] = (
             AgentNode("gather_data", (), self._gather_data),
             AgentNode("news_context", (), self._news_context),
+            AgentNode("market_regime", (), self._market_regime),
+            AgentNode(
+                "fundamental_events",
+                ("news_context",),
+                self._fundamental_events,
+            ),
             AgentNode("technical", ("gather_data", "news_context"), self._technical),
-            AgentNode("bull", ("technical",), self._bull),
-            AgentNode("bear", ("technical",), self._bear),
+            AgentNode(
+                "bull",
+                ("technical", "market_regime", "fundamental_events"),
+                self._bull,
+            ),
+            AgentNode(
+                "bear",
+                ("technical", "market_regime", "fundamental_events"),
+                self._bear,
+            ),
             AgentNode("judge", ("bull", "bear"), self._judge),
             AgentNode("risk_team", ("judge",), self._risk_team),
             AgentNode(
@@ -636,6 +743,11 @@ class AnalysisPipeline:
                 sorted(ctx.trace, key=lambda entry: AGENT_ORDER.index(entry.node))
             ),
             model_routing=(() if self.routing is None else self.routing.routes_used),
+            specialists=tuple(
+                ctx.specialists[name]
+                for name in SPECIALIST_ORDER
+                if name in ctx.specialists
+            ),
         )
 
 

@@ -193,8 +193,12 @@ def test_parse_rejects_malformed_or_foreign_objects() -> None:
 # --------------------------------------------------------------------- tools
 
 
-def test_news_tools_read_and_write(tmp_path: Path) -> None:
+def test_news_tools_read_and_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = _seed(tmp_path)
+    # Keep the ingest step deterministic; the default agent would fetch the live feed.
+    monkeypatch.setattr("bq.news_agent.fetch_feed", lambda _url: FEED)
     agent = NewsResearchAgent(path, clock=FrozenClock())
     runner = agent.runner()
 

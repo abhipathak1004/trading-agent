@@ -20,6 +20,16 @@ function scoreLabel(value: number | null): string {
   return value === null ? "n/a" : value.toFixed(2);
 }
 
+const SPECIALIST_LABELS: Record<string, string> = {
+  news: "News context",
+  market_regime: "Market regime",
+  fundamental_events: "Fundamental & events",
+};
+
+function specialistLabel(agent: string): string {
+  return SPECIALIST_LABELS[agent] ?? agent;
+}
+
 function statusClass(status: AgentTraceEntry["status"]): string {
   return `trace-status trace-status--${status}`;
 }
@@ -154,6 +164,31 @@ function SymbolResult({ item }: { item: BatchAnalysisItem }) {
               <li key={fact}>{fact}</li>
             ))}
           </ul>
+          {run.specialists.length > 0 && (
+            <div className="specialist-briefs">
+              <h3>Specialist briefs</h3>
+              {run.specialists.map((brief) => (
+                <article key={brief.agent} className="specialist-brief">
+                  <div className="specialist-brief-head">
+                    <strong>{specialistLabel(brief.agent)}</strong>
+                    <span
+                      className={`trace-status trace-status--${
+                        brief.degraded ? "degraded" : "ok"
+                      }`}
+                    >
+                      {brief.degraded ? "degraded" : "ok"}
+                    </span>
+                    <span className="prompt-meta">{brief.source}</span>
+                  </div>
+                  <ul className="agent-tools">
+                    {brief.facts.map((fact) => (
+                      <li key={fact}>{fact}</li>
+                    ))}
+                  </ul>
+                </article>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </li>

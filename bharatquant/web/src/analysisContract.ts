@@ -38,6 +38,22 @@ export type AgentTraceEntry = {
   summary: string;
 };
 
+export type SpecialistClaim = {
+  statement: string;
+  evidence_ids: string[];
+  verified: boolean;
+};
+
+export type SpecialistBrief = {
+  agent: string;
+  symbol: string;
+  as_of: string;
+  facts: string[];
+  claims: SpecialistClaim[];
+  degraded: boolean;
+  source: string;
+};
+
 export type AnalysisRun = {
   /** Absent when the payload has not been persisted to the run store yet. */
   run_id?: string;
@@ -53,6 +69,7 @@ export type AnalysisRun = {
   vetoes: string[];
   notes: string[];
   agents: AgentTraceEntry[];
+  specialists: SpecialistBrief[];
 };
 
 function isNumberOrNull(value: unknown): value is number | null {
@@ -127,6 +144,64 @@ function parseAgents(value: unknown): AgentTraceEntry[] {
   });
 }
 
+function parseSpecialistClaims(value: unknown): SpecialistClaim[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new Error("Invalid specialist claims");
+  }
+  return value.map((claim) => {
+    if (
+      !isRecord(claim) ||
+      typeof claim.statement !== "string" ||
+      !Array.isArray(claim.evidence_ids) ||
+      !claim.evidence_ids.every((item) => typeof item === "string") ||
+      typeof claim.verified !== "boolean"
+    ) {
+      throw new Error("Invalid specialist claim");
+    }
+    return {
+      statement: claim.statement,
+      evidence_ids: claim.evidence_ids as string[],
+      verified: claim.verified,
+    };
+  });
+}
+
+function parseSpecialistBriefs(value: unknown): SpecialistBrief[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > 4) {
+    throw new Error("Invalid specialist briefs");
+  }
+  return value.map((brief) => {
+    if (
+      !isRecord(brief) ||
+      typeof brief.agent !== "string" ||
+      typeof brief.symbol !== "string" ||
+      typeof brief.as_of !== "string" ||
+      !Array.isArray(brief.facts) ||
+      brief.facts.length > 10 ||
+      !brief.facts.every((item) => typeof item === "string") ||
+      typeof brief.degraded !== "boolean" ||
+      typeof brief.source !== "string"
+    ) {
+      throw new Error("Invalid specialist brief");
+    }
+    return {
+      agent: brief.agent,
+      symbol: brief.symbol,
+      as_of: brief.as_of,
+      facts: brief.facts as string[],
+      claims: parseSpecialistClaims(brief.claims),
+      degraded: brief.degraded,
+      source: brief.source,
+    };
+  });
+}
+
 export function parseAnalysisRun(value: unknown): AnalysisRun {
   if (
     !isRecord(value) ||
@@ -190,6 +265,7 @@ export function parseAnalysisRun(value: unknown): AnalysisRun {
     vetoes: parseStringArray(value.vetoes, "analysis vetoes"),
     notes: parseStringArray(value.notes, "analysis notes"),
     agents: parseAgents(value.agents),
+    specialists: parseSpecialistBriefs(value.specialists),
   };
 }
 

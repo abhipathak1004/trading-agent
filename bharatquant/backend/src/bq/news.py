@@ -681,6 +681,7 @@ class NewsStore:
         *,
         limit: int = 50,
         long_term_only: bool = False,
+        as_of: datetime | None = None,
     ) -> tuple[NewsItem, ...]:
         if (
             isinstance(limit, bool)
@@ -692,12 +693,16 @@ class NewsStore:
             "SELECT news_id, source_id, url, title, summary, category, "
             "long_term_impact, published_at, ingested_at FROM news_items "
         )
-        params: tuple[object, ...]
+        clauses: list[str] = []
+        params: list[object] = []
         if long_term_only:
-            query += "WHERE long_term_impact = 1 "
-            params = ()
-        else:
-            params = ()
+            clauses.append("long_term_impact = 1")
+        if as_of is not None:
+            pivot = _timestamp(as_of)
+            clauses.append("published_at <= ? AND ingested_at <= ?")
+            params.extend([pivot, pivot])
+        if clauses:
+            query += "WHERE " + " AND ".join(clauses) + " "
         query += "ORDER BY published_at DESC, news_id LIMIT ?"
         with closing(self._connect()) as connection:
             rows = connection.execute(query, (*params, limit)).fetchall()

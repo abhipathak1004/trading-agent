@@ -14,6 +14,7 @@ is bounded to description.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from bq.agent_prompts import PromptSource, resolve_prompt
@@ -55,7 +56,9 @@ class RiskAnalyst:
         self._caller = caller
         self._prompts = prompts
 
-    def assess(self, report: TechnicalReport) -> RiskAssessment:
+    def assess(
+        self, report: TechnicalReport, *, extra_facts: Sequence[str] = ()
+    ) -> RiskAssessment:
         system, template = resolve_prompt(
             self._prompts, "risk_analyst", RISK_SYSTEM, RISK_TEMPLATE
         )
@@ -63,7 +66,7 @@ class RiskAnalyst:
             symbol=report.symbol,
             timeframe=report.timeframe,
             as_of=report.as_of.isoformat(),
-            facts="\n".join(report.facts()),
+            facts="\n".join((*report.facts(), *extra_facts)),
         )
         try:
             outcome = self._caller.complete(

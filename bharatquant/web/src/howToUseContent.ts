@@ -184,6 +184,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "Per symbol plan: entry, stop, target, reward-to-risk and quantity, or a clear veto line explaining why there is no plan.",
           "Provenance: whether the data was real-time or delayed, and whether the run was rules-only or included model debate.",
           "Show agents expands the full trace: one row per pipeline node with its status (ok, degraded, failed) and a human-readable summary, followed by the evidence facts.",
+          "Specialist briefs, when available: point-in-time news context, the deterministic market regime and matching corporate-event headlines, each with its source and status.",
           "A failed symbol is isolated: it is shown as not analysed with its error, and the other symbols still complete.",
         ],
       },
@@ -516,6 +517,26 @@ export const AGENT_DOCS: AgentDoc[] = [
     limits: [
       "Advisory only; the real gate is the risk policy and sizer.",
       "Falls back to a deterministic invalidation derived from support, trend and ATR.",
+    ],
+  },
+  {
+    id: "stage1-specialists",
+    name: "Stage 1 specialists",
+    role: "Deterministic news/indices analysis (no model)",
+    summary:
+      "Run before the debate and contribute typed, point-in-time briefs: matching news headlines and long-term memories, the NIFTY/Bank/VIX regime, and symbol-specific corporate-action headlines. A missing specialist degrades its node rather than failing the run.",
+    inputs: [
+      "The symbol and the run's as_of; news queries filter published_at and ingested_at against as_of, and index bars are read through the INDICES vendor domain.",
+    ],
+    outputs: [
+      "A SpecialistBrief with bounded facts, optional source-id claims, a source label and a degraded flag. Up to 18 specialist facts are appended to the debate and risk prompts.",
+    ],
+    model: "No model. The regime classifier and event extraction are deterministic code.",
+    tools: ["Point-in-time news store and read-only index bars."],
+    limits: [
+      "Corporate events are limited to headlines already in the news store; there is no verified fundamentals vendor yet.",
+      "News matching uses the trading symbol, not a full entity-resolution graph.",
+      "A specialist failure is visible as degraded and contributes no facts.",
     ],
   },
   {

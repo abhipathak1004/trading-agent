@@ -578,3 +578,40 @@ letting a model override risk or manufacturing a trade. The cost is a sequential
 per-symbol run (bounded to eight) and a second reasoning call per strategy. The
 per-symbol traces and route ledger make it clear which agents actually
 contributed and which model answered.
+
+## ADR-021: Stage 1 specialists are optional, point-in-time briefs
+
+**Status:** Accepted; Phase 3A implements news, regime and corporate events.
+
+**Context:** The debate was reading technical facts only. News existed in a
+deterministic store, index data was available through the existing vendor
+router, and corporate headlines were already classified, but none reached the
+analysis pipeline. Wiring them as mandatory nodes would let a missing feed or an
+index outage kill a run that could still produce a valid technical plan.
+
+**Decision:** Stage 1 specialists emit a typed `SpecialistBrief` and are optional
+at the DAG level.
+
+- News context reads `NewsStore.recent(as_of=...)` and active long-term memories.
+  `recent` now filters both `published_at` and `ingested_at` against `as_of`, so a
+  backtest cannot see a later headline. It matches the symbol's trading name and
+  never fetches an article body.
+- Market regime reads NIFTY 50, NIFTY Bank and India VIX through
+  `DataDomain.INDICES` and classifies the regime from code-computed SMA, ADX, ATR,
+  returns and VIX values. The model receives facts, never a request to label the
+  regime.
+- Corporate events extracts symbol-specific corporate/event headlines from the
+  same news store. This is explicitly a placeholder for a verified fundamentals
+  vendor; it does not invent dates, valuations or estimates.
+- A specialist failure records a `degraded` trace and contributes no facts. The
+  run continues. At most 18 specialist facts are appended to the debate and risk
+  prompts, alongside the technical facts.
+- `AnalysisResult.specialists` and the Technical tab expose what each specialist
+  contributed. Empty or unavailable briefs remain visible as degraded rather
+  than disappearing.
+
+**Consequences:** The debate now sees news, regime and event risk without a new
+data dependency or a new model call for the deterministic parts. The cost is a
+wider prompt (bounded) and a shallow fundamentals specialist until a verified
+vendor is reviewed. The next memory slice can consume the same briefs for
+episodic and semantic storage.

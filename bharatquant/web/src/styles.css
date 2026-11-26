@@ -1728,78 +1728,6 @@ a.nav-item:hover,
   min-width: 110px;
 }
 
-/* Model tiers & routing ---------------------------------------------- */
-
-.models-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-  margin: 12px 0;
-}
-
-.models-grid--compact {
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-}
-
-.tier-card {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
-}
-
-.tier-card h3 {
-  margin: 0 0 4px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.tier-card label {
-  font-size: 11px;
-}
-
-.tier-card input,
-.tier-card select {
-  width: 100%;
-}
-
-.decision-preview {
-  margin: 10px 0;
-  padding: 10px 12px;
-  border: 1px solid rgb(139 92 246 / 35%);
-  border-radius: 6px;
-  background: rgb(139 92 246 / 8%);
-  color: var(--muted-strong);
-  font-size: 13px;
-}
-
-.fallback-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.routing-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 8px;
-}
-
-.routing-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.routing-row select {
-  min-width: 110px;
-}
-
 /* Agent Lab ---------------------------------------------------------- */
 
 .decision-result {
@@ -1991,4 +1919,27 @@ a.nav-item:hover,
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+/* Specialist briefs -------------------------------------------------- */
+
+.specialist-briefs {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.specialist-brief {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.specialist-brief-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
 }

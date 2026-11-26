@@ -23,7 +23,10 @@ from bq.agent_prompts import (
 )
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.debate import Debate
+from bq.analysis.fundamental import FundamentalEventsAgent
+from bq.analysis.news_context import NewsContextAgent
 from bq.analysis.pipeline import AnalysisPipeline, PipelineError
+from bq.analysis.regime import MarketRegimeAgent
 from bq.analysis.risk_team import RiskAnalyst
 from bq.analysis.run_settings import AnalysisRunError, AnalysisRunStore
 from bq.analysis.technical import TechnicalReport
@@ -517,6 +520,7 @@ class AnalysisRunResponse(BaseModel):
     vetoes: list[str]
     notes: list[str]
     skipped_nodes: list[str]
+    specialists: list[dict[str, object]]
 
 
 class AnalysisRunSummary(BaseModel):
@@ -824,6 +828,7 @@ def _analysis_pipeline(
     """
     router = build_analysis_router(database_path, config)
     prompts = PromptStore(settings_store.path)
+    news_store = NewsStore(settings_store.path)
     if config.any_tier_configured:
         model_router = ModelRouter(settings_store, prompts=prompts)
         caller = RoutedModelCaller(model_router)
@@ -832,6 +837,9 @@ def _analysis_pipeline(
             debate=Debate(caller, prompts=prompts),
             risk_analyst=RiskAnalyst(caller, prompts=prompts),
             routing=caller,
+            news=NewsContextAgent(news_store),
+            regime=MarketRegimeAgent(router),
+            fundamental=FundamentalEventsAgent(news_store),
         )
     service = LLMService(settings_store) if config.model_route_configured else None
     return AnalysisPipeline(
@@ -840,6 +848,9 @@ def _analysis_pipeline(
         risk_analyst=(
             RiskAnalyst(service, prompts=prompts) if service is not None else None
         ),
+        news=NewsContextAgent(news_store),
+        regime=MarketRegimeAgent(router),
+        fundamental=FundamentalEventsAgent(news_store),
     )
 
 
@@ -1872,6 +1883,7 @@ def create_app(
                 vetoes=list(result.vetoes),
                 notes=list(result.notes),
                 skipped_nodes=list(result.skipped_nodes),
+                specialists=payload["specialists"],  # type: ignore[arg-type]
             )
 
         @app.post("/api/v1/analysis/batch")
