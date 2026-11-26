@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import httpx
 
 from bq.agent_prompts import DECISION_SYSTEM, PromptSource, resolve_prompt
+from bq.core import canonical_digest
 from bq.decision.battery import decision_prompt, decision_schema, questions_for
 from bq.decision.client import JevClient, JevError, parse_decisions
 from bq.decision.fallback import HeuristicJudge
@@ -251,7 +252,7 @@ class ModelRouter:
         self,
         agent_id: str,
         *,
-        state: DecisionState,
+        state: DecisionState | Mapping[str, object],
         battery: str,
         task_id: str = "",
         claims: Sequence[str] = (),
@@ -271,6 +272,8 @@ class ModelRouter:
 
         for fallback in config.pipeline.decision_fallback_order:
             if fallback is DecisionFallback.HEURISTIC:
+                if not isinstance(state, DecisionState):
+                    continue
                 try:
                     judgments = HeuristicJudge().judge(
                         state=state, battery=battery, claims=claims
@@ -284,7 +287,7 @@ class ModelRouter:
                     tier="heuristic",
                     fallback_used=True,
                     fallback_from=failure,
-                    state_hash=state.digest(),
+                    state_hash=self._state_hash(state),
                 )
                 self._record_decision(agent_id, label, outcome)
                 return outcome
@@ -323,7 +326,7 @@ class ModelRouter:
     def _decide_jev(
         self,
         config: AppConfig,
-        state: DecisionState,
+        state: DecisionState | Mapping[str, object],
         battery: str,
         questions: Sequence[Question],
     ) -> DecisionOutcome:
@@ -335,7 +338,7 @@ class ModelRouter:
         judgments = client.decide(
             model=tier.model,
             api_key=api_key,
-            state=state.to_state_dict(),
+            state=self._state_payload(state),
             questions=questions,
             timeout=tier.timeout_ms / 1000.0,
             max_attempts=tier.max_attempts,
@@ -348,7 +351,7 @@ class ModelRouter:
             tier=TierName.DECISION.value,
             fallback_used=False,
             fallback_from=None,
-            state_hash=state.digest(),
+            state_hash=self._state_hash(state),
         )
 
     def _decide_with_llm(
@@ -356,7 +359,7 @@ class ModelRouter:
         config: AppConfig,
         tier_name: TierName,
         agent_id: str,
-        state: DecisionState,
+        state: DecisionState | Mapping[str, object],
         battery: str,
         questions: Sequence[Question],
         fallback_from: str,
@@ -365,7 +368,7 @@ class ModelRouter:
         if tier is None or tier.provider is None or not tier.model:
             raise LLMNotConfigured(f"The {tier_name.value} tier is not configured.")
         self._key(tier.provider)
-        prompt = decision_prompt(state.to_state_dict(), questions)
+        prompt = decision_prompt(self._state_payload(state), questions)
         schema = decision_schema(questions)
         completer = _TierCompleter(self, tier_name, agent_id)
         system, _template = resolve_prompt(
@@ -397,8 +400,22 @@ class ModelRouter:
             tier=tier_name.value,
             fallback_used=True,
             fallback_from=fallback_from,
-            state_hash=state.digest(),
+            state_hash=self._state_hash(state),
         )
+
+    @staticmethod
+    def _state_payload(
+        state: DecisionState | Mapping[str, object],
+    ) -> dict[str, object]:
+        if isinstance(state, DecisionState):
+            return state.to_state_dict()
+        return dict(state)
+
+    @staticmethod
+    def _state_hash(state: DecisionState | Mapping[str, object]) -> str:
+        if isinstance(state, DecisionState):
+            return state.digest()
+        return canonical_digest(dict(state))
 
     def _route_for_tier(
         self,

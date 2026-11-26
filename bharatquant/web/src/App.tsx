@@ -14,6 +14,8 @@ import AnalysisPanel from "./AnalysisPanel";
 import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
 import AgentLabPanel from "./AgentLabPanel";
 import StrategyPanel from "./StrategyPanel";
+import SemanticMemoryPanel from "./SemanticMemoryPanel";
+import PlaybookPanel from "./PlaybookPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
@@ -555,7 +557,7 @@ export default function App() {
               <SnapshotFreshness />
               <CalendarCoverage />
               <UsageStatus />
-              <MemoryCalibrationPanel />
+              <MemoryCalibrationPanel csrfToken={session.csrfToken} />
             </div>
           </section>
         )}
@@ -594,6 +596,8 @@ export default function App() {
             </section>
 
             <AgentLabPanel csrfToken={session.csrfToken} />
+            <SemanticMemoryPanel />
+            <PlaybookPanel csrfToken={session.csrfToken} />
           </section>
         )}
 

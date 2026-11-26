@@ -20,6 +20,7 @@ from bq.infra.database import migrate
 from bq.llm_client import LLMNotConfigured
 from bq.llm_result import LLMResult
 from bq.llm_service import CompletionOutcome
+from bq.memory import PlaybookStore
 from bq.settings import Provider
 from bq.super_agent import RouterLike, StrategyError, SuperAgent
 
@@ -119,6 +120,7 @@ class FakeRouter:
         self.text = text
         self.error = error
         self.system = ""
+        self.prompt = ""
 
     def complete(
         self,
@@ -130,8 +132,9 @@ class FakeRouter:
         task_version: str = "v1",
         timeout: float | None = None,
     ) -> CompletionOutcome:
-        del agent_id, prompt, task_id, task_version, timeout
+        del agent_id, task_id, task_version, timeout
         self.system = system
+        self.prompt = prompt
         if self.error is not None:
             raise self.error
         return CompletionOutcome(
@@ -337,3 +340,36 @@ def test_invalid_strategy_requests_are_rejected(tmp_path: Path) -> None:
             risk_basis_points=100,
             max_positions=1,
         )
+
+
+def test_super_agent_uses_a_selected_playbook(tmp_path: Path) -> None:
+    store = _prompts(tmp_path)
+    playbooks = PlaybookStore(store.path, FrozenClock())
+    router = FakeRouter(
+        text=(
+            '{"strategy_summary":"s","ranked_actions":['
+            '{"symbol":"NSE:AAA","action":"BUY","rank":1,"size_scale":1.0,"rationale":"r"}'
+            '],"portfolio_notes":"p","risk_notes":"k"}'
+        )
+    )
+    agent = SuperAgent(
+        pipeline_factory=lambda: FakePipeline(
+            {"NSE:AAA": _result("NSE:AAA", composite=0.6, plan=_plan("NSE:AAA"))}
+        ),
+        router_factory=lambda: cast(RouterLike, router),
+        prompts=store,
+        playbooks=playbooks,
+        clock=FrozenClock(),
+    )
+    run = agent.run(
+        strategy="Protect capital.",
+        symbols="NSE:AAA",
+        timeframe="swing",
+        equity_paise=1_000_000,
+        available_cash_paise=1_000_000,
+        risk_basis_points=100,
+        max_positions=1,
+        playbook_id="defensive",
+    )
+    assert run.spec.playbook == "defensive"
+    assert "Capital preservation" in router.prompt

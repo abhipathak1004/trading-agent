@@ -23,6 +23,7 @@ from bq.agent_prompts import (
 )
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.debate import Debate
+from bq.analysis.evidence import EvidenceVerifier
 from bq.analysis.final_gate import FinalGate
 from bq.analysis.fundamental import FundamentalEventsAgent
 from bq.analysis.news_context import NewsContextAgent
@@ -67,7 +68,17 @@ from bq.infra.schedules import ScheduleStore
 from bq.infra.task_registry import TaskRegistry
 from bq.llm_client import LLMClientError, LLMNotConfigured
 from bq.llm_service import LLMService
-from bq.memory import EpisodicMemoryStore
+from bq.memory import (
+    EpisodicMemoryStore,
+    MissingPlaybook,
+    OutcomeResolver,
+    PlaybookStore,
+    ProceduralError,
+    ResolutionError,
+    SemanticError,
+    SemanticMemoryStore,
+)
+from bq.memory.procedural import MAX_CONTENT_CHARS
 from bq.model_router import (
     DecisionUnavailable,
     ModelRouter,
@@ -490,6 +501,7 @@ class PromptUpdate(BaseModel):
 class StrategyRunRequest(BaseModel):
     strategy: str = Field(min_length=1, max_length=2_000, strict=True)
     symbols: str = Field(min_length=1, max_length=512, strict=True)
+    playbook_id: str | None = Field(default=None, max_length=64, strict=True)
     timeframe: Literal["intraday", "swing"] = "swing"
     equity_paise: int = Field(gt=0, le=10**13, strict=True)
     available_cash_paise: int = Field(ge=0, le=10**13, strict=True)
@@ -510,6 +522,54 @@ class MemoryCalibrationBucket(BaseModel):
 class MemoryCalibrationResponse(BaseModel):
     as_of: str
     buckets: list[MemoryCalibrationBucket]
+
+
+class SemanticHitStatus(BaseModel):
+    doc_id: str
+    symbol: str
+    source_url: str
+    title: str
+    snippet: str
+    published_at: str
+    known_at: str
+    score: float
+
+
+class SemanticSearchResponse(BaseModel):
+    query: str
+    as_of: str
+    hits: list[SemanticHitStatus]
+
+
+class MemoryResolveRequest(BaseModel):
+    horizon_days: int = Field(default=5, ge=1, le=60, strict=True)
+    max_episodes: int = Field(default=50, ge=1, le=200, strict=True)
+
+
+class MemoryResolveResponse(BaseModel):
+    examined: int
+    resolved: int
+    skipped: int
+    failed: int
+    notes: list[str]
+
+
+class PlaybookStatus(BaseModel):
+    playbook_id: str
+    name: str
+    description: str
+    content: str
+    version: int
+    updated_at: str | None
+    is_default: bool
+
+
+class PlaybookList(BaseModel):
+    playbooks: list[PlaybookStatus]
+
+
+class PlaybookUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=MAX_CONTENT_CHARS, strict=True)
 
 
 class StrategyRunResponse(BaseModel):
@@ -539,6 +599,7 @@ class AnalysisRunResponse(BaseModel):
     notes: list[str]
     skipped_nodes: list[str]
     specialists: list[dict[str, object]]
+    evidence: dict[str, object] | None
     final_gate: dict[str, object] | None
 
 
@@ -861,6 +922,7 @@ def _analysis_pipeline(
             regime=MarketRegimeAgent(router),
             fundamental=FundamentalEventsAgent(news_store),
             final_gate=gate,
+            evidence=EvidenceVerifier(news_store, router=model_router),
         )
     service = LLMService(settings_store) if config.model_route_configured else None
     return AnalysisPipeline(
@@ -873,6 +935,7 @@ def _analysis_pipeline(
         regime=MarketRegimeAgent(router),
         fundamental=FundamentalEventsAgent(news_store),
         final_gate=gate,
+        evidence=EvidenceVerifier(news_store, router=model_router),
     )
 
 
@@ -947,6 +1010,7 @@ def _record_analysis_episode(
                 "signal": action,
                 "vetoes": list(result.vetoes),
                 "final_gate": None if gate is None else gate.to_dict(),
+                "last_close": str(result.report.last_close),
                 "source": source,
             },
         )
@@ -1636,6 +1700,7 @@ def create_app(
                 ),
                 router_factory=lambda: ModelRouter(settings, prompts=prompt_store),
                 prompts=prompt_store,
+                playbooks=PlaybookStore(database_path),
             )
             try:
                 run = agent.run(
@@ -1646,6 +1711,7 @@ def create_app(
                     available_cash_paise=body.available_cash_paise,
                     risk_basis_points=body.risk_basis_points,
                     max_positions=body.max_positions,
+                    playbook_id=body.playbook_id,
                 )
             except StrategyError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1692,6 +1758,126 @@ def create_app(
                     for bucket in buckets
                 ],
             )
+
+        @app.get("/api/v1/memory/semantic")
+        def semantic_search(
+            request: Request,
+            q: str,
+            symbol: str | None = None,
+            as_of: datetime | None = None,
+            limit: int = 10,
+        ) -> SemanticSearchResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            observed_at = datetime.now(UTC) if as_of is None else as_of
+            try:
+                hits = SemanticMemoryStore(database_path).search(
+                    q, as_of=observed_at, symbol=symbol, limit=limit
+                )
+            except SemanticError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return SemanticSearchResponse(
+                query=q,
+                as_of=observed_at.isoformat(),
+                hits=[
+                    SemanticHitStatus(
+                        doc_id=hit.document.doc_id,
+                        symbol=hit.document.symbol,
+                        source_url=hit.document.source_url,
+                        title=hit.document.title,
+                        snippet=hit.document.body[:400],
+                        published_at=hit.document.published_at.isoformat(),
+                        known_at=hit.document.known_at.isoformat(),
+                        score=hit.score,
+                    )
+                    for hit in hits
+                ],
+            )
+
+        @app.post("/api/v1/memory/resolve")
+        def resolve_memory(
+            request: Request, body: MemoryResolveRequest
+        ) -> MemoryResolveResponse:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            config = settings.load()
+            try:
+                resolver = OutcomeResolver(
+                    EpisodicMemoryStore(database_path),
+                    build_analysis_router(database_path, config),
+                    horizon_days=body.horizon_days,
+                    max_episodes=body.max_episodes,
+                )
+            except ResolutionError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            report = resolver.resolve_due()
+            return MemoryResolveResponse(
+                examined=report.examined,
+                resolved=report.resolved,
+                skipped=report.skipped,
+                failed=report.failed,
+                notes=list(report.notes),
+            )
+
+        @app.get("/api/v1/memory/playbooks")
+        def list_playbooks(request: Request) -> PlaybookList:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return PlaybookList(
+                playbooks=[
+                    PlaybookStatus.model_validate(playbook.to_dict())
+                    for playbook in PlaybookStore(database_path).list()
+                ]
+            )
+
+        @app.put("/api/v1/memory/playbooks/{playbook_id}")
+        def update_playbook(
+            request: Request, playbook_id: str, body: PlaybookUpdate
+        ) -> PlaybookStatus:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            try:
+                playbook = PlaybookStore(database_path).save(
+                    playbook_id, content=body.content
+                )
+            except MissingPlaybook as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ProceduralError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return PlaybookStatus.model_validate(playbook.to_dict())
+
+        @app.post("/api/v1/memory/playbooks/{playbook_id}/reset")
+        def reset_playbook(request: Request, playbook_id: str) -> PlaybookStatus:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            try:
+                playbook = PlaybookStore(database_path).reset(playbook_id)
+            except MissingPlaybook as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ProceduralError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return PlaybookStatus.model_validate(playbook.to_dict())
 
         @app.get("/api/v1/news/digest")
         def news_digest(request: Request) -> NewsDigest:
@@ -2009,6 +2195,7 @@ def create_app(
                 notes=list(result.notes),
                 skipped_nodes=list(result.skipped_nodes),
                 specialists=payload["specialists"],  # type: ignore[arg-type]
+                evidence=payload["evidence"],  # type: ignore[arg-type]
                 final_gate=payload["final_gate"],  # type: ignore[arg-type]
             )
 

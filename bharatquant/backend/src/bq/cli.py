@@ -16,6 +16,7 @@ import uvicorn
 from bq.agent_prompts import PromptStore
 from bq.analysis.debate import Debate
 from bq.analysis.decision import trade_plan_from_json
+from bq.analysis.evidence import EvidenceVerifier
 from bq.analysis.final_gate import FinalGate
 from bq.analysis.fundamental import FundamentalEventsAgent
 from bq.analysis.news_context import NewsContextAgent
@@ -738,6 +739,7 @@ def main(argv: list[str] | None = None) -> int:
                         regime=MarketRegimeAgent(router),
                         fundamental=FundamentalEventsAgent(news_store),
                         final_gate=gate,
+                        evidence=EvidenceVerifier(news_store, router=model_router),
                     )
                 else:
                     service = (
@@ -761,6 +763,7 @@ def main(argv: list[str] | None = None) -> int:
                         regime=MarketRegimeAgent(router),
                         fundamental=FundamentalEventsAgent(news_store),
                         final_gate=gate,
+                        evidence=EvidenceVerifier(news_store, router=model_router),
                     )
                 analysis = pipeline.run(
                     symbol=resolve_symbol(args.symbol),

@@ -129,7 +129,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       { kind: "subheading", text: "Memory calibration" },
       {
         kind: "p",
-        text: "Shows Brier score, expected calibration error and outcome rate for resolved shadow episodes, separated by decision source and model. A decision is recorded at as_of; an outcome is appended later. Both sides are filtered to the requested instant, so a later outcome cannot leak into an earlier view. Unresolved episodes and decisions without a predicted probability are not scored.",
+        text: "Shows Brier score, expected calibration error and outcome rate for resolved shadow episodes, separated by decision source and model. A decision is recorded at as_of; an outcome is appended later. Both sides are filtered to the requested instant, so a later outcome cannot leak into an earlier view. Unresolved episodes and decisions without a predicted probability are not scored. Resolve due episodes runs the deterministic resolver: BUY plans use stop/target first-touch or the horizon close, and no-plan episodes use the forward return. The default horizon is five calendar days; the episode itself is never rewritten.",
       },
       { kind: "subheading", text: "Diagnostics: model usage" },
       {
@@ -191,6 +191,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "Show agents expands the full trace: one row per pipeline node with its status (ok, degraded, failed) and a human-readable summary, followed by the evidence facts.",
           "Specialist briefs, when available: point-in-time news context, the deterministic market regime and matching corporate-event headlines, each with its source and status.",
           "Final gate: the Jev-preferred battery reviews the completed plan and can block execution. A blocked gate is shown with its source, model and reason; it never creates a BUY or changes a number.",
+          "Evidence: specialist claims are checked against the point-in-time news store before the debate. When a decision model is configured, a Noul pass also rates whether the cited evidence supports each claim; it can only reject, never rescue a missing citation. The panel shows verified versus unverified claims, any missing evidence ids, and the source (citation or model).",
           "A failed symbol is isolated: it is shown as not analysed with its error, and the other symbols still complete.",
         ],
       },
@@ -216,6 +217,16 @@ export const GUIDE_SECTIONS: DocSection[] = [
       {
         kind: "note",
         text: "The preview runs the full analysis pipeline first, using dummy money, before it throws the trade plan away. It is therefore not free of model spend. A fallback source is labelled, never hidden.",
+      },
+      { kind: "subheading", text: "Semantic memory" },
+      {
+        kind: "p",
+        text: "Search stored research documents at a point in time. Results are filtered by published, known and recorded times, optionally by symbol. The service uses FTS5 when the local SQLite build supports it and the deterministic term index otherwise; both answer the same query contract. The panel shows the title, symbol, snippet, source and score.",
+      },
+      { kind: "subheading", text: "Procedural playbooks" },
+      {
+        kind: "p",
+        text: "Select and edit the guidance a strategy run can give the Super Agent. Three defaults ship in code (momentum continuation, capital preservation and event-aware); the owner edits only the bounded content. Saves append a version and reset restores the default as a new version. A playbook changes ranking commentary only: thresholds, sizing, cash/position gates and risk vetoes stay in code.",
       },
       { kind: "subheading", text: "Agent prompts" },
       {
@@ -255,7 +266,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       },
       {
         kind: "note",
-        text: "At most eight symbols and ten positions per run; execution is sequential. The Super Agent prompt is editable in Agent Lab, but the cash gate, position cap, sizing and risk rules are code-owned.",
+        text: "Optionally select a procedural playbook; its guidance is passed to the Super Agent with its id, name and version. A playbook can shape emphasis and ranking commentary but cannot change thresholds or risk. At most eight symbols and ten positions per run; execution is sequential. The Super Agent prompt is editable in Agent Lab, but the cash gate, position cap, sizing and risk rules are code-owned.",
       },
     ],
   },
@@ -595,6 +606,24 @@ export const AGENT_DOCS: AgentDoc[] = [
       "Thresholds and answer types are code-owned, never prompt-owned.",
       "A decision cannot exceed the state it was given.",
       "Only the screener battery is reachable from the UI today.",
+    ],
+  },
+  {
+    id: "evidence-verifier",
+    name: "Evidence verifier",
+    role: "Deterministic citation check",
+    summary:
+      "Checks every specialist claim's evidence ids against the point-in-time news store before the debate. A claim is verified only when all cited ids existed at as_of.",
+    inputs: ["Specialist briefs with claims, plus the run's as_of."],
+    outputs: [
+      "Briefs with claims marked verified or unverified, counts and the missing evidence ids.",
+    ],
+    model: "Deterministic citation check, then an optional Noul pass (Jev/LLM ladder, threshold 0.60). No model means citation only.",
+    tools: ["Point-in-time news store only."],
+    limits: [
+      "A claim with no evidence ids, or any missing id, is unverified and is never sent to a model.",
+      "The model can only reject a well-cited claim; it cannot add evidence or rescue a missing citation.",
+      "A verifier failure degrades the node and leaves the briefs unchanged.",
     ],
   },
   {

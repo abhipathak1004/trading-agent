@@ -154,6 +154,18 @@ function SymbolResult({ item }: { item: BatchAnalysisItem }) {
         </p>
       )}
 
+      {run.evidence !== null && (
+        <p className="panel-note">
+          Evidence: {run.evidence.verified_claims} verified,{" "}
+          {run.evidence.unverified_claims} unverified claim(s) via{" "}
+          {run.evidence.decision_source}
+          {run.evidence.model !== null ? ` / ${run.evidence.model}` : ""}
+          {run.evidence.missing_evidence_ids.length > 0
+            ? ` · missing ${run.evidence.missing_evidence_ids.join(", ")}`
+            : ""}
+        </p>
+      )}
+
       <p className="batch-provenance">
         {run.data_provenance.is_realtime ? "real-time" : "delayed"} ·{" "}
         {run.mode === "RULES_ONLY" ? "rules only" : "with model debate"} ·{" "}
@@ -198,6 +210,13 @@ function SymbolResult({ item }: { item: BatchAnalysisItem }) {
                       <li key={fact}>{fact}</li>
                     ))}
                   </ul>
+                  {brief.claims.length > 0 && (
+                    <p className="prompt-meta">
+                      Claims:{" "}
+                      {brief.claims.filter((claim) => claim.verified).length}/
+                      {brief.claims.length} verified
+                    </p>
+                  )}
                 </article>
               ))}
             </div>

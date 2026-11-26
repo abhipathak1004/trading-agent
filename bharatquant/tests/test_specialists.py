@@ -3,8 +3,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
-from bq.analysis.briefs import SpecialistBrief
+from bq.analysis.briefs import Claim, SpecialistBrief
 from bq.analysis.debate import Debate
+from bq.analysis.evidence import EvidenceVerifier
 from bq.analysis.fundamental import FundamentalEventsAgent
 from bq.analysis.news_context import NewsContextAgent
 from bq.analysis.pipeline import AnalysisPipeline
@@ -19,6 +20,12 @@ from bq.data.vendors import (
     NoMarketDataError,
     Quote,
     VendorRouter,
+)
+from bq.decision.types import (
+    Answer,
+    DecisionOutcome,
+    JudgmentSet,
+    QuestionType,
 )
 from bq.infra.database import migrate
 from bq.news import FeedEntry, NewsStore
@@ -337,3 +344,163 @@ def test_debate_receives_specialist_facts() -> None:
     caller = PromptCaller()
     Debate(caller).bull(_report(), extra_facts=("REGIME-SPECIAL-FACT",))
     assert "REGIME-SPECIAL-FACT" in caller.prompt
+
+
+class StubClaimNews:
+    def __init__(self, news_id: str) -> None:
+        self.news_id = news_id
+
+    def brief(self, symbol: Symbol, *, as_of: datetime) -> SpecialistBrief:
+        return SpecialistBrief(
+            agent="news",
+            symbol=symbol.canonical,
+            as_of=as_of,
+            facts=("CLAIM-SPECIAL-FACT",),
+            claims=(Claim("Known claim", (self.news_id,)),),
+            source="stub",
+        )
+
+
+def test_pipeline_verifies_claims_against_the_news_store(tmp_path: Path) -> None:
+    store = _news_store(tmp_path)
+    _ingest(
+        store,
+        title="Reliance wins a large order",
+        published_at=NOW - timedelta(hours=1),
+        url="https://example.com/reliance-order",
+    )
+    item = store.recent(limit=1, as_of=NOW)[0]
+    pipeline = AnalysisPipeline(
+        _daily_router(),
+        clock=FrozenClock(),
+        news=cast(NewsContextAgent, StubClaimNews(item.news_id)),
+        regime=cast(MarketRegimeAgent, StubRegime()),
+        fundamental=cast(FundamentalEventsAgent, StubFundamental()),
+        evidence=EvidenceVerifier(store),
+    )
+    result = pipeline.run(
+        symbol=resolve("NSE:RELIANCE"),
+        timeframe="swing",
+        equity_paise=1_000_000,
+        available_cash_paise=1_000_000,
+        risk_basis_points=100,
+    )
+    assert result.evidence is not None
+    assert result.evidence.verified_claims == 1
+    assert result.evidence.unverified_claims == 0
+    news_brief = next(brief for brief in result.specialists if brief.agent == "news")
+    assert news_brief.claims[0].verified is True
+    assert "evidence_verifier" in {entry.node for entry in result.trace}
+
+
+class FakeEvidenceRouter:
+    def __init__(
+        self, probabilities: tuple[float, ...], *, error: Exception | None = None
+    ) -> None:
+        self.probabilities = probabilities
+        self.error = error
+        self.calls = 0
+        self.state: dict[str, object] | None = None
+
+    def decide(
+        self,
+        agent_id: str,
+        *,
+        state: object,
+        battery: str,
+        task_id: str = "",
+        claims: tuple[str, ...] = (),
+    ) -> DecisionOutcome:
+        del agent_id, battery, task_id, claims
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        assert isinstance(state, dict)
+        self.state = state
+        answers = tuple(
+            (
+                f"claim_{index}",
+                Answer(kind=QuestionType.NOUL, noul=probability),
+            )
+            for index, probability in enumerate(self.probabilities, start=1)
+        )
+        return DecisionOutcome(
+            judgments=JudgmentSet(
+                battery="evidence",
+                answers=answers,
+                model="jev-1.14.0",
+                source="jev_native",
+            ),
+            provider="TYPESAFE_JEV",
+            model="jev-1.14.0",
+            tier="decision",
+        )
+
+
+def _claim_brief(*news_ids: str) -> dict[str, SpecialistBrief]:
+    return {
+        "news": SpecialistBrief(
+            agent="news",
+            symbol="NSE:RELIANCE",
+            as_of=NOW,
+            facts=("CLAIM FACT",),
+            claims=tuple(
+                Claim(f"claim {index}", (news_id,))
+                for index, news_id in enumerate(news_ids, start=1)
+            ),
+            source="stub",
+        )
+    }
+
+
+def test_noul_pass_can_reject_a_well_cited_claim(tmp_path: Path) -> None:
+    store = _news_store(tmp_path)
+    _ingest(
+        store,
+        title="Reliance wins a large order",
+        published_at=NOW - timedelta(hours=1),
+        url="https://example.com/reliance-order",
+    )
+    item = store.recent(limit=1, as_of=NOW)[0]
+    router = FakeEvidenceRouter((0.9, 0.2))
+    briefs = _claim_brief(item.news_id, item.news_id)
+    result = EvidenceVerifier(store, router=router).verify(briefs, as_of=NOW)
+    assert router.calls == 1
+    assert result.verified_claims == 1
+    assert result.unverified_claims == 1
+    assert result.decision_source == "jev_native"
+    assert result.model == "jev-1.14.0"
+    assert result.briefs["news"].claims[0].verified is True
+    assert result.briefs["news"].claims[1].verified is False
+    assert router.state is not None
+    assert "claims" in router.state
+
+
+def test_noul_failure_falls_back_to_citation(tmp_path: Path) -> None:
+    store = _news_store(tmp_path)
+    _ingest(
+        store,
+        title="Reliance wins a large order",
+        published_at=NOW - timedelta(hours=1),
+        url="https://example.com/reliance-order",
+    )
+    item = store.recent(limit=1, as_of=NOW)[0]
+    router = FakeEvidenceRouter((), error=RuntimeError("provider down"))
+    result = EvidenceVerifier(store, router=router).verify(
+        _claim_brief(item.news_id), as_of=NOW
+    )
+    assert router.calls == 1
+    assert result.verified_claims == 1
+    assert result.decision_source == "citation"
+    assert result.model is None
+
+
+def test_uncited_claims_are_not_sent_to_the_model(tmp_path: Path) -> None:
+    store = _news_store(tmp_path)
+    router = FakeEvidenceRouter((0.9,))
+    result = EvidenceVerifier(store, router=router).verify(
+        _claim_brief("missing-id"), as_of=NOW
+    )
+    assert router.calls == 0
+    assert result.unverified_claims == 1
+    assert result.missing_evidence_ids == ("missing-id",)

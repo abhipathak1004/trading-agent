@@ -30,6 +30,7 @@ from bq.core import Clock, SystemClock
 from bq.data.symbols import Symbol, SymbolError
 from bq.data.symbols import resolve as resolve_symbol
 from bq.llm_service import CompletionOutcome
+from bq.memory import Playbook, PlaybookSource
 from bq.structured_output import complete_structured
 
 MAX_STRATEGY_CHARS = 2_000
@@ -176,6 +177,7 @@ class StrategySpec:
     equity_paise: int
     available_cash_paise: int
     risk_basis_points: int
+    playbook: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -186,6 +188,7 @@ class StrategySpec:
             "equity_paise": self.equity_paise,
             "available_cash_paise": self.available_cash_paise,
             "risk_basis_points": self.risk_basis_points,
+            "playbook": self.playbook,
             "execution": "PAPER_RESEARCH",
         }
 
@@ -338,12 +341,14 @@ class SuperAgent:
         prompts: PromptSource,
         clock: Clock | None = None,
         max_symbols: int = MAX_SYMBOLS,
+        playbooks: PlaybookSource | None = None,
     ) -> None:
         self._pipeline_factory = pipeline_factory
         self._router_factory = router_factory
         self._prompts = prompts
         self._clock = clock or SystemClock()
         self._max_symbols = max(1, min(max_symbols, MAX_SYMBOLS))
+        self._playbooks = playbooks
 
     def run(
         self,
@@ -355,6 +360,7 @@ class SuperAgent:
         available_cash_paise: int,
         risk_basis_points: int,
         max_positions: int,
+        playbook_id: str | None = None,
     ) -> StrategyRun:
         if not isinstance(strategy, str) or not strategy.strip():
             raise StrategyError("A strategy brief is required.")
@@ -365,6 +371,14 @@ class SuperAgent:
             raise StrategyError("Timeframe must be intraday or swing.")
         if not 1 <= max_positions <= MAX_POSITIONS:
             raise StrategyError("Max positions is out of range.")
+        playbook: Playbook | None = None
+        if playbook_id is not None:
+            if self._playbooks is None:
+                raise StrategyError("No playbooks are configured.")
+            try:
+                playbook = self._playbooks.get(playbook_id)
+            except Exception as exc:
+                raise StrategyError("Unknown playbook.") from exc
         try:
             requested = parse_symbol_list(symbols)
         except BatchError as exc:
@@ -436,6 +450,7 @@ class SuperAgent:
             equity_paise=equity_paise,
             available_cash_paise=available_cash_paise,
             risk_basis_points=risk_basis_points,
+            playbook=playbook,
         )
         accepted, rejected = self._apply_decision(decision, accepted, rejected)
         spec = StrategySpec(
@@ -446,6 +461,7 @@ class SuperAgent:
             equity_paise=equity_paise,
             available_cash_paise=available_cash_paise,
             risk_basis_points=risk_basis_points,
+            playbook=None if playbook is None else playbook.playbook_id,
         )
         return StrategyRun(
             strategy=text,
@@ -548,6 +564,7 @@ class SuperAgent:
         equity_paise: int,
         available_cash_paise: int,
         risk_basis_points: int,
+        playbook: Playbook | None = None,
     ) -> StrategyDecision:
         candidates = [_candidate_payload(outcome) for outcome in analyzed]
         constraints = {
@@ -562,6 +579,16 @@ class SuperAgent:
                 "respect the position cap and cash",
                 "no orders are placed",
             ],
+            "playbook": (
+                None
+                if playbook is None
+                else {
+                    "id": playbook.playbook_id,
+                    "name": playbook.name,
+                    "version": playbook.version,
+                    "guidance": playbook.content,
+                }
+            ),
         }
         router: RouterLike | None = None
         try:

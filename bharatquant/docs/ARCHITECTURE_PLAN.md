@@ -1,6 +1,6 @@
 # Architecture plan: 3-tier model routing and the multi-agent system
 
-**Version:** 1.6 · **Date:** 2026-11-26 · **Status:** approved for Phase 2
+**Version:** 1.10 · **Date:** 2026-11-26 · **Status:** approved for Phase 2
 **Scope:** audit of the existing BharatQuant analysis stack and the target
 architecture for a config-driven three-tier model router, Jev-preferred decision
 layer, specialist agents, four-layer memory and a deterministic execution seam.
@@ -14,6 +14,10 @@ any external provider capability is verified; see
 
 | Version | Date | Change |
 |---|---|---|
+| 1.10 | 2026-11-26 | Phase 3F: evidence verifier gains an optional Jev/LLM Noul pass over cited claims, while the deterministic citation check remains the floor and fallback. |
+| 1.9 | 2026-11-26 | Phase 3E: versioned procedural playbooks with editable guidance, an owner API/Agent Lab editor, and a Strategy selector feeding a bounded playbook block to the Super Agent. |
+| 1.8 | 2026-11-26 | Phase 3D: deterministic outcome resolver for due shadow episodes, with stop/target first-touch, horizon close, append-only outcomes and a resolve API/UI action. |
+| 1.7 | 2026-11-26 | Phase 3C: semantic memory (immutable docs, lazy FTS5 with term fallback, PIT search) and deterministic evidence citation verification before the debate. |
 | 1.6 | 2026-11-26 | Phase 3B: final gate node (Jev-preferred, downgrade-only) and episodic memory with shadow trades, append-only outcomes and point-in-time Brier/ECE buckets. |
 | 1.5 | 2026-11-26 | Phase 3A: real point-in-time news context, deterministic market regime, corporate-event briefs, and specialist facts flowing into the debate/risk prompts and the Technical tab. |
 | 1.4 | 2026-11-26 | Added the Strategy desk: a deterministic Super Agent coordinator runs the per-symbol agents, enforces cash/position limits, and asks the reasoning tier only to rank and comment. It can downgrade, never create, a BUY. |
@@ -39,6 +43,11 @@ any external provider capability is verified; see
 | News | `bq/news.py`, `bq/news_agent.py`, migration `022` | Deterministic RSS ingest, dedupe, keyword classification, `agent_memories` with `known_at/expires_at`. |
 | Market data | `bq/data/vendors/*`, `bq/data/symbols.py` | Per-domain chains; Yahoo default; Kite read-only when enabled (ADR-013). |
 | Final gate | `bq/analysis/final_gate.py` | Typed battery after the plan; can block execution, never create a BUY. |
+| Procedural memory | `bq/memory/procedural.py`, migration `030` | Versioned playbooks; guidance only. |
+| Semantic memory | `bq/memory/semantic.py`, migration `029` | Immutable docs, PIT search, FTS5 or term fallback. |
+| Outcome resolver | `bq/memory/resolver.py`, `POST /api/v1/memory/resolve` | Due episodes → daily bars → append-only outcome. |
+| Evidence Noul pass | `bq/analysis/evidence.py`, mapping state | Cited claims only; model can reject, never add evidence. |
+| Evidence verifier | `bq/analysis/evidence.py` | Claim evidence ids checked against the PIT news store; degraded when absent. |
 | Episodic memory | `bq/memory/episodic.py`, migration `028` | Immutable decisions, append-only outcomes, source/model Brier. |
 | Stage 1 specialists | `bq/analysis/news_context.py`, `regime.py`, `fundamental.py`, `briefs.py` | Optional, point-in-time briefs; failures degrade the node, not the run. |
 | Strategy coordinator | `bq/super_agent.py`, `POST /api/v1/strategy/run` | Per-symbol DAG → deterministic gate → reasoning synthesis (rules fallback). Never places an order. |

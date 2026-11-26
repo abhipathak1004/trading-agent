@@ -44,6 +44,7 @@ from bq.analysis.decision import (
     TradePlanError,
     build_plan,
 )
+from bq.analysis.evidence import EvidenceResult, EvidenceVerifier
 from bq.analysis.final_gate import FinalGate, FinalGateResult
 from bq.analysis.fundamental import FundamentalEventsAgent
 from bq.analysis.news_context import NewsContextAgent
@@ -85,6 +86,7 @@ class PipelineContext:
     is_realtime: bool = False
     news_facts: tuple[str, ...] = ()
     specialists: dict[str, SpecialistBrief] = field(default_factory=dict)
+    evidence: EvidenceResult | None = None
     report: TechnicalReport | None = None
     bull: Argument | None = None
     bear: Argument | None = None
@@ -155,6 +157,7 @@ AGENT_ROLES: dict[str, str] = {
     "news_context": "News context",
     "market_regime": "Market regime",
     "fundamental_events": "Fundamental & events",
+    "evidence_verifier": "Evidence verifier",
     "technical": "Technical analyst",
     "bull": "Bull advocate",
     "bear": "Bear advocate",
@@ -172,6 +175,7 @@ AGENT_ORDER: tuple[str, ...] = (
     "news_context",
     "market_regime",
     "fundamental_events",
+    "evidence_verifier",
     "technical",
     "bull",
     "bear",
@@ -209,6 +213,7 @@ class AnalysisResult:
     trace: tuple[AgentTrace, ...] = ()
     model_routing: tuple[RouteUse, ...] = ()
     specialists: tuple[SpecialistBrief, ...] = ()
+    evidence: EvidenceResult | None = None
     final_gate: FinalGateResult | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -242,6 +247,7 @@ class AnalysisResult:
             "agents": [entry.to_dict() for entry in self.trace],
             "model_routing": [use.to_dict() for use in self.model_routing],
             "specialists": [brief.to_dict() for brief in self.specialists],
+            "evidence": None if self.evidence is None else self.evidence.to_dict(),
             "final_gate": (
                 None if self.final_gate is None else self.final_gate.to_dict()
             ),
@@ -324,6 +330,7 @@ class AnalysisPipeline:
         regime: MarketRegimeAgent | None = None,
         fundamental: FundamentalEventsAgent | None = None,
         final_gate: FinalGate | None = None,
+        evidence: EvidenceVerifier | None = None,
     ) -> None:
         self.router = router
         self.debate = debate
@@ -335,6 +342,7 @@ class AnalysisPipeline:
         self.regime = regime
         self.fundamental = fundamental
         self.final_gate = final_gate
+        self.evidence = evidence
 
     # -- nodes ------------------------------------------------------------
 
@@ -481,6 +489,32 @@ class AnalysisPipeline:
                 f"final_gate:{gate.decision.reason}",
             )
             ctx.notes.append(f"final gate: {gate.decision.reason}")
+
+    def _evidence_verifier(self, ctx: PipelineContext) -> None:
+        if self.evidence is None:
+            self._record(ctx, "evidence_verifier", "degraded", "not configured")
+            return
+        try:
+            result = self.evidence.verify(ctx.specialists, as_of=ctx.as_of)
+        except Exception as exc:
+            ctx.notes.append(f"evidence verifier: unavailable ({type(exc).__name__})")
+            self._record(
+                ctx,
+                "evidence_verifier",
+                "degraded",
+                f"verification unavailable ({type(exc).__name__})",
+            )
+            return
+        ctx.specialists = dict(result.briefs)
+        ctx.evidence = result
+        status = "ok" if result.unverified_claims == 0 else "degraded"
+        self._record(
+            ctx,
+            "evidence_verifier",
+            status,
+            f"{result.verified_claims} verified, "
+            f"{result.unverified_claims} unverified claim(s)",
+        )
 
     def _technical(self, ctx: PipelineContext) -> None:
         if not ctx.bars:
@@ -719,15 +753,30 @@ class AnalysisPipeline:
                 ("news_context",),
                 self._fundamental_events,
             ),
+            AgentNode(
+                "evidence_verifier",
+                ("news_context", "fundamental_events"),
+                self._evidence_verifier,
+            ),
             AgentNode("technical", ("gather_data", "news_context"), self._technical),
             AgentNode(
                 "bull",
-                ("technical", "market_regime", "fundamental_events"),
+                (
+                    "technical",
+                    "market_regime",
+                    "fundamental_events",
+                    "evidence_verifier",
+                ),
                 self._bull,
             ),
             AgentNode(
                 "bear",
-                ("technical", "market_regime", "fundamental_events"),
+                (
+                    "technical",
+                    "market_regime",
+                    "fundamental_events",
+                    "evidence_verifier",
+                ),
                 self._bear,
             ),
             AgentNode("judge", ("bull", "bear"), self._judge),
@@ -800,6 +849,7 @@ class AnalysisPipeline:
                 for name in SPECIALIST_ORDER
                 if name in ctx.specialists
             ),
+            evidence=ctx.evidence,
             final_gate=ctx.final_gate,
         )
 

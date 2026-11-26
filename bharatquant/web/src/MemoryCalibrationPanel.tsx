@@ -11,9 +11,15 @@ function format(value: number | null, digits = 3): string {
   return value === null ? "n/a" : value.toFixed(digits);
 }
 
-export default function MemoryCalibrationPanel() {
+export default function MemoryCalibrationPanel({
+  csrfToken,
+}: {
+  csrfToken: string;
+}) {
   const [load, setLoad] = useState<LoadState>({ state: "loading" });
   const [retry, setRetry] = useState(0);
+  const [resolving, setResolving] = useState(false);
+  const [resolveMessage, setResolveMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -40,6 +46,47 @@ export default function MemoryCalibrationPanel() {
     return () => controller.abort();
   }, [retry]);
 
+  async function resolveDue() {
+    setResolving(true);
+    setResolveMessage(null);
+    try {
+      const response = await fetch("/api/v1/memory/resolve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ horizon_days: 5, max_episodes: 50 }),
+      });
+      if (!response.ok) {
+        let message = "Resolving outcomes failed.";
+        try {
+          const body = (await response.json()) as { detail?: unknown };
+          if (typeof body.detail === "string") {
+            message = body.detail;
+          }
+        } catch {
+          // Keep the generic message.
+        }
+        setResolveMessage(message);
+        return;
+      }
+      const report = (await response.json()) as {
+        examined?: unknown;
+        resolved?: unknown;
+      };
+      const examined = typeof report.examined === "number" ? report.examined : 0;
+      const resolved = typeof report.resolved === "number" ? report.resolved : 0;
+      setResolveMessage(`Resolved ${resolved} of ${examined} due episode(s).`);
+      setLoad({ state: "loading" });
+      setRetry((value) => value + 1);
+    } catch {
+      setResolveMessage("Resolving outcomes failed. Check the local service.");
+    } finally {
+      setResolving(false);
+    }
+  }
+
   return (
     <section className="data-panel" aria-labelledby="memory-calibration-title">
       <h2 id="memory-calibration-title">Memory calibration</h2>
@@ -47,6 +94,19 @@ export default function MemoryCalibrationPanel() {
         Brier scores for resolved shadow trades, separated by decision source and
         model. Unresolved or skipped decisions are not scored.
       </p>
+      <button
+        type="button"
+        className="auth-button auth-button--compact"
+        onClick={() => void resolveDue()}
+        disabled={resolving}
+      >
+        {resolving ? "Resolving..." : "Resolve due episodes"}
+      </button>
+      {resolveMessage !== null && (
+        <p className="config-feedback" role="status">
+          {resolveMessage}
+        </p>
+      )}
       {load.state === "loading" && <p role="status">Loading calibration...</p>}
       {load.state === "error" && (
         <p role="alert">

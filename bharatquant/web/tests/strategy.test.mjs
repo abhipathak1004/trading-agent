@@ -115,3 +115,12 @@ test("malformed strategy runs are rejected", () => {
     assert.throws(() => parseStrategyRun({ ...run, ...override }));
   }
 });
+
+test("the selected playbook is parsed when present", () => {
+  assert.equal(parseStrategyRun(run).spec.playbook, null);
+  const parsed = parseStrategyRun({
+    ...run,
+    spec: { ...run.spec, playbook: "defensive" },
+  });
+  assert.equal(parsed.spec.playbook, "defensive");
+});

@@ -466,6 +466,30 @@ class EpisodicMemoryStore:
             rows = connection.execute(query, params).fetchall()
         return tuple(self._episode(row) for row in rows)
 
+    def unresolved(
+        self, *, due_before: datetime, limit: int = 50
+    ) -> tuple[Episode, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 500
+        ):
+            raise MemoryError("Episode limit must be between 1 and 500.")
+        pivot = _aware(due_before, label="due_before")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT e.episode_id, e.run_id, e.symbol, e.as_of, e.recorded_at, "
+                "e.source, e.decision_source, e.model, e.regime, e.action, "
+                "e.status, e.entry_price_paise, e.stop_loss_paise, "
+                "e.target_price_paise, e.quantity, e.predicted_probability, "
+                "e.detail_json FROM episodic_memory AS e "
+                "LEFT JOIN episode_outcomes AS o ON o.episode_id = e.episode_id "
+                "WHERE o.episode_id IS NULL AND e.as_of <= ? "
+                "ORDER BY e.as_of ASC, e.episode_id LIMIT ?",
+                (timestamp(pivot), limit),
+            ).fetchall()
+        return tuple(self._episode(row) for row in rows)
+
     def calibration(
         self, *, as_of: datetime | None = None
     ) -> tuple[CalibrationBucket, ...]:

@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
+import { parsePlaybookList } from "./playbookContract";
+import type { Playbook } from "./playbookContract";
 import { parseStrategyRun } from "./strategyContract";
 import type { StrategyRun, StrategySymbol } from "./strategyContract";
 
@@ -37,7 +39,28 @@ export default function StrategyPanel({ csrfToken }: { csrfToken: string }) {
   const [cash, setCash] = useState("50000");
   const [riskBps, setRiskBps] = useState("100");
   const [maxPositions, setMaxPositions] = useState("2");
+  const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
+  const [playbookId, setPlaybookId] = useState("");
   const [run, setRun] = useState<RunState>({ state: "idle" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadPlaybooks() {
+      try {
+        const response = await fetch("/api/v1/memory/playbooks", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (response.ok) {
+          setPlaybooks(parsePlaybookList(await response.json()));
+        }
+      } catch {
+        // A playbook is optional; the strategy still runs without one.
+      }
+    }
+    void loadPlaybooks();
+    return () => controller.abort();
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -74,6 +97,7 @@ export default function StrategyPanel({ csrfToken }: { csrfToken: string }) {
           available_cash_paise: cashPaise,
           risk_basis_points: risk,
           max_positions: positions,
+          playbook_id: playbookId || null,
         }),
       });
       if (!response.ok) {
@@ -195,6 +219,21 @@ export default function StrategyPanel({ csrfToken }: { csrfToken: string }) {
               onChange={(event) => setMaxPositions(event.target.value)}
             />
           </label>
+          <label htmlFor="strategy-playbook">
+            Playbook (optional)
+            <select
+              id="strategy-playbook"
+              value={playbookId}
+              onChange={(event) => setPlaybookId(event.target.value)}
+            >
+              <option value="">No playbook</option>
+              {playbooks.map((playbook) => (
+                <option key={playbook.playbook_id} value={playbook.playbook_id}>
+                  {playbook.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         <button
@@ -222,6 +261,7 @@ function StrategyResult({ run }: { run: StrategyRun }) {
     <div className="strategy-result">
       <p className="decision-preview">
         Super Agent source <strong>{decision.source}</strong>
+        {run.spec.playbook !== null ? ` · playbook ${run.spec.playbook}` : ""}
         {decision.model !== null ? ` · ${decision.model}` : ""}
         {decision.fallback_used
           ? ` · fallback from ${decision.fallback_from ?? "unknown"}`

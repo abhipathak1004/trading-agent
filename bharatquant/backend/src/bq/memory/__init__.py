@@ -13,6 +13,28 @@ from bq.memory.episodic import (
     MemoryError,
     MissingEpisode,
 )
+from bq.memory.procedural import (
+    MissingPlaybook,
+    Playbook,
+    PlaybookSource,
+    PlaybookStore,
+    ProceduralError,
+)
+from bq.memory.resolver import (
+    DEFAULT_HORIZON_DAYS,
+    MAX_EPISODES,
+    MAX_HORIZON_DAYS,
+    OutcomeResolver,
+    ResolutionError,
+    ResolutionReport,
+)
+from bq.memory.semantic import (
+    MissingSemanticDoc,
+    SemanticDoc,
+    SemanticError,
+    SemanticHit,
+    SemanticMemoryStore,
+)
 
 __all__ = [
     "CalibrationBucket",
@@ -26,4 +48,20 @@ __all__ = [
     "MemoryConflict",
     "MemoryError",
     "MissingEpisode",
+    "MissingSemanticDoc",
+    "SemanticDoc",
+    "SemanticError",
+    "SemanticHit",
+    "SemanticMemoryStore",
+    "DEFAULT_HORIZON_DAYS",
+    "MAX_EPISODES",
+    "MAX_HORIZON_DAYS",
+    "OutcomeResolver",
+    "ResolutionError",
+    "ResolutionReport",
+    "MissingPlaybook",
+    "Playbook",
+    "PlaybookSource",
+    "PlaybookStore",
+    "ProceduralError",
 ]

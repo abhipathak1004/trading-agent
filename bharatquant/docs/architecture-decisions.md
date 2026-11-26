@@ -673,3 +673,147 @@ to learn from skipped setups, not just executed ones.
 separately and cannot leak future outcomes into historical evaluation. The
 scheduled resolver is still pending, so the buckets remain empty until outcomes
 are resolved; the store API is ready for that job.
+
+## ADR-024: Semantic memory is immutable documents plus a rebuildable index
+
+**Status:** Accepted; Phase 3C implements it.
+
+**Context:** Research documents need point-in-time retrieval, but the SQLite
+build on every target machine may not include FTS5. Search must also never see a
+document published, known or recorded after the requested `as_of`.
+
+**Decision:** Migration `029` stores immutable `semantic_docs` and a
+deterministic `semantic_terms` index. FTS5 is a derived cache, not authority.
+
+- `SemanticMemoryStore` creates `semantic_docs_fts` lazily only when FTS5 is
+  available, backfilling existing documents on creation. If creation fails, the
+  store uses `semantic_terms` and returns the same `SemanticHit` contract.
+- Search filters `published_at`, `known_at` and `recorded_at` against `as_of`,
+  optionally by symbol, and caps query/limit sizes.
+- Documents and terms are immutable by trigger. Source URLs must be HTTPS
+  without embedded credentials; metadata is bounded canonical JSON.
+- The owner-only no-store search route and the Agent Lab panel expose the result.
+  Indexing news headlines into semantic memory is a later ingestion hook.
+
+**Consequences:** Search works on a plain SQLite build, and FTS5 is an
+accelerator that can be rebuilt from the authoritative tables. A later resolver
+or ingestion job must call the store to add documents; the search surface is
+ready.
+
+## ADR-025: Evidence verification starts as a deterministic citation check
+
+**Status:** Accepted; Phase 3C implements it.
+
+**Context:** Specialist claims cite news ids. Before a debate consumes them, the
+system should know whether those ids were actually retrievable at `as_of`.
+Asking Jev to entail each claim is useful but adds a model call and calibration
+burden; the cheap, decisive check is whether the cited evidence exists.
+
+**Decision:** `bq/analysis/evidence.py` checks each claim's `evidence_ids`
+against the point-in-time news store before bull/bear.
+
+- A claim with no evidence ids is unverified. A claim is verified only when every
+  cited id exists at `as_of`.
+- The pipeline replaces the specialist briefs with claims carrying
+  `verified=True/False`, records a trace (`verified` / `unverified` counts), and
+  exposes missing ids. The Technical tab shows the claim status.
+- Verification is optional: a missing store or failure records a degraded node
+  and leaves the briefs untouched.
+- This is a citation check, not an entailment proof. The Jev Noul pass remains a
+  later refinement; it must not let a model invent or remove evidence ids.
+
+**Consequences:** Claims that cite nothing or cite a story the run could not
+know are visible before the debate, at zero token cost. The limitation is
+explicit: a real story can still be misread, which is what the future model
+verification is for.
+
+## ADR-026: Outcomes are resolved by deterministic first-touch, never rewritten
+
+**Status:** Accepted; Phase 3D implements it.
+
+**Context:** Brier calibration is meaningless until a shadow decision has an
+outcome. The outcome must be computed from data that was not available at
+decision time, but the original episode must remain exactly what the system
+believed. A model must not decide whether its own trade worked.
+
+**Decision:** `bq/memory/resolver.py` resolves due episodes in code.
+
+- An episode is due when `as_of + horizon` has passed. The default horizon is
+  five calendar days; both horizon and batch size are bounded parameters.
+- Only daily bars **after** the episode's `as_of` and at or before the horizon are
+  considered. One bad symbol produces a report note; the batch continues.
+- A BUY plan resolves on stop/target first-touch. If a bar touches both, the stop
+  wins (conservative). If neither is touched, the horizon close decides the
+  binary outcome and realized R. A no-plan HOLD/SELL/AVOID episode resolves on
+  the forward return from the stored `last_close`.
+- Resolution appends one outcome with the bar's timestamp, outcome, realized R,
+  close price and `outcome_resolver` source. The episode is never updated.
+- The owner-only, CSRF-protected resolve route and the calibration panel button
+  call the resolver explicitly. Wiring it to a registered schedule is pending.
+
+**Consequences:** The calibration loop is testable and reviewable end to end
+without a model in the outcome path. The five-day horizon and first-touch rules
+are deliberate starting points, not validated strategy claims; a later research
+slice can compare horizons against recorded outcomes. Calendar days are used,
+so exchange holidays are not yet modelled.
+
+## ADR-027: Procedural playbooks are guidance, not policy
+
+**Status:** Accepted; Phase 3E implements it.
+
+**Context:** The owner wants to select and refine strategy guidance without
+editing code, but a strategy playbook must not become an alternative risk policy
+or a place to hide thresholds. The prompt editor already established the pattern:
+append-only versions, code-owned defaults, bounded text.
+
+**Decision:** Migration `030` adds append-only `procedural_playbooks` and
+`bq/memory/procedural.py`.
+
+- Three defaults are code-owned: momentum continuation, capital preservation and
+  event-aware. Name, description and the playbook set are code-owned; the owner
+  edits only the bounded content.
+- Saves append a version; reset writes the default as a new version. Content is
+  length- and control-character checked; audit rows carry a hash, not the text.
+- The Strategy request may select a playbook. The Super Agent resolves it before
+  any symbol runs and includes a bounded `{id, name, version, guidance}` block in
+  its reasoning constraints. `StrategySpec.playbook` records the choice.
+- A playbook cannot change the decision ladder, thresholds, size scales, cash or
+  position gates, or risk vetoes. It shapes ranking commentary and emphasis only.
+- The Agent Lab editor and Strategy selector are owner-only and no-store.
+
+**Consequences:** Strategy guidance is editable and reviewable without moving
+policy out of code. An unknown playbook fails before symbol work; a missing
+playbook is allowed. The next research step is to compare playbook-selected runs
+against outcomes, which the episodic memory already records.
+
+## ADR-028: The evidence Noul pass may reject but never rescue a claim
+
+**Status:** Accepted; Phase 3F implements it.
+
+**Context:** The deterministic verifier proves that a cited news id existed at
+`as_of`; it does not prove the story supports the claim. A typed Noul judgment is
+a cheap way to add that second check, but it must not let a model invent evidence
+or override a missing citation.
+
+**Decision:** The evidence verifier gains an optional Noul pass over the same
+cited claims.
+
+- `ModelRouter.decide` accepts a bounded mapping as well as a `DecisionState`, so
+  the evidence battery can use a claim-focused state (claim text plus cited
+  titles/summaries) through the ordinary Jev → Flash → Reasoning ladder.
+- The citation pass runs first. Claims with no ids or any missing id are marked
+  unverified and are never sent to a model.
+- Eligible claims are sent in one battery request, one Noul each, up to 20. A
+  claim passes when the Noul probability is at least 0.60.
+- The model can only lower a claim from verified to unverified. It cannot add
+  evidence ids, add claims or turn a missing citation into a pass.
+- No router, no configured model, or any model failure falls back to the
+  citation result and labels it `decision_source="citation"`. A model pass
+  records the source and model in `EvidenceResult`, the run payload and the UI.
+- `HeuristicJudge` deliberately refuses the evidence battery, so a no-model run
+  is a citation check, not a fabricated judgment.
+
+**Consequences:** Evidence quality is checked at two levels without making the
+pipeline depend on a model. The Noul threshold is a code-owned starting point
+like the other decision policy values; it can be calibrated from recorded
+outcomes later.

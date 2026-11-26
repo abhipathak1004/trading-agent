@@ -403,3 +403,29 @@ test("malformed final gates are rejected", () => {
     );
   }
 });
+
+const evidence = {
+  verified_claims: 1,
+  unverified_claims: 1,
+  missing_evidence_ids: ["n2"],
+};
+
+test("evidence verification is parsed and optional", () => {
+  assert.equal(parseAnalysisRun(run).evidence, null);
+  const parsed = parseAnalysisRun({ ...run, evidence });
+  assert.equal(parsed.evidence?.verified_claims, 1);
+  assert.equal(parsed.evidence?.unverified_claims, 1);
+  assert.deepEqual(parsed.evidence?.missing_evidence_ids, ["n2"]);
+});
+
+test("malformed evidence verification is rejected", () => {
+  for (const override of [
+    { verified_claims: -1 },
+    { unverified_claims: 1.5 },
+    { missing_evidence_ids: [1] },
+  ]) {
+    assert.throws(() =>
+      parseAnalysisRun({ ...run, evidence: { ...evidence, ...override } }),
+    );
+  }
+});

@@ -88,6 +88,7 @@ export type StrategyRun = {
     equity_paise: number;
     available_cash_paise: number;
     risk_basis_points: number;
+    playbook: string | null;
     execution: string;
   };
   symbols: StrategySymbol[];
@@ -343,7 +344,10 @@ export function parseStrategyRun(value: unknown): StrategyRun {
     !isCount(spec.equity_paise) ||
     !isCount(spec.available_cash_paise) ||
     !isCount(spec.risk_basis_points) ||
-    typeof spec.execution !== "string"
+    typeof spec.execution !== "string" ||
+    (spec.playbook !== undefined &&
+      spec.playbook !== null &&
+      typeof spec.playbook !== "string")
   ) {
     throw new Error("Invalid strategy spec");
   }
@@ -359,6 +363,10 @@ export function parseStrategyRun(value: unknown): StrategyRun {
       equity_paise: spec.equity_paise,
       available_cash_paise: spec.available_cash_paise,
       risk_basis_points: spec.risk_basis_points,
+      playbook:
+        spec.playbook === undefined || spec.playbook === null
+          ? null
+          : (spec.playbook as string),
       execution: spec.execution,
     },
     symbols: value.symbols.map(parseSymbol),

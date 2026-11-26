@@ -54,6 +54,14 @@ export type SpecialistBrief = {
   source: string;
 };
 
+export type EvidenceVerification = {
+  verified_claims: number;
+  unverified_claims: number;
+  missing_evidence_ids: string[];
+  decision_source: string;
+  model: string | null;
+};
+
 export type FinalGate = {
   action: string;
   execute: boolean;
@@ -88,6 +96,7 @@ export type AnalysisRun = {
   notes: string[];
   agents: AgentTraceEntry[];
   specialists: SpecialistBrief[];
+  evidence: EvidenceVerification | null;
   final_gate: FinalGate | null;
 };
 
@@ -221,6 +230,31 @@ function parseSpecialistBriefs(value: unknown): SpecialistBrief[] {
   });
 }
 
+function parseEvidence(value: unknown): EvidenceVerification | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    !isCount(value.verified_claims) ||
+    !isCount(value.unverified_claims) ||
+    !Array.isArray(value.missing_evidence_ids) ||
+    !value.missing_evidence_ids.every((item) => typeof item === "string")
+  ) {
+    throw new Error("Invalid evidence verification");
+  }
+  return {
+    verified_claims: value.verified_claims,
+    unverified_claims: value.unverified_claims,
+    missing_evidence_ids: value.missing_evidence_ids as string[],
+    decision_source:
+      typeof value.decision_source === "string"
+        ? value.decision_source
+        : "citation",
+    model: typeof value.model === "string" ? value.model : null,
+  };
+}
+
 function parseFinalGate(value: unknown): FinalGate | null {
   if (value === undefined || value === null) {
     return null;
@@ -333,6 +367,7 @@ export function parseAnalysisRun(value: unknown): AnalysisRun {
     notes: parseStringArray(value.notes, "analysis notes"),
     agents: parseAgents(value.agents),
     specialists: parseSpecialistBriefs(value.specialists),
+    evidence: parseEvidence(value.evidence),
     final_gate: parseFinalGate(value.final_gate),
   };
 }
