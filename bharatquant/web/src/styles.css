@@ -1430,3 +1430,228 @@ a.nav-item:hover,
   font-size: 12px;
   color: var(--muted-strong);
 }
+
+/* Technical analysis: multi-symbol submission and the agent orchestration view. */
+.ta-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ta-vendor-note {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ta-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgb(22 16 34 / 78%);
+}
+
+.ta-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ta-form input,
+.ta-form select,
+.ta-form textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.ta-form-symbols textarea {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+
+.ta-form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.ta-form-row button {
+  padding: 9px 16px;
+  align-self: end;
+}
+
+.ta-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-strong);
+}
+
+.batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.batch-item {
+  padding: 14px;
+
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgb(22 16 34 / 78%);
+}
+
+.batch-item--failed {
+  border-color: rgb(244 114 182 / 40%);
+  background: rgb(244 114 182 / 6%);
+}
+
+.batch-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.batch-item-head strong {
+  font-size: 14px;
+}
+
+.batch-composite {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.batch-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-strong);
+}
+
+.batch-veto,
+.batch-provenance {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.analysis-plan-inline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.analysis-plan-inline div {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+
+.analysis-plan-inline dt {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.analysis-plan-inline dd {
+  margin: 2px 0 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+}
+
+.batch-expand {
+  margin-top: 10px;
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.batch-detail {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* The agent orchestration list: one row per agent, with its status and output. */
+.agent-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-flow-step {
+  display: grid;
+  grid-template-columns: 68px 132px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.agent-flow-step strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.agent-flow-summary {
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+}
+
+.trace-status {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.trace-status--ok {
+  background: rgb(34 197 94 / 14%);
+  color: #4ade80;
+}
+
+.trace-status--degraded {
+  background: rgb(234 179 8 / 14%);
+  color: #eab308;
+}
+
+.trace-status--failed {
+  background: rgb(244 114 182 / 16%);
+  color: #f472b6;
+}
+
+@media (max-width: 640px) {
+  .agent-flow-step {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}

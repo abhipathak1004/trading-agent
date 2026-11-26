@@ -10,10 +10,11 @@ import PaperAccountStatus from "./PaperAccountStatus";
 import ResearchPanel from "./ResearchPanel";
 import AgentConsole from "./AgentConsole";
 import AnalysisPanel from "./AnalysisPanel";
+import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
 
-type WorkspaceView = "today" | "research" | "settings";
+type WorkspaceView = "today" | "technical" | "research" | "settings";
 
 type ServiceState = "checking" | "online" | "offline";
 type SessionState =
@@ -296,6 +297,14 @@ export default function App() {
             </button>
             <button
               type="button"
+              className={`nav-item nav-item--button${view === "technical" ? " nav-item--active" : ""}`}
+              aria-current={view === "technical" ? "page" : undefined}
+              onClick={() => setView("technical")}
+            >
+              <span aria-hidden="true">◨</span>Technical
+            </button>
+            <button
+              type="button"
               className={`nav-item nav-item--button${view === "settings" ? " nav-item--active" : ""}`}
               aria-current={view === "settings" ? "page" : undefined}
               onClick={() => setView("settings")}
@@ -325,7 +334,13 @@ export default function App() {
         <header className="status-strip" aria-label="System status">
           <div className="status-strip__identity">
             <span className="breadcrumb">
-              {view === "settings" ? "Settings" : view === "research" ? "Research" : "Today"}
+              {view === "settings"
+                  ? "Settings"
+                  : view === "technical"
+                    ? "Technical Analysis"
+                    : view === "research"
+                      ? "Research"
+                      : "Today"}
             </span>
             <span className="mode-label">PAPER ONLY</span>
           </div>
@@ -502,6 +517,12 @@ export default function App() {
               <CalendarCoverage />
               <UsageStatus />
             </div>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "technical" && (
+          <section className="dashboard" id="technical" aria-labelledby="ta-page-title">
+            <TechnicalAnalysisPanel csrfToken={session.csrfToken} />
           </section>
         )}
 

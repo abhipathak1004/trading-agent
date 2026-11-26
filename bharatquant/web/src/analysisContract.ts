@@ -31,8 +31,16 @@ export type TradePlan = {
   as_of: string;
 };
 
+export type AgentTraceEntry = {
+  node: string;
+  role: string;
+  status: "ok" | "degraded" | "failed";
+  summary: string;
+};
+
 export type AnalysisRun = {
-  run_id: string;
+  /** Absent when the payload has not been persisted to the run store yet. */
+  run_id?: string;
   symbol: string;
   timeframe: string;
   mode: string;
@@ -44,6 +52,7 @@ export type AnalysisRun = {
   plan: TradePlan | null;
   vetoes: string[];
   notes: string[];
+  agents: AgentTraceEntry[];
 };
 
 function isNumberOrNull(value: unknown): value is number | null {
@@ -90,11 +99,37 @@ function parsePlan(value: unknown): TradePlan | null {
   return value as TradePlan;
 }
 
+function parseAgents(value: unknown): AgentTraceEntry[] {
+  if (value === undefined) {
+    // Older payloads predate the trace; treat as empty rather than failing.
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid agent trace");
+  }
+  return value.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.node !== "string" ||
+      typeof entry.role !== "string" ||
+      typeof entry.status !== "string" ||
+      typeof entry.summary !== "string" ||
+      !["ok", "degraded", "failed"].includes(entry.status)
+    ) {
+      throw new Error("Invalid agent trace entry");
+    }
+    return {
+      node: entry.node,
+      role: entry.role,
+      status: entry.status as AgentTraceEntry["status"],
+      summary: entry.summary,
+    };
+  });
+}
+
 export function parseAnalysisRun(value: unknown): AnalysisRun {
   if (
     !isRecord(value) ||
-    typeof value.run_id !== "string" ||
-    value.run_id.length === 0 ||
     typeof value.symbol !== "string" ||
     typeof value.timeframe !== "string" ||
     typeof value.mode !== "string" ||
@@ -102,6 +137,12 @@ export function parseAnalysisRun(value: unknown): AnalysisRun {
     !isRecord(value.data_provenance)
   ) {
     throw new Error("Invalid analysis run");
+  }
+  // `run_id` is optional because the pipeline payload predates the run store.
+  // The API attaches it when it persists the run; a payload without one is
+  // still perfectly renderable, so its absence must not reject the whole card.
+  if (value.run_id !== undefined && typeof value.run_id !== "string") {
+    throw new Error("Invalid analysis run id");
   }
   const provenance = value.data_provenance;
   if (
@@ -126,7 +167,7 @@ export function parseAnalysisRun(value: unknown): AnalysisRun {
     }
   }
   return {
-    run_id: value.run_id,
+    run_id: typeof value.run_id === "string" ? value.run_id : undefined,
     symbol: value.symbol,
     timeframe: value.timeframe,
     mode: value.mode,
@@ -148,6 +189,7 @@ export function parseAnalysisRun(value: unknown): AnalysisRun {
     plan: parsePlan(value.plan),
     vetoes: parseStringArray(value.vetoes, "analysis vetoes"),
     notes: parseStringArray(value.notes, "analysis notes"),
+    agents: parseAgents(value.agents),
   };
 }
 
@@ -169,4 +211,68 @@ export function parseVendorChains(value: unknown): VendorChains {
     vendors: parseStringArray(vendors, "vendor chain"),
   }));
   return { kite_enabled: value.kite_enabled, chains };
+}
+
+export type BatchAnalysisItem = {
+  requested: string;
+  symbol: string;
+  ok: boolean;
+  error: string | null;
+  analysis: AnalysisRun | null;
+};
+
+export type BatchAnalysis = {
+  timeframe: string;
+  as_of: string;
+  requested: number;
+  succeeded: number;
+  failed: number;
+  items: BatchAnalysisItem[];
+};
+
+export function parseBatchAnalysis(value: unknown): BatchAnalysis {
+  if (
+    !isRecord(value) ||
+    typeof value.timeframe !== "string" ||
+    typeof value.as_of !== "string" ||
+    typeof value.requested !== "number" ||
+    typeof value.succeeded !== "number" ||
+    typeof value.failed !== "number" ||
+    !Array.isArray(value.items)
+  ) {
+    throw new Error("Invalid batch analysis");
+  }
+  const items = value.items.map((item) => {
+    if (
+      !isRecord(item) ||
+      typeof item.requested !== "string" ||
+      typeof item.symbol !== "string" ||
+      typeof item.ok !== "boolean" ||
+      (item.error !== null && typeof item.error !== "string") ||
+      (item.analysis !== null && !isRecord(item.analysis))
+    ) {
+      throw new Error("Invalid batch item");
+    }
+    if (item.ok && item.analysis === null) {
+      throw new Error("A successful batch item must carry an analysis");
+    }
+    if (!item.ok && item.error === null) {
+      throw new Error("A failed batch item must carry an error");
+    }
+    return {
+      requested: item.requested,
+      symbol: item.symbol,
+      ok: item.ok,
+      error: item.error as string | null,
+      analysis: item.analysis === null ? null : parseAnalysisRun(item.analysis),
+    };
+  });
+  return {
+    timeframe: value.timeframe,
+    as_of: value.as_of,
+    requested: value.requested,
+    succeeded: value.succeeded,
+    failed: value.failed,
+    items,
+  };
 }

@@ -99,7 +99,6 @@ test("a plan with non-positive quantity is rejected", () => {
 
 test("malformed runs are rejected", () => {
   for (const bad of [
-    { ...run, run_id: "" },
     { ...run, data_provenance: { ...run.data_provenance, is_realtime: "no" } },
     { ...run, report: { ...run.report, facts: [1] } },
     {
@@ -129,4 +128,189 @@ test("malformed vendor chains are rejected", () => {
   assert.throws(() =>
     parseVendorChains({ kite_enabled: false, chains: { "bars.daily": [1] } }),
   );
+});
+
+// -- batch and agent trace -------------------------------------------------
+
+import {
+  parseBatchAnalysis,
+} from "../src/analysisContract.ts";
+
+const agentEntry = {
+  node: "technical",
+  role: "Technical analyst",
+  status: "ok",
+  summary: "4/4 dimensions scored, composite +0.27",
+};
+
+const analysisWithAgents = {
+  ...run,
+  agents: [agentEntry],
+};
+
+const batch = {
+  timeframe: "swing",
+  as_of: "2026-11-25T09:15:00Z",
+  requested: 2,
+  succeeded: 1,
+  failed: 1,
+  items: [
+    {
+      requested: "NSE:RELIANCE",
+      symbol: "NSE:RELIANCE",
+      ok: true,
+      error: null,
+      analysis: analysisWithAgents,
+    },
+    {
+      requested: "BOGUS",
+      symbol: "BOGUS",
+      ok: false,
+      error: "invalid symbol: Symbol is empty.",
+      analysis: null,
+    },
+  ],
+};
+
+test("a valid batch is accepted with a mixed outcome", () => {
+  const parsed = parseBatchAnalysis(batch);
+  assert.equal(parsed.requested, 2);
+  assert.equal(parsed.succeeded, 1);
+  assert.equal(parsed.failed, 1);
+  assert.equal(parsed.items[0].analysis.agents[0].role, "Technical analyst");
+  assert.equal(parsed.items[1].analysis, null);
+  assert.match(parsed.items[1].error, /invalid symbol/);
+});
+
+test("an absent agent list is tolerated as empty", () => {
+  const parsed = parseBatchAnalysis({
+    ...batch,
+    items: [
+      {
+        requested: "NSE:RELIANCE",
+        symbol: "NSE:RELIANCE",
+        ok: true,
+        error: null,
+        analysis: run, // no agents field
+      },
+    ],
+  });
+  assert.deepEqual(parsed.items[0].analysis.agents, []);
+});
+
+test("a batch with a known agent status parses", () => {
+  const parsed = parseBatchAnalysis({
+    ...batch,
+    items: [
+      {
+        requested: "NSE:RELIANCE",
+        symbol: "NSE:RELIANCE",
+        ok: true,
+        error: null,
+        analysis: {
+          ...run,
+          agents: [{ ...agentEntry, status: "degraded", role: "Bull advocate" }],
+        },
+      },
+    ],
+  });
+  assert.equal(parsed.items[0].analysis.agents[0].status, "degraded");
+});
+
+test("an unknown agent status is rejected", () => {
+  assert.throws(() =>
+    parseBatchAnalysis({
+      ...batch,
+      items: [
+        {
+          requested: "NSE:RELIANCE",
+          symbol: "NSE:RELIANCE",
+          ok: true,
+          error: null,
+          analysis: { ...run, agents: [{ ...agentEntry, status: "weird" }] },
+        },
+      ],
+    }),
+  );
+});
+
+test("a successful item without analysis is rejected", () => {
+  assert.throws(() =>
+    parseBatchAnalysis({
+      ...batch,
+      items: [
+        {
+          requested: "NSE:RELIANCE",
+          symbol: "NSE:RELIANCE",
+          ok: true,
+          error: null,
+          analysis: null,
+        },
+      ],
+    }),
+  );
+});
+
+test("a failed item without an error is rejected", () => {
+  assert.throws(() =>
+    parseBatchAnalysis({
+      ...batch,
+      items: [
+        {
+          requested: "BOGUS",
+          symbol: "BOGUS",
+          ok: false,
+          error: null,
+          analysis: null,
+        },
+      ],
+    }),
+  );
+});
+
+test("malformed batch envelopes are rejected", () => {
+  for (const bad of [
+    { ...batch, requested: "two" },
+    { ...batch, items: "nope" },
+    { ...batch, timeframe: 5 },
+  ]) {
+    assert.throws(() => parseBatchAnalysis(bad));
+  }
+});
+
+// -- regression: the batch payload has no run_id ----------------------------
+//
+// The pipeline's to_dict() has no run_id; only the run store mints one. The
+// original fixture re-used an object that happened to carry one, so the UI
+// rejected every real batch with "Invalid analysis run". These tests use a
+// payload shaped like the actual API response.
+
+const { run_id: _omitted, ...withoutRunId } = analysisWithAgents;
+
+test("an analysis without a run_id is accepted", () => {
+  const parsed = parseAnalysisRun(withoutRunId);
+  assert.equal(parsed.run_id, undefined);
+  assert.equal(parsed.symbol, "NSE:RELIANCE");
+  assert.ok(parsed.plan);
+});
+
+test("a batch of payloads without run_ids parses end to end", () => {
+  const parsed = parseBatchAnalysis({
+    ...batch,
+    items: [
+      {
+        requested: "NSE:RELIANCE",
+        symbol: "NSE:RELIANCE",
+        ok: true,
+        error: null,
+        analysis: withoutRunId,
+      },
+    ],
+  });
+  assert.equal(parsed.items[0].analysis.run_id, undefined);
+  assert.equal(parsed.items[0].analysis.agents.length, 1);
+});
+
+test("a non-string run_id is still rejected", () => {
+  assert.throws(() => parseAnalysisRun({ ...analysisWithAgents, run_id: 42 }));
 });

@@ -15,6 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 
+from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.debate import Debate
 from bq.analysis.pipeline import AnalysisPipeline, PipelineError
 from bq.analysis.risk_team import RiskAnalyst
@@ -334,6 +335,47 @@ class AnalysisRunRequest(BaseModel):
     risk_basis_points: int = Field(default=100, ge=0, le=10_000, strict=True)
 
 
+class BatchAnalysisRequest(BaseModel):
+    """Analyse several symbols in one submission.
+
+    ``symbols`` is free text because that is what a person types ("RELIANCE, TCS,
+    HDFCBANK"). Parsing and de-duplication happen server-side in
+    ``parse_symbol_list`` so the rules live in one place, not in the browser.
+    """
+
+    symbols: str = Field(min_length=1, max_length=512, strict=True)
+    timeframe: Literal["intraday", "swing"] = "swing"
+    equity_paise: int = Field(gt=0, le=10**13, strict=True)
+    available_cash_paise: int = Field(ge=0, le=10**13, strict=True)
+    risk_basis_points: int = Field(default=100, ge=0, le=10_000, strict=True)
+
+
+class BatchAgentStatus(BaseModel):
+    node: str
+    role: str
+    status: str
+    summary: str
+
+
+class BatchAnalysisItem(BaseModel):
+    """One symbol's outcome. ``analysis`` is null when ``error`` is set."""
+
+    requested: str
+    symbol: str
+    ok: bool
+    error: str | None
+    analysis: dict[str, object] | None
+
+
+class BatchAnalysisResponse(BaseModel):
+    timeframe: str
+    as_of: str
+    requested: int
+    succeeded: int
+    failed: int
+    items: list[BatchAnalysisItem]
+
+
 class AnalysisProvenance(BaseModel):
     vendor_daily: str
     vendor_quotes: str
@@ -516,6 +558,27 @@ def _app_config_status(config: AppConfig) -> AppConfigStatus:
         ],
         model_route_configured=config.model_route_configured,
         updated_at=config.updated_at,
+    )
+
+
+def _analysis_pipeline(
+    database_path: Path, config: object, settings_store: object
+) -> AnalysisPipeline:
+    """Build a ready-to-run pipeline for this configuration.
+
+    One builder so the single and batch routes cannot drift apart in how they
+    wire the debate, or in whether they attach a model at all.
+    """
+    router = build_analysis_router(database_path, config)
+    service = (
+        LLMService(settings_store)  # type: ignore[arg-type]
+        if getattr(config, "model_route_configured", False)
+        else None
+    )
+    return AnalysisPipeline(
+        router,
+        debate=Debate(service) if service is not None else None,
+        risk_analyst=RiskAnalyst(service) if service is not None else None,
     )
 
 
@@ -1217,13 +1280,7 @@ def create_app(
                     detail="Indices can be analysed as context but not traded.",
                 )
 
-            router = build_analysis_router(database_path, config)
-            service = LLMService(settings) if config.model_route_configured else None
-            pipeline = AnalysisPipeline(
-                router,
-                debate=Debate(service) if service is not None else None,
-                risk_analyst=RiskAnalyst(service) if service is not None else None,
-            )
+            pipeline = _analysis_pipeline(database_path, config, settings)
             try:
                 result = pipeline.run(
                     symbol=symbol,
@@ -1284,6 +1341,109 @@ def create_app(
                 vetoes=list(result.vetoes),
                 notes=list(result.notes),
                 skipped_nodes=list(result.skipped_nodes),
+            )
+
+        @app.post("/api/v1/analysis/batch")
+        def analysis_batch(
+            request: Request, body: BatchAnalysisRequest
+        ) -> BatchAnalysisResponse:
+            """Analyse several symbols in one submitted batch.
+
+            Each symbol is independent: one failure is reported against that
+            symbol and the rest still run, so a mistyped ticker does not waste the
+            whole batch. Duplicates are collapsed before any vendor call.
+            """
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+            try:
+                symbols = parse_symbol_list(body.symbols)
+            except BatchError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            config = settings.load()
+            pipeline = _analysis_pipeline(database_path, config, settings)
+            try:
+                batch = BatchAnalyst(pipeline).run(
+                    symbols=symbols,
+                    timeframe=body.timeframe,
+                    equity_paise=body.equity_paise,
+                    available_cash_paise=body.available_cash_paise,
+                    risk_basis_points=body.risk_basis_points,
+                )
+            except BatchError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            store = AnalysisRunStore(database_path)
+            items: list[BatchAnalysisItem] = []
+            for item in batch.items:
+                result = item.result
+                # Only a successful analysis carries a payload to persist and
+                # report; a failed item has an error string instead.
+                analysis = None if result is None else result.to_dict()
+                if result is not None:
+                    assert analysis is not None
+                    # Persist each successful analysis so the history stays
+                    # complete even when the batch ran from the new tab.
+                    stored = store.record(
+                        symbol=result.symbol,
+                        timeframe=result.timeframe,
+                        as_of=result.as_of,
+                        started_at=result.as_of,
+                        vendor_quotes=result.vendor_quotes,
+                        vendor_daily=result.vendor_daily,
+                        is_realtime=result.is_realtime,
+                        data_freshness=(
+                            "realtime_kite"
+                            if result.is_realtime
+                            else "delayed_yfinance"
+                        ),
+                        bar_count=result.report.bar_count,
+                        facts=result.report.facts(),
+                        composite=result.report.composite,
+                        debate_attempted=(
+                            result.bull is not None or result.bear is not None
+                        ),
+                        debate_rounds=result.debate_rounds,
+                        mode=result.mode,
+                        provider=config.provider.value,
+                        model=config.model_name,
+                        input_tokens=result.input_tokens,
+                        output_tokens=result.output_tokens,
+                        signal=(
+                            "HOLD" if result.plan is None else result.plan.signal.value
+                        ),
+                        plan=None if result.plan is None else result.plan.to_dict(),
+                        vetoes=result.vetoes,
+                        detail=analysis,
+                    )
+                    # The pipeline's payload has no `run_id` — only the store
+                    # mints one. Attach it so the batch item is the same shape
+                    # as a single-run response and the UI can link to history.
+                    analysis = {**analysis, "run_id": stored.run_id}
+                items.append(
+                    BatchAnalysisItem(
+                        requested=item.requested,
+                        symbol=item.symbol,
+                        ok=item.ok,
+                        error=item.error,
+                        analysis=analysis,
+                    )
+                )
+            return BatchAnalysisResponse(
+                timeframe=batch.timeframe,
+                as_of=batch.as_of.isoformat(),
+                requested=len(batch.items),
+                succeeded=batch.succeeded,
+                failed=batch.failed,
+                items=items,
             )
 
         @app.get("/api/v1/analysis/runs")

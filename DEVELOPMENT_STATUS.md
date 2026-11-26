@@ -7,7 +7,67 @@ Start here when resuming work. This file lives in the workspace and does not dep
 Updated 25 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
 
-**Latest slice — repository cleanup and deduplication (no behaviour change).**
+**Latest slice — Technical Analysis tab: multi-symbol, multi-agent, from the UI.**
+A new **Technical** tab submits one or more stocks and shows every agent's
+contribution. This makes the existing multi-agent framework usable from the UI;
+it is not a new analysis engine.
+
+- `bq/analysis/batch.py` — `BatchAnalyst` fans the existing pipeline over up to
+  10 symbols. One symbol's failure never stops the batch (a mistyped ticker is
+  reported against that symbol), duplicates are collapsed before any vendor call,
+  and results come back in the requested order. `parse_symbol_list` owns the
+  parsing rules server-side (commas, semicolons, newlines; case-insensitive
+  de-dupe) so the browser does not re-implement them.
+- `bq/analysis/pipeline.py` — added `AgentTrace`, so each run reports what every
+  agent did: `Market data`, `News context`, `Technical analyst`, `Bull advocate`,
+  `Bear advocate`, `Research judge`, `Risk analyst`, `Position sizer`, `Decision`.
+  Each carries a status (`ok` / `degraded` / `failed`) and a one-line summary.
+  Entries are ordered as the pipeline reads, not as the DAG sorted them (which
+  had put bear before bull).
+- API: `POST /api/v1/analysis/batch`. Same owner-only, `no-store`, CSRF + origin
+  checks as the single-symbol route; the two now share one `_analysis_pipeline`
+  builder so they cannot drift. Each successful analysis is also persisted to the
+  run history.
+- UI: new `TechnicalAnalysisPanel.tsx` and a **Technical** nav item. Enter
+  stocks, pick a timeframe, set equity/cash, run. Each symbol card shows the
+  signal, four sub-scores, the plan, and an expandable agent trace. A degraded
+  agent is shown as degraded rather than hidden — "the debate did not run" is
+  information the owner needs.
+
+**Fix — "Invalid analysis run" on the Technical tab (found in manual testing).**
+The batch route returned the pipeline's raw `to_dict()`, which has no `run_id`;
+only `AnalysisRunStore` mints one. The UI contract required `run_id`, so every
+real batch was rejected with *Invalid analysis run*. The frontend test passed
+because its fixture reused an object that happened to carry the field — the
+fixture did not match the real payload.
+
+- The API now attaches `run_id` from the store record it already writes, so a
+  batch item has the same shape as a single-run response.
+- `parseAnalysisRun` treats `run_id` as **optional metadata**: a payload without
+  one still renders, so a future shape drift degrades gracefully instead of
+  blanking the whole result.
+- Regression tests on both sides: the frontend now parses a payload with the
+  field *removed*, and a backend test asserts every contract key is present on a
+  successful batch item (with data access stubbed). One existing test that
+  asserted "a missing `run_id` is invalid" was encoding the bug and was corrected.
+- Verified against the real API: the live response parses through the actual
+  browser contract (`succeeded 1 / failed 1`, 9 agents, `run_id` present), not
+  just through a fixture.
+
+Live verification: a batch of `NSE:RELIANCE, NSE:TCS, NSE:HDFCBANK, BOGUS`
+returned `3 succeeded / 1 failed`, with `BOGUS` failing cleanly as
+`No market data for NSE:BOGUS` while the other three produced full plans. The
+trace for RELIANCE showed all nine agents in pipeline order: `247 bars from
+yahoo (delayed)` → `4/4 dimensions scored, composite +0.23` → `2187 shares, R:R
+1.50` → `BUY`, with the four LLM agents correctly marked `degraded` because no
+model key is configured.
+
+Verification: **677 backend tests** pass (30 new: 17 batch, 12 batch-API, 1
+ordering), **41 frontend tests** pass (10 new), ruff clean, format clean, frontend
+typecheck + build clean. mypy stays at the 47 pre-existing errors in the same 8
+untouched files.
+
+**Previous slice — repository cleanup and deduplication (no behaviour change).**
 Removed dead code, consolidated copy-pasted helpers, and stopped tracking
 generated files. Verified: **648 backend tests** (647 + 1 new), **31 frontend
 tests**, ruff clean, format clean, mypy unchanged at 47 pre-existing errors in 8
@@ -628,27 +688,33 @@ true. Kept for history; read these instead:
 
 ## Resume next
 
-1. **Give the paper executor an account snapshot reader.** Right now the caller
+1. **Wire the news agent into the analysis pipeline.** `_news_context` is a
+   placeholder that reports `degraded — not wired in this slice`, which the new
+   agent trace now makes visible on every run. It should read `agent_memories`
+   filtered to `as_of` so the debate sees point-in-time news instead of nothing.
+   That is the single biggest remaining gap in the "multi-agent" story.
+2. **Run the batch concurrently, bounded.** `BatchAnalyst` is deliberately
+   sequential (see its docstring): ten symbols against one HTTP client trades a
+   rate-limit risk for latency that does not matter for a manual batch. If the UI
+   ever needs it, add a bounded `asyncio.TaskGroup` fan-out in `batch.py` with a
+   per-host token bucket, not in the pipeline.
+3. **Give the paper executor an account snapshot reader.** Right now the caller
    supplies `ExecutionContext` by hand (CLI flags, tests). It should be derived
    from `PaperAccountStore.get_balance`, `paper_positions`, today's realised loss
    and the calendar's session state, so `bq paper execute` needs only the plan
    and an account id. That also removes the chance of an operator mis-typing a
    limit. Keep the limits themselves explicit and owner-reviewed.
-2. **Wire the news stage into the analysis pipeline.** `_news_context` in
-   `bq/analysis/pipeline.py` is a deliberate placeholder that produces no facts.
-   It should read `agent_memories` filtered to `as_of`, so the debate sees
-   point-in-time news rather than nothing.
-3. **Make the news agent a scheduled job.** `bq news ingest` runs standalone; it
+4. **Make the news agent a scheduled job.** `bq news ingest` runs standalone; it
    is not a registered job or schedule entry. Add it to the job catalogue and a
    daily schedule so ingest happens in the operating window, then expose
    long-term memories to the morning report.
-4. **Review the swing/stop heuristics against real outcomes.** The 1.5×ATR stop
+5. **Review the swing/stop heuristics against real outcomes.** The 1.5×ATR stop
    and the ATR-bounded support logic are plausible but unvalidated. They are
    deterministic and reviewable by design; treat them as a starting point, not a
-   proven rule. The freshness thresholds (`SWING_CRITICAL_AFTER_SECONDS`,
+   proven rule. The freshness thresholds (`SWING_MAX_STALE_WEEKDAYS`,
    `INTRADAY_CRITICAL_AFTER_SECONDS`) are likewise unvalidated starting points.
-5. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
-6. **Improve news classification only with an explicit budget.** `OTHER` is the
+6. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
+7. **Improve news classification only with an explicit budget.** `OTHER` is the
    largest bucket and first-match labelling mislabels headlines that mention two
    topics. Any model pass must be opt-in, capped by tokens, and applied to the
    ambiguous subset — never a per-article call during ingest.

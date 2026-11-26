@@ -91,6 +91,7 @@ class PipelineContext:
     vetoes: tuple[str, ...] = ()
     notes: list[str] = field(default_factory=list)
     degraded: list[str] = field(default_factory=list)
+    trace: list[AgentTrace] = field(default_factory=list)
     tokens: dict[str, int] = field(default_factory=lambda: {"input": 0, "output": 0})
 
     @property
@@ -100,6 +101,63 @@ class PipelineContext:
             if self.is_realtime
             else DataFreshness.DELAYED_YAHOO
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTrace:
+    """One agent node's contribution, for the UI's orchestration view.
+
+    ``status`` is one of ``ok``, ``degraded`` (ran but the model was unavailable)
+    or ``failed``. ``summary`` is a short, human-readable line; ``detail`` carries
+    structured output for the panel. Nothing here is model-written prose unless
+    the node itself is an LLM node, and then it is bounded.
+    """
+
+    node: str
+    role: str
+    status: str
+    summary: str
+
+    def __post_init__(self) -> None:
+        if self.status not in {"ok", "degraded", "failed"}:
+            raise ValueError("Unknown agent trace status.")
+        if not self.node or not self.role:
+            raise ValueError("An agent trace needs a node and a role.")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "node": self.node,
+            "role": self.role,
+            "status": self.status,
+            "summary": self.summary,
+        }
+
+
+AGENT_ROLES: dict[str, str] = {
+    "gather_data": "Market data",
+    "news_context": "News context",
+    "technical": "Technical analyst",
+    "bull": "Bull advocate",
+    "bear": "Bear advocate",
+    "judge": "Research judge",
+    "risk_team": "Risk analyst",
+    "size": "Position sizer",
+    "decision": "Decision",
+}
+
+# The order agents appear in the UI. This is the graph order, not DAG sort order,
+# so the panel reads as a pipeline rather than an alphabetised list.
+AGENT_ORDER: tuple[str, ...] = (
+    "gather_data",
+    "news_context",
+    "technical",
+    "bull",
+    "bear",
+    "judge",
+    "risk_team",
+    "size",
+    "decision",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +183,7 @@ class AnalysisResult:
     input_tokens: int | None
     output_tokens: int | None
     skipped_nodes: tuple[str, ...]
+    trace: tuple[AgentTrace, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -154,6 +213,7 @@ class AnalysisResult:
                 "output_tokens": self.output_tokens,
             },
             "skipped_nodes": list(self.skipped_nodes),
+            "agents": [entry.to_dict() for entry in self.trace],
         }
 
 
@@ -260,6 +320,13 @@ class AnalysisPipeline:
         ctx.vendor_daily = result.source
         ctx.is_realtime = result.is_realtime
         ctx.vendor_quotes = result.source
+        freshness = "real-time" if result.is_realtime else "delayed"
+        self._record(
+            ctx,
+            "gather_data",
+            "ok",
+            f"{len(bars)} bars from {result.source} ({freshness})",
+        )
 
     def _news_context(self, ctx: PipelineContext) -> None:
         """Placeholder for the news stage; deliberately produces no facts yet.
@@ -270,6 +337,7 @@ class AnalysisPipeline:
         """
         ctx.news_facts = ()
         ctx.notes.append("news context: not wired in this slice")
+        self._record(ctx, "news_context", "degraded", "not wired in this slice")
 
     def _technical(self, ctx: PipelineContext) -> None:
         if not ctx.bars:
@@ -280,16 +348,41 @@ class AnalysisPipeline:
             timeframe=ctx.timeframe,
             as_of=ctx.as_of,
         )
+        composite = ctx.report.composite
+        scored = ctx.report.available_dimensions
+        self._record(
+            ctx,
+            "technical",
+            "ok" if composite is not None else "degraded",
+            (
+                f"{scored}/4 dimensions scored, composite {composite:+.2f}"
+                if composite is not None
+                else "insufficient history for any scored dimension"
+            ),
+        )
 
     # The debate nodes *record* degradation rather than raising. Sizing must not
     # depend on the model being reachable: if these raised, the DAG would skip
     # `size` and `decision` too, and a provider outage would silently stop the
     # only stage that matters. So an unavailable debate sets a flag and returns.
 
+    def _record(
+        self, ctx: PipelineContext, node: str, status: str, summary: str
+    ) -> None:
+        ctx.trace.append(
+            AgentTrace(
+                node=node,
+                role=AGENT_ROLES.get(node, node),
+                status=status,
+                summary=summary,
+            )
+        )
+
     def _degrade(self, ctx: PipelineContext, node: str, exc: Exception) -> None:
         ctx.degraded.append(node)
         ctx.mode = "RULES_ONLY"
         ctx.notes.append(f"{node}: unavailable ({type(exc).__name__})")
+        self._record(ctx, node, "degraded", f"model unavailable ({type(exc).__name__})")
 
     def _bull(self, ctx: PipelineContext) -> None:
         if ctx.report is None or self.debate is None:
@@ -298,6 +391,8 @@ class AnalysisPipeline:
         try:
             ctx.bull = self.debate.bull(ctx.report)
             ctx.debate_attempted = True
+            points = len(ctx.bull.points)
+            self._record(ctx, "bull", "ok", f"bull case argued ({points} key point(s))")
         except DebateUnavailable as exc:
             self._degrade(ctx, "bull", exc)
 
@@ -308,6 +403,8 @@ class AnalysisPipeline:
         try:
             ctx.bear = self.debate.bear(ctx.report)
             ctx.debate_attempted = True
+            points = len(ctx.bear.points)
+            self._record(ctx, "bear", "ok", f"bear case argued ({points} key point(s))")
         except DebateUnavailable as exc:
             self._degrade(ctx, "bear", exc)
 
@@ -331,6 +428,16 @@ class AnalysisPipeline:
                 ctx.report, bull=ctx.bull, bear=ctx.bear, ceiling=ctx.ceiling
             )
             ctx.debate_rounds_run += 1
+            clamped = (
+                " (clamped to the deterministic ceiling)" if ctx.verdict.clamped else ""
+            )
+            self._record(
+                ctx,
+                "judge",
+                "ok",
+                f"verdict {ctx.verdict.verdict} at confidence "
+                f"{ctx.verdict.confidence:.2f}{clamped}",
+            )
         except DebateUnavailable as exc:
             self._degrade(ctx, "judge", exc)
 
@@ -341,6 +448,13 @@ class AnalysisPipeline:
         try:
             ctx.risk = self.risk_analyst.assess(ctx.report)
             ctx.debate_rounds_run += 1
+            warnings = len(ctx.risk.early_warnings)
+            self._record(
+                ctx,
+                "risk_team",
+                "ok",
+                f"advisory assessment ({warnings} early warning(s))",
+            )
         except DebateUnavailable as exc:
             self._degrade(ctx, "risk_team", exc)
 
@@ -352,10 +466,22 @@ class AnalysisPipeline:
         signal = _signal_for(ctx.report, ctx.verdict)
         if signal is not Signal.BUY:
             ctx.vetoes = ctx.vetoes + ("no_deterministic_long_case",)
+            composite = ctx.report.composite
+            self._record(
+                ctx,
+                "size",
+                "ok",
+                (
+                    f"no long case: composite {composite:+.2f} does not support a BUY"
+                    if composite is not None
+                    else "no long case: no scored dimensions"
+                ),
+            )
             return
         levels = _stops_from_report(ctx.report, risk_basis_points=15_000)
         if levels is None:
             ctx.vetoes = ctx.vetoes + ("no_valid_stop_distance",)
+            self._record(ctx, "size", "degraded", "no valid stop distance")
             return
         entry, stop, target = levels
         invalidation = (
@@ -384,13 +510,23 @@ class AnalysisPipeline:
                 available_cash_paise=cash,
                 risk_basis_points=risk_bps,
             )
+            self._record(
+                ctx,
+                "size",
+                "ok",
+                f"{ctx.plan.suggested_quantity} shares, R:R "
+                f"{ctx.plan.reward_risk:.2f}, risk per share "
+                f"{ctx.plan.risk_per_share}",
+            )
         except TradePlanError as exc:
             ctx.vetoes = ctx.vetoes + (f"plan_rejected:{exc}",)
+            self._record(ctx, "size", "failed", f"plan rejected: {exc}")
 
     def _decision(self, ctx: PipelineContext) -> Signal:
-        if ctx.plan is not None:
-            return ctx.plan.signal
-        return Signal.HOLD
+        signal = ctx.plan.signal if ctx.plan is not None else Signal.HOLD
+        vetoes = f" ({len(ctx.vetoes)} veto(es))" if ctx.vetoes else ""
+        self._record(ctx, "decision", "ok", f"{signal.value}{vetoes}")
+        return signal
 
     # -- public -----------------------------------------------------------
 
@@ -488,6 +624,12 @@ class AnalysisPipeline:
             input_tokens=None,
             output_tokens=None,
             skipped_nodes=result.skipped,
+            # Ordered as the pipeline reads, not as the DAG executed it: the DAG
+            # sorts nodes within a layer alphabetically, which put "bear" before
+            # "bull" and made the UI read backwards.
+            trace=tuple(
+                sorted(ctx.trace, key=lambda entry: AGENT_ORDER.index(entry.node))
+            ),
         )
 
 
