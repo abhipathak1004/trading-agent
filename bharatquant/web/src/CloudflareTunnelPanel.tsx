@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { parseTunnelStatus } from "./tunnelContract.ts";
+import {
+  POLL_MS,
+  isBusy,
+  parseTunnelStatus,
+  shouldPoll,
+} from "./tunnelContract.ts";
 import type { TunnelStatus } from "./tunnelContract.ts";
 
-type LoadState =
-  | { state: "loading" | "error" }
-  | { state: "ready"; status: TunnelStatus };
-
 type BusyState = "idle" | "starting" | "stopping";
-
-const POLL_MS = 1500;
 
 const LABELS: Record<TunnelStatus["state"], string> = {
   stopped: "Stopped",
@@ -19,14 +18,6 @@ const LABELS: Record<TunnelStatus["state"], string> = {
   stopping: "Stopping",
   error: "Failed",
 };
-
-function isBusy(status: TunnelStatus): boolean {
-  return (
-    status.state === "downloading" ||
-    status.state === "starting" ||
-    status.state === "stopping"
-  );
-}
 
 async function readStatus(response: Response): Promise<TunnelStatus> {
   if (!response.ok) {
@@ -49,59 +40,50 @@ export default function CloudflareTunnelPanel({
 }: {
   csrfToken: string;
 }) {
-  const [load, setLoad] = useState<LoadState>({ state: "loading" });
+  const [status, setStatus] = useState<TunnelStatus | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [polls, setPolls] = useState(0);
   const [busy, setBusy] = useState<BusyState>("idle");
   const [notice, setNotice] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const response = await fetch("/api/v1/settings/tunnel", {
         cache: "no-store",
       });
-      const status = await readStatus(response);
-      setLoad({ state: "ready", status });
-      return status;
+      setStatus(await readStatus(response));
+      setUnavailable(false);
     } catch {
-      setLoad({ state: "error" });
-      return null;
+      setUnavailable(true);
     }
   }, []);
 
   useEffect(() => {
-    let active = true;
-    async function poll() {
-      const status = await refresh();
-      if (!active || status === null || !isBusy(status)) {
-        return;
-      }
-      pollRef.current = setTimeout(() => void poll(), POLL_MS);
+    if (status === null || !shouldPoll(status, polls)) {
+      return;
     }
-    void poll();
-    return () => {
-      active = false;
-      if (pollRef.current !== null) {
-        clearTimeout(pollRef.current);
-      }
-    };
+    const timer = setTimeout(() => {
+      setPolls((count) => count + 1);
+      void refresh();
+    }, POLL_MS);
+    return () => clearTimeout(timer);
+  }, [status, polls, refresh]);
+
+  useEffect(() => {
+    void refresh();
   }, [refresh]);
 
   async function act(kind: "start" | "stop") {
     setBusy(kind === "start" ? "starting" : "stopping");
     setNotice(null);
+    setPolls(0);
     try {
       const response = await fetch(`/api/v1/settings/tunnel/${kind}`, {
         method: "POST",
         headers: { "X-CSRF-Token": csrfToken },
       });
-      const status = await readStatus(response);
-      setLoad({ state: "ready", status });
-      if (isBusy(status) && pollRef.current === null) {
-        pollRef.current = setTimeout(() => {
-          pollRef.current = null;
-          void refresh();
-        }, POLL_MS);
-      }
+      setStatus(await readStatus(response));
+      setUnavailable(false);
     } catch (error) {
       setNotice(
         error instanceof Error ? error.message : "The tunnel request failed.",
@@ -120,22 +102,37 @@ export default function CloudflareTunnelPanel({
     }
   }
 
-  if (load.state !== "ready") {
-    const failed = load.state === "error";
+  if (status === null) {
     return (
       <section className="settings-panel" aria-label="Cloudflare tunnel">
-        <p role={failed ? "alert" : "status"}>
-          {failed
+        <p role={unavailable ? "alert" : "status"}>
+          {unavailable
             ? "The tunnel status is unavailable."
             : "Loading the tunnel status..."}
         </p>
+        {unavailable && (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => void refresh()}
+          >
+            Retry
+          </button>
+        )}
       </section>
     );
   }
 
-  const status = load.status;
   const live = status.state === "live" && status.url !== null;
+  const stalled = isBusy(status) && !shouldPoll(status, polls);
   const working = busy !== "idle" || isBusy(status);
+  const displayNotice =
+    notice ??
+    (stalled
+      ? "The tunnel is taking longer than expected. Stop and try again."
+      : unavailable
+        ? "Lost contact with the server; showing the last known state."
+        : null);
 
   return (
     <section className="settings-panel" aria-labelledby="tunnel-title">
@@ -190,6 +187,14 @@ export default function CloudflareTunnelPanel({
         </p>
       )}
 
+      {live && (
+        <p className="panel-note">
+          Cloudflare just created this hostname, so your own network may take a
+          minute to resolve it. If the link does not open at first, wait a moment
+          and retry.
+        </p>
+      )}
+
       <div className="strategy-examples">
         <button
           type="button"
@@ -205,15 +210,18 @@ export default function CloudflareTunnelPanel({
           type="button"
           className="text-button"
           onClick={() => void act("stop")}
-          disabled={working || (!live && status.state !== "error")}
+          disabled={
+            busy === "stopping" ||
+            (!live && status.state !== "error" && !stalled)
+          }
         >
           {busy === "stopping" ? "Stopping..." : "Stop tunnel"}
         </button>
       </div>
 
-      {notice !== null && (
+      {displayNotice !== null && (
         <p className="panel-note" role="status">
-          {notice}
+          {displayNotice}
         </p>
       )}
 

@@ -110,8 +110,11 @@ dies when you press **Stop tunnel** or quit the server.
 - `cloudflared` resolves from `BQ_CLOUDFLARED`, then `PATH`, then `BQ_HOME/bin`.
   On the first Start the app may download the official release into `BQ_HOME/bin`
   (verified with `cloudflared --version`) instead of asking you to install it.
-- The app marks the URL live only after it health-checks through the tunnel, so
-  the copied link is responding when it appears.
+- The app marks the URL live once cloudflared has registered its edge connection
+  and the local origin answers its health check. It deliberately does not wait on
+  the public hostname: a brand-new `*.trycloudflare.com` name is negatively cached
+  by many ISP resolvers for a minute or more, so your own browser may need a short
+  wait before the copied link opens even though the tunnel is already up.
 
 This is remote access to the same paper-only app. It adds no broker path and does
 not change ADR-001 or ADR-013.

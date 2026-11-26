@@ -1119,6 +1119,39 @@ supply-chain surface accepted for convenience; the binary comes only from
 Cloudflare's GitHub release and is version-checked. This does not weaken ADR-001
 or ADR-013: it exposes the same paper-only app, it does not add a broker path.
 
+**Amendment 2026-11-26 — liveness is local, not public-DNS dependent.**
+
+*Problem observed in the field:* the tunnel reached "live" at Cloudflare within
+~5 s and cloudflared logged `Registered tunnel connection`, yet the app always
+ended in `error`. The health probe called
+`https://<id>.trycloudflare.com/api/v1/system/health`, and a `*.trycloudflare.com`
+name created seconds earlier is negatively cached by many ISP resolvers. Measured
+on the affected network: the system resolver returned NXDOMAIN for ~80 s while
+Cloudflare DoH resolved the same name in ~16 s. The probe therefore failed for the
+whole `HEALTH_TIMEOUT_SECONDS` window and reported a healthy tunnel as broken.
+
+Changes:
+
+- `_read_ready` treats cloudflared's `Registered tunnel connection` line as the
+  liveness signal (DNS-independent) instead of only the URL banner.
+- The health probe targets the **loopback origin** (`local_origin`), proving the
+  app behind the tunnel answers, rather than the public hostname.
+- `START_TIMEOUT_SECONDS` 25 → 60 s; `HEALTH_TIMEOUT_SECONDS` 30 → 20 s;
+  `HEALTH_POLL_SECONDS` 2 → 1 s.
+- Failures append the last cloudflared `ERR`/`failed` line to `error`, so the cause
+  is visible in the UI instead of a generic message.
+- Log lines are bounded by `MAX_LOG_LINE_CHARS` (600) rather than reusing the
+  500-char error bound, so cloudflared banners are no longer truncated mid-word.
+- `request_start` is a no-op while `LIVE`, preventing a second child that would
+  orphan the first.
+- The panel polls until a terminal state with a bounded cap, and keeps the last
+  known status through transient fetch errors; a live URL also shows a note that
+  the owner's own resolver may need a minute to see the brand-new hostname.
+
+Public reachability is unchanged in what it gates: the host/origin allowlists are
+still populated only while the tunnel is `starting`/`live`. This only changes how
+"live" is decided.
+
 ## ADR-038: Working memory is append-only decision state, not a second ledger
 
 **Status:** Accepted; Phase 11 implements it.

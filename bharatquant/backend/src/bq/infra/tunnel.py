@@ -51,17 +51,19 @@ from bq.infra.audit import append_event
 LOCAL_ORIGIN = "http://127.0.0.1:8000"
 HEALTH_PATH = "/api/v1/system/health"
 RELEASE_BASE = "https://github.com/cloudflare/cloudflared/releases/latest/download"
-MAX_ERROR_CHARS = 300
+MAX_ERROR_CHARS = 500
 MAX_LOG_CHARS = 4096
+MAX_LOG_LINE_CHARS = 600
 MAX_LOG_LINES = 40
 MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
-START_TIMEOUT_SECONDS = 25.0
-HEALTH_TIMEOUT_SECONDS = 30.0
-HEALTH_POLL_SECONDS = 2.0
+START_TIMEOUT_SECONDS = 60.0
+HEALTH_TIMEOUT_SECONDS = 20.0
+HEALTH_POLL_SECONDS = 1.0
 TERMINATE_TIMEOUT_SECONDS = 5.0
 _VERSION_TIMEOUT_SECONDS = 10.0
 
 _TUNNEL_URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+_REGISTERED = re.compile(r"Registered tunnel connection")
 _BINARY_NAME = "cloudflared.exe" if sys.platform == "win32" else "cloudflared"
 
 
@@ -120,6 +122,15 @@ async def _default_spawn(argv: Sequence[str]) -> TunnelProcess:
 
 
 async def _default_health_probe(url: str) -> bool:
+    """Check the local origin answers its health path.
+
+    This deliberately targets the loopback origin, not the public tunnel URL.
+    A freshly created ``*.trycloudflare.com`` name is routinely negatively
+    cached by ISP resolvers for a minute or more, so probing the public name
+    fails on DNS long after the tunnel is actually up. Reachability of the
+    public link is proven by cloudflared's own "Registered tunnel connection"
+    line; the origin check here proves the app behind it is serving.
+    """
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(5.0), follow_redirects=True
@@ -226,6 +237,7 @@ class TunnelManager:
             if self._status.state in (
                 TunnelState.DOWNLOADING,
                 TunnelState.STARTING,
+                TunnelState.LIVE,
                 TunnelState.STOPPING,
             ):
                 return self.snapshot()
@@ -287,17 +299,17 @@ class TunnelManager:
             raise TunnelError("cloudflared produced no output stream.")
         try:
             url = await asyncio.wait_for(
-                self._read_url(reader), timeout=START_TIMEOUT_SECONDS
+                self._read_ready(reader), timeout=START_TIMEOUT_SECONDS
             )
         except TimeoutError as exc:
             raise TunnelError(
-                "Cloudflare did not return a tunnel URL in time."
+                "Cloudflare did not return a usable tunnel in time."
             ) from exc
-        # Publish the URL while still STARTING so the health probe, which
-        # travels back through the tunnel, passes the host/origin gates.
+        # Publish the URL while still STARTING so the origin check and any
+        # request racing the start both see the host/origin gates opened.
         self._status = TunnelStatus(state=TunnelState.STARTING, url=url)
         self._drainer = asyncio.create_task(self._drain(reader))
-        await self._await_health(url)
+        await self._await_health()
         started_at = core_utc(self.clock.now())
         self._status = TunnelStatus(
             state=TunnelState.LIVE, url=url, started_at=started_at
@@ -306,16 +318,29 @@ class TunnelManager:
         self._audit("tunnel.started", {"state": TunnelState.LIVE.value, "url": url})
         self._watcher = asyncio.create_task(self._watch(process))
 
-    async def _read_url(self, reader: LineReader) -> str:
-        while True:
+    async def _read_ready(self, reader: LineReader) -> str:
+        """Wait for both the public URL and the connector registration.
+
+        Registration is the deterministic liveness signal: it is emitted when
+        cloudflared's edge connection is established, and unlike a request to
+        the public hostname it does not depend on DNS for a name that was
+        created seconds ago.
+        """
+        url: str | None = None
+        registered = False
+        while url is None or not registered:
             raw = await reader.readline()
             if not raw:
-                raise TunnelError("cloudflared exited before returning a URL.")
+                raise TunnelError("cloudflared exited before the tunnel was ready.")
             line = raw.decode("utf-8", errors="replace").strip()
             self._append_log(line)
-            match = _TUNNEL_URL.search(line)
-            if match is not None:
-                return match.group(0)
+            if url is None:
+                match = _TUNNEL_URL.search(line)
+                if match is not None:
+                    url = match.group(0)
+            if _REGISTERED.search(line) is not None:
+                registered = True
+        return url
 
     async def _drain(self, reader: LineReader) -> None:
         while True:
@@ -324,16 +349,16 @@ class TunnelManager:
                 return
             self._append_log(raw.decode("utf-8", errors="replace").strip())
 
-    async def _await_health(self, url: str) -> None:
+    async def _await_health(self) -> None:
         deadline = time.monotonic() + HEALTH_TIMEOUT_SECONDS
         while True:
             process = self._process
             if process is not None and process.returncode is not None:
                 raise TunnelError(f"cloudflared exited with code {process.returncode}.")
-            if await self._health_probe(url):
+            if await self._health_probe(self.local_origin):
                 return
             if time.monotonic() >= deadline:
-                raise TunnelError("The public tunnel URL did not become healthy.")
+                raise TunnelError("The local origin did not become healthy.")
             await asyncio.sleep(HEALTH_POLL_SECONDS)
 
     async def _watch(self, process: TunnelProcess) -> None:
@@ -343,13 +368,23 @@ class TunnelManager:
             await self._fail(f"cloudflared exited with code {code}.")
 
     async def _fail(self, message: str) -> None:
+        detail = self._last_edge_error()
         await self._terminate_process()
+        if detail is not None and detail not in message:
+            message = f"{message} {detail}"
         self._status = TunnelStatus(
             state=TunnelState.ERROR,
             error=_bounded(message),
         )
         self._append_log(_bounded(message))
         self._audit("tunnel.start_failed", {"state": TunnelState.ERROR.value})
+
+    def _last_edge_error(self) -> str | None:
+        for line in reversed(self._log):
+            lowered = line.lower()
+            if " err " in lowered or lowered.startswith("err") or "failed" in lowered:
+                return line
+        return None
 
     async def _terminate_process(self) -> None:
         await _cancel(self._watcher)
@@ -376,7 +411,7 @@ class TunnelManager:
         text = line.strip()
         if not text:
             return
-        self._log.append(text[:MAX_ERROR_CHARS])
+        self._log.append(text[:MAX_LOG_LINE_CHARS])
         while self._log and sum(len(item) for item in self._log) > MAX_LOG_CHARS:
             self._log.popleft()
 

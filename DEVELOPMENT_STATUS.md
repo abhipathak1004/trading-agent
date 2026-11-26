@@ -6,6 +6,30 @@ task. History lives in git and
 
 ## Current state
 
+- Cloudflare tunnel fixed (26 Nov 2026): the panel never left "Waiting for
+  Cloudflare" and the tunnel had **never** once reached live (audit DB: 3 ×
+  `tunnel.start_failed`, 0 × `tunnel.started`). Two independent causes:
+  1. **UI polled once.** `CloudflareTunnelPanel` scheduled a single 1.5 s fetch
+     after Start and never rescheduled, so the badge froze on whatever that one
+     snapshot said.
+  2. **Liveness depended on public DNS.** `cloudflared` created the URL at ~4 s
+     and registered its edge connection at ~5 s on `quic`, but the health probe
+     called the public `*.trycloudflare.com` hostname. A brand-new name is
+     negatively cached by the ISP resolver (measured: system resolver NXDOMAIN
+     for ~80 s; Cloudflare DoH resolved in ~16 s), so the probe failed the whole
+     `HEALTH_TIMEOUT_SECONDS` window and killed a perfectly good tunnel.
+- Fix: the panel re-arms its poll effect until a terminal state (bounded
+  `MAX_POLLS`, keeps last known status through fetch errors, both buttons usable
+  when stalled). The manager now gates on cloudflared's `Registered tunnel
+  connection` line and probes the **loopback origin**, not the public name;
+  failures append the last cloudflared `ERR` line; log lines bound at 600 chars;
+  `request_start` is a no-op while live. Start/health budgets: 60 s / 20 s.
+- Verified end-to-end against real cloudflared: reaches **live in 6–8 s**, poll
+  loop terminates, host gate returns **200** for the tunnel host. The owner's own
+  browser may still need ~a minute to resolve a brand-new hostname (noted in the
+  panel and README).
+- Caveat to expect: a `cloudflared` child may outlive a `bq serve` started before
+  this fix; restart the server to pick up the backend change.
 - Startup fixed (26 Nov 2026): the local dev DB had been initialised from a
   pre-commit draft of `034_reports.sql` (its `prediction_details.kind` CHECK
   lacked `STANCE`), so `bq init`/`doctor` aborted with "Migration history
@@ -21,16 +45,17 @@ task. History lives in git and
   Today is a read-only command center of linked summary cards. `SchedulesPanel`
   and `OpportunitiesPanel` were previously built but never mounted; both are
   now wired. `PaperAccountStatus.tsx` was removed as redundant. Frontend
-  typecheck, 112 tests and the production build pass.
+  typecheck, 116 tests and the production build pass.
 - Single-owner, paper-only Indian equities system. **No broker order path**; Kite
   is read-only. Paper execution is the only execution path.
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
   execution/realism, memory, confidence, opportunities/shadows, scheduler,
   reports, backtests, research dossiers and runtime hardening.
-- **Verification:** 868 backend tests, 112 frontend tests; ruff/format clean;
+- **Verification:** 872 backend tests, 116 frontend tests; ruff/format clean;
   frontend typecheck/build clean; fresh DB applies **37 migrations**.
-- **mypy:** 25 pre-existing errors in `cli.py`, `paper_performance.py` and
-  `infra/scheduler.py`. Do not “fix” them as part of maintenance.
+- **mypy:** 90 pre-existing errors across `cli.py`, `paper_performance.py`,
+  `infra/scheduler.py` and the tunnel test fakes. Do not “fix” them as part of
+  maintenance; the tunnel change adds none.
 - **Next migration number:** `038` if a new migration is needed.
 
 ## Phase 19 delivered
@@ -81,6 +106,7 @@ maintenance/optional breadth:
 | Area | Files |
 |---|---|
 | Runtime | `bq/runtime.py`, `bq/cli.py`, `web/src/RuntimePanel.tsx` |
+| Tunnel | `bq/infra/tunnel.py`, `web/src/CloudflareTunnelPanel.tsx`, `web/src/tunnelContract.ts` |
 | Operations | `docs/runtime-operations.md`, `justfile` |
 | API/WS | `bq/api.py` system status/metrics/events |
 | Research | `bq/research_expansion.py`, `bq/fundamentals.py` |

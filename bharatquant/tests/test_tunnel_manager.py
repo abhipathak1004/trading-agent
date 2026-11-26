@@ -6,6 +6,7 @@ import pytest
 import bq.infra.tunnel as tunnel_module
 from bq.infra.tunnel import (
     MAX_LOG_CHARS,
+    MAX_LOG_LINE_CHARS,
     MAX_LOG_LINES,
     TunnelError,
     TunnelManager,
@@ -14,6 +15,11 @@ from bq.infra.tunnel import (
 
 URL = "https://brave-unit-4821.trycloudflare.com"
 NO_BINARY = "/nonexistent/cloudflared-not-installed"
+READY = [
+    "2026-11-26T14:24:12Z INF Your quick Tunnel has been created! Visit it at:",
+    f"2026-11-26T14:24:12Z INF |  {URL}  |",
+    "2026-11-26T14:24:13Z INF Registered tunnel connection connIndex=0 protocol=quic",
+]
 
 
 class FakeReader:
@@ -51,9 +57,11 @@ class Spawner:
     def __init__(self, lines: list[str]) -> None:
         self.lines = lines
         self.calls = 0
+        self.argv: list[str] = []
 
     async def __call__(self, argv: object) -> FakeProcess:
-        del argv
+        assert isinstance(argv, (list, tuple))
+        self.argv = [str(item) for item in argv]
         self.calls += 1
         return FakeProcess(self.lines)
 
@@ -92,7 +100,7 @@ def _no_binary(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_happy_path_publishes_a_quick_tunnel(tmp_path: Path) -> None:
-    spawner = Spawner([f"INF |  Your quick Tunnel has been created: {URL}"])
+    spawner = Spawner(READY)
 
     async def check() -> None:
         manager = TunnelManager(
@@ -122,12 +130,12 @@ def test_happy_path_publishes_a_quick_tunnel(tmp_path: Path) -> None:
     asyncio.run(check())
 
 
-def test_unhealthy_url_fails_closed(
+def test_unhealthy_origin_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(tunnel_module, "HEALTH_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(tunnel_module, "HEALTH_POLL_SECONDS", 0.01)
-    spawner = Spawner([f"created {URL}"])
+    spawner = Spawner(READY)
 
     async def check() -> None:
         manager = TunnelManager(
@@ -169,7 +177,7 @@ def test_missing_binary_without_install_fails(tmp_path: Path) -> None:
 
 
 def test_duplicate_start_is_a_no_op(tmp_path: Path) -> None:
-    spawner = Spawner([f"created {URL}"])
+    spawner = Spawner(READY)
 
     async def check() -> None:
         manager = TunnelManager(
@@ -186,8 +194,32 @@ def test_duplicate_start_is_a_no_op(tmp_path: Path) -> None:
     asyncio.run(check())
 
 
-def test_non_trycloudflare_url_is_rejected(tmp_path: Path) -> None:
-    spawner = Spawner(["listening on https://evil.example/path"])
+def test_duplicate_start_after_live_is_a_no_op(tmp_path: Path) -> None:
+    spawner = Spawner(READY)
+
+    async def check() -> None:
+        manager = TunnelManager(
+            tmp_path,
+            spawn=spawner,
+            health_probe=_healthy,
+            installer=_installer_for(tmp_path),
+        )
+        await manager.request_start()
+        await _wait_for(lambda: manager.snapshot().state is TunnelState.LIVE)
+        await manager.request_start()
+        assert spawner.calls == 1
+        assert manager.snapshot().state is TunnelState.LIVE
+
+    asyncio.run(check())
+
+
+def test_non_trycloudflare_url_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tunnel_module, "START_TIMEOUT_SECONDS", 0.05)
+    spawner = Spawner(
+        ["listening on https://evil.example/path", "INF Registered tunnel connection"]
+    )
 
     async def check() -> None:
         manager = TunnelManager(
@@ -206,7 +238,7 @@ def test_non_trycloudflare_url_is_rejected(tmp_path: Path) -> None:
 
 def test_log_tail_is_bounded(tmp_path: Path) -> None:
     lines = [f"noise line {index} " + "x" * 200 for index in range(80)]
-    spawner = Spawner([*lines, f"created {URL}"])
+    spawner = Spawner([*lines, *READY])
 
     async def check() -> None:
         manager = TunnelManager(
@@ -220,6 +252,104 @@ def test_log_tail_is_bounded(tmp_path: Path) -> None:
         log = manager.snapshot().recent_log
         assert len(log) <= MAX_LOG_LINES
         assert sum(len(line) for line in log) <= MAX_LOG_CHARS
+
+    asyncio.run(check())
+
+
+def test_long_banner_line_keeps_more_than_the_error_bound(
+    tmp_path: Path,
+) -> None:
+    banner = "INF " + "Z" * 1000
+    spawner = Spawner([banner, *READY])
+
+    async def check() -> None:
+        manager = TunnelManager(
+            tmp_path,
+            spawn=spawner,
+            health_probe=_healthy,
+            installer=_installer_for(tmp_path),
+        )
+        await manager.request_start()
+        await _wait_for(lambda: manager.snapshot().state is TunnelState.LIVE)
+        stored = [line for line in manager.snapshot().recent_log if "Z" in line]
+        assert stored
+        assert len(stored[0]) == MAX_LOG_LINE_CHARS
+        assert len(stored[0]) > 300
+
+    asyncio.run(check())
+
+
+def test_failure_preserves_the_last_edge_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tunnel_module, "START_TIMEOUT_SECONDS", 0.05)
+    spawner = Spawner(
+        [
+            "INF Requesting new quick Tunnel on trycloudflare.com...",
+            "ERR failed to request quick Tunnel: context deadline exceeded",
+        ]
+    )
+
+    async def check() -> None:
+        manager = TunnelManager(
+            tmp_path,
+            spawn=spawner,
+            health_probe=_healthy,
+            installer=_installer_for(tmp_path),
+        )
+        await manager.request_start()
+        await _wait_for(lambda: manager.snapshot().state is TunnelState.ERROR)
+        error = manager.snapshot().error or ""
+        assert "context deadline exceeded" in error
+        assert "ERR failed to request quick Tunnel" in error
+
+    asyncio.run(check())
+
+
+def test_start_timeout_reports_a_real_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tunnel_module, "START_TIMEOUT_SECONDS", 0.05)
+
+    class StallingReader:
+        async def readline(self) -> bytes:
+            await asyncio.sleep(3600)
+            return b""
+
+    class StallingProcess:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.stderr = StallingReader()
+            self._exited = asyncio.Event()
+
+        def terminate(self) -> None:
+            self.returncode = 0
+            self._exited.set()
+
+        def kill(self) -> None:
+            self.returncode = -9
+            self._exited.set()
+
+        async def wait(self) -> int:
+            await self._exited.wait()
+            assert self.returncode is not None
+            return self.returncode
+
+    async def spawn(argv: object) -> StallingProcess:
+        del argv
+        return StallingProcess()
+
+    async def check() -> None:
+        manager = TunnelManager(
+            tmp_path,
+            spawn=spawn,
+            health_probe=_healthy,
+            installer=_installer_for(tmp_path),
+        )
+        await manager.request_start()
+        await _wait_for(lambda: manager.snapshot().state is TunnelState.ERROR)
+        assert "usable tunnel" in (manager.snapshot().error or "")
+        assert manager.allowed_hosts() == frozenset()
 
     asyncio.run(check())
 

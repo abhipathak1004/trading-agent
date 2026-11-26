@@ -47,7 +47,12 @@ class FakeProcess:
 def _manager(tmp_path: Path) -> TunnelManager:
     async def spawn(argv: object) -> FakeProcess:
         del argv
-        return FakeProcess([f"created {TUNNEL_URL}"])
+        return FakeProcess(
+            [
+                f"INF Your quick Tunnel has been created: {TUNNEL_URL}",
+                "INF Registered tunnel connection connIndex=0 protocol=quic",
+            ]
+        )
 
     async def healthy(url: str) -> bool:
         return True
