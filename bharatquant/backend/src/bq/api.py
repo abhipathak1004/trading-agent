@@ -87,12 +87,15 @@ from bq.llm_service import LLMService
 from bq.memory import (
     EpisodicMemoryStore,
     MissingPlaybook,
+    MissingWorkingMemory,
     OutcomeResolver,
     PlaybookStore,
     ProceduralError,
     ResolutionError,
     SemanticError,
     SemanticMemoryStore,
+    WorkingMemoryError,
+    WorkingMemoryStore,
 )
 from bq.memory.procedural import MAX_CONTENT_CHARS
 from bq.model_router import (
@@ -782,6 +785,7 @@ class PlaybookUpdate(BaseModel):
 
 
 class StrategyRunResponse(BaseModel):
+    run_id: str | None = None
     strategy: str
     timeframe: str
     as_of: str
@@ -826,6 +830,22 @@ class AnalysisRunSummary(BaseModel):
 
 class AnalysisRunList(BaseModel):
     runs: list[AnalysisRunSummary]
+
+
+class WorkingMemoryStatus(BaseModel):
+    run_id: str
+    symbol: str
+    source: str
+    as_of: datetime
+    schema_version: int
+    state: dict[str, object]
+    state_hash: str
+    recorded_at: datetime
+
+
+class WorkingMemoryResponse(BaseModel):
+    run_id: str
+    memories: list[WorkingMemoryStatus]
 
 
 class VendorChainStatus(BaseModel):
@@ -1322,6 +1342,16 @@ def _memory_schedule_status(
         local_time=schedule.local_time.isoformat(timespec="minutes"),
         timezone=schedule.timezone,
     )
+
+
+def _record_working_memory(
+    database_path: Path, run_id: str, result: AnalysisResult, *, source: str
+) -> None:
+    """Persist the typed working state without breaking the analysis response."""
+    try:
+        WorkingMemoryStore(database_path).record(result, run_id=run_id, source=source)
+    except Exception:  # noqa: BLE001 - memory is an audit side effect
+        return
 
 
 def _record_analysis_episode(
@@ -2548,7 +2578,15 @@ def create_app(
                         outcome.result,
                         source="strategy",
                     )
-            return StrategyRunResponse.model_validate(run.to_dict())
+                    _record_working_memory(
+                        database_path,
+                        strategy_run_id,
+                        outcome.result,
+                        source="strategy",
+                    )
+            return StrategyRunResponse.model_validate(
+                {**run.to_dict(), "run_id": strategy_run_id}
+            )
 
         @app.get("/api/v1/memory/calibration")
         def memory_calibration(request: Request) -> MemoryCalibrationResponse:
@@ -3016,6 +3054,9 @@ def create_app(
             _record_analysis_episode(
                 database_path, stored.run_id, result, source="analysis"
             )
+            _record_working_memory(
+                database_path, stored.run_id, result, source="analysis"
+            )
             return AnalysisRunResponse(
                 run_id=stored.run_id,
                 symbol=result.symbol,
@@ -3126,6 +3167,9 @@ def create_app(
                     _record_analysis_episode(
                         database_path, stored.run_id, result, source="analysis"
                     )
+                    _record_working_memory(
+                        database_path, stored.run_id, result, source="analysis"
+                    )
                     # The pipeline's payload has no `run_id` — only the store
                     # mints one. Attach it so the batch item is the same shape
                     # as a single-run response and the UI can link to history.
@@ -3173,6 +3217,35 @@ def create_app(
                     )
                     for run in runs
                 ]
+            )
+
+        @app.get("/api/v1/analysis/runs/{run_id}/working-memory")
+        def analysis_working_memory(
+            request: Request, run_id: str
+        ) -> WorkingMemoryResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                memories = WorkingMemoryStore(database_path).get(run_id)
+            except MissingWorkingMemory as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except WorkingMemoryError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return WorkingMemoryResponse(
+                run_id=run_id,
+                memories=[
+                    WorkingMemoryStatus(
+                        run_id=item.run_id,
+                        symbol=item.symbol,
+                        source=item.source,
+                        as_of=item.as_of,
+                        schema_version=item.schema_version,
+                        state=item.state,
+                        state_hash=item.state_hash,
+                        recorded_at=item.recorded_at,
+                    )
+                    for item in memories
+                ],
             )
 
         @app.get("/api/v1/analysis/runs/{run_id}")

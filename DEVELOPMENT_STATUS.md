@@ -8,11 +8,11 @@ carry the old status narrative forward.
 ## Where the project is
 
 BharatQuant is a single-owner, paper-only Indian equities research system. Phases
-1–10 are implemented and acceptance-tested: config-driven model tiers, optional
+1–11 are implemented and acceptance-tested: config-driven model tiers, optional
 TypeSafe Jev decision layer, Agent Lab prompt/playbook editing, Strategy desk with
 a deterministic Super Agent, specialist agents, final gate,
-episodic/semantic/procedural memory, Brier calibration with a scheduled outcome
-resolver, the evidence verifier with an optional Jev Noul pass, a deterministic
+episodic/semantic/procedural/working memory, Brier calibration with a scheduled
+outcome resolver, the evidence verifier with an optional Jev Noul pass, a deterministic
 paper execution/fill/cancel/exit lifecycle, owner risk-limit presets, owner-driven
 semantic ingestion, a bounded job worker, and average-cost realised P&L on exits.
 
@@ -23,11 +23,11 @@ semantic ingestion, a bounded job worker, and average-cost realised P&L on exits
   SELL LIMIT order, and reports realised P&L against average cost.
 - **Scheduled resolver is opt-in.** No schedule exists on a fresh install. The
   owner enables the daily `memory.resolve` schedule from Memory calibration.
-- **Verification now:** 832 backend tests, 88 frontend tests; ruff + format
-  clean; frontend typecheck + build clean; fresh DB applies **30 migrations**.
+- **Verification now:** 835 backend tests, 90 frontend tests; ruff + format
+  clean; frontend typecheck + build clean; fresh DB applies **31 migrations**.
 - **mypy:** 25 pre-existing errors in `cli.py`, `paper_performance.py` and
   `infra/scheduler.py`. Do not “fix” them as part of feature work.
-- **Next migration number:** `031` (not needed for Phase 10).
+- **Next migration number:** `032`.
 
 ## Code map (read these first)
 
@@ -37,7 +37,7 @@ semantic ingestion, a bounded job worker, and average-cost realised P&L on exits
 | Orchestration | `bq/analysis/pipeline.py`, `bq/analysis/batch.py`, `bq/super_agent.py` |
 | Decision layer | `bq/model_router.py`, `bq/decision/` |
 | Specialists / gates | `bq/analysis/{news_context,regime,fundamental,final_gate,evidence}.py` |
-| Memory | `bq/memory/{episodic,semantic,procedural,resolver}.py` |
+| Memory | `bq/memory/{episodic,semantic,procedural,working,resolver}.py` |
 | Jobs | `bq/infra/{jobs,job_worker,job_handlers,scheduler,dispatch}.py` |
 | Tunnel | `bq/infra/tunnel.py` |
 | Risk / execution | `bq/risk/{policy,sizing,decisions}.py`, `bq/execution/{base,context,paper_executor}.py` |
@@ -63,7 +63,8 @@ semantic ingestion, a bounded job worker, and average-cost realised P&L on exits
 - **Memory excludes** live quotes, OHLCV candles, open positions and margins.
   Reads are point-in-time; episodes are immutable and outcomes are append-only.
   Semantic documents are immutable and owner-supplied; no web fetch or model call
-  creates them.
+  creates them. Working memory stores decision state, never raw quotes, OHLCV,
+  positions or margins.
 - **Security:** owner auth, origin + CSRF on writes, `no-store` on private reads.
   Loopback stays the default; the tunnel host/origin allowlists are empty unless
   a quick tunnel is live, and any rejection fails closed (ADR-037).
@@ -154,34 +155,39 @@ recomputes it on idempotent replay. BUY fills return null. Partial exits keep th
 remaining cost basis; a full exit clears it. The fill API and Trade notice show
 the signed result. No second ledger and no migration.
 
-Verification: **820 backend tests**, **82 frontend tests**, ruff/format clean,
-frontend typecheck + build clean. mypy remains at 25 pre-existing errors in
-untouched files.
+**Phase 11 — working memory.** Migration `031` adds append-only
+`working_memory`, keyed by `(run_id, symbol)` so a Strategy run can hold one row
+per analysed symbol. `bq/memory/working.py` builds a typed `WorkingState` with
+routing, specialists, evidence, debate, final gate, plan and technical summary;
+`state_json` is capped at 64 KiB and hashed. Single, batch and Strategy paths
+persist it after the run ledger; a memory failure is isolated. Owner-only
+`GET /api/v1/analysis/runs/{id}/working-memory` feeds the expandable Technical and
+Strategy views. No raw quotes/OHLCV/positions/margins and no second run ledger.
 
-## Immediate next task — Phase 11: working memory
+Verification: **835 backend tests**, **90 frontend tests**, ruff/format clean,
+frontend typecheck + build clean. Fresh DB applies **31 migrations**. mypy remains
+at 25 pre-existing errors in untouched files.
 
-The only missing original memory layer is working memory. The run ledger keeps a
-64 KiB `detail_json`, but there is no explicit, typed working-state record for a
-run.
+## Immediate next task — Phase 12: confidence engine and setup base rates
 
-1. **Schema** — migration `031_working_memory.sql`: one row per analysis run with
-   run id, symbol, as_of, bounded `state_json`, schema version and recorded time.
-   Immutable or append-only; no OHLCV/quotes/positions/margins.
-2. **Typed state** — a `WorkingState` contract carrying the model-routing
-   snapshot, specialist briefs, evidence counts, debate verdict, Jev/final-gate
-   probabilities, and the proposed plan/price levels. Reuse existing `to_dict`
-   shapes; cap the serialized size.
-3. **Write path** — persist after single, batch and Strategy symbol runs, keyed by
-   the run id. A memory failure must never break an analysis response. Keep
-   `detail_json` as the report; do not duplicate the full prose.
-4. **Read path/UI** — owner-only, no-store `GET /api/v1/analysis/runs/{id}/working-memory`;
-   Technical tab expandable view. Point-in-time display is by run id; no model
-   call.
-5. **Tests** — schema migration, write/read round-trip, size/field bounds, missing
-   run, persistence after all three run paths, and memory failure isolation.
-6. **Boundary** — no live quotes/OHLCV/positions/margins in the state; no second
-   run ledger. If migration `031` is used, tests that hardcode migration counts
-   must use `packaged_migrations()`.
+The confidence primitives exist but nothing produces an evidence card. Build the
+deterministic front half before any report or opportunity work.
+
+1. **Evidence producers** — map structure, volume, momentum, relative strength and
+   market context into `bq.confidence.Evidence` from the existing technical report
+   and specialist briefs. One family counts once; structure and volume are
+   mandatory.
+2. **Base rates** — add a bounded setup-study engine over daily bars and a
+   `setup_base_rates` table (migration `032`) keyed by setup × horizon × regime.
+   No DSL and no LLM. `min_base_rate_samples` remains a hard gate.
+3. **Assessment** — wrap `assess_confidence` with policy config, provisional
+   haircut, EV/R, vetoes and VIX step-down; expose a preview API/UI.
+4. **Review** — optional `confidence.review` through the decision ladder; it may
+   only lower or veto, never raise.
+5. **Tests** — mandatory structure+volume, 4-of-7 confluence, insufficient-history
+   veto, EV floor, provisional/calibrated labels, PIT bars.
+6. **Boundary** — all arithmetic in Python; no order placement and no model-sourced
+   probability without a code-owned calibration path.
 
 ### Deferred, not this slice
 

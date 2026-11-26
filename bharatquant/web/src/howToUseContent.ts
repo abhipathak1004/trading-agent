@@ -193,6 +193,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "Final gate: the Jev-preferred battery reviews the completed plan and can block execution. A blocked gate is shown with its source, model and reason; it never creates a BUY or changes a number.",
           "Evidence: specialist claims are checked against the point-in-time news store before the debate. When a decision model is configured, a Noul pass also rates whether the cited evidence supports each claim; it can only reject, never rescue a missing citation. The panel shows verified versus unverified claims, any missing evidence ids, and the source (citation or model).",
           "A failed symbol is isolated: it is shown as not analysed with its error, and the other symbols still complete.",
+          "Working memory expands the typed decision state stored for that run: routing, specialists, evidence, debate, final gate, plan and notes. It contains no raw quotes, OHLCV, positions or margins.",
         ],
       },
       {
@@ -262,6 +263,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "With no reasoning model the run still completes: a rules ranking by composite and confidence is labelled source rules with a fallback note.",
           "Accepted plans are research output only until you choose Stage in Trade. Staging copies the validated plan into the Trade tab; it still has to pass the separate execution gate there.",
           "Per-symbol agent traces show which nodes ran, their status and a one-line summary, so a degraded debate is visible rather than hidden.",
+          "Show working memory reads the append-only per-symbol decision state for the Strategy run; it is a read-only audit view.",
         ],
       },
       {

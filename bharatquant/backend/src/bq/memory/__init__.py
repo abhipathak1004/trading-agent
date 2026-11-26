@@ -35,6 +35,15 @@ from bq.memory.semantic import (
     SemanticHit,
     SemanticMemoryStore,
 )
+from bq.memory.working import (
+    MAX_STATE_JSON,
+    MissingWorkingMemory,
+    WorkingMemoryConflict,
+    WorkingMemoryError,
+    WorkingMemoryRecord,
+    WorkingMemoryStore,
+    WorkingState,
+)
 
 __all__ = [
     "CalibrationBucket",
@@ -64,4 +73,11 @@ __all__ = [
     "PlaybookSource",
     "PlaybookStore",
     "ProceduralError",
+    "MAX_STATE_JSON",
+    "MissingWorkingMemory",
+    "WorkingMemoryConflict",
+    "WorkingMemoryError",
+    "WorkingMemoryRecord",
+    "WorkingMemoryStore",
+    "WorkingState",
 ]

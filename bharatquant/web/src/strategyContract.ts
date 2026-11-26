@@ -77,6 +77,7 @@ export type RejectedPlan = {
 };
 
 export type StrategyRun = {
+  run_id: string | null;
   strategy: string;
   timeframe: string;
   as_of: string;
@@ -352,6 +353,7 @@ export function parseStrategyRun(value: unknown): StrategyRun {
     throw new Error("Invalid strategy spec");
   }
   return {
+    run_id: typeof value.run_id === "string" ? value.run_id : null,
     strategy: value.strategy,
     timeframe: value.timeframe,
     as_of: value.as_of,

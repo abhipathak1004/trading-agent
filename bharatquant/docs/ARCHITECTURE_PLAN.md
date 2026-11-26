@@ -1,6 +1,6 @@
 # Architecture plan: 3-tier model routing and the multi-agent system
 
-**Version:** 1.18 · **Date:** 2026-11-26 · **Status:** approved; Phases 1–4A implemented
+**Version:** 1.19 · **Date:** 2026-11-26 · **Status:** approved; Phases 1–11 implemented
 **Scope:** audit of the existing BharatQuant analysis stack and the target
 architecture for a config-driven three-tier model router, Jev-preferred decision
 layer, specialist agents, four-layer memory and a deterministic execution seam.
@@ -14,6 +14,7 @@ any external provider capability is verified; see
 
 | Version | Date | Change |
 |---|---|---|
+| 1.19 | 2026-11-26 | Phase 11: append-only per-symbol working memory, typed decision state, run-path persistence and Technical/Strategy views. |
 | 1.18 | 2026-11-26 | Phase 10: average-cost realised P&L on SELL fills, exposed through the fill API and Trade notice; duplicate-safe. |
 | 1.17 | 2026-11-26 | Phase 9: bounded job worker, registered `memory.resolve` handler, owner-enabled daily resolver schedule and job-run visibility. |
 | 1.16 | 2026-11-26 | Phase 8: owner-supplied semantic-memory ingestion API and Agent Lab form, with PIT and URL validation. |
@@ -52,6 +53,7 @@ any external provider capability is verified; see
 | Market data | `bq/data/vendors/*`, `bq/data/symbols.py` | Per-domain chains; Yahoo default; Kite read-only when enabled (ADR-013). |
 | Final gate | `bq/analysis/final_gate.py` | Typed battery after the plan; can block execution, never create a BUY. |
 | Procedural memory | `bq/memory/procedural.py`, migration `030` | Versioned playbooks; guidance only. |
+| Working memory | `bq/memory/working.py`, migration `031` | Append-only per-symbol decision state; no raw bars. |
 | Semantic memory | `bq/memory/semantic.py`, migration `029` | Immutable docs, PIT search, FTS5 or term fallback. |
 | Semantic ingestion | `POST /api/v1/memory/semantic`, `SemanticMemoryPanel.tsx` | Owner-supplied text only; HTTPS, bounds and PIT validation. |
 | Outcome resolver | `bq/memory/resolver.py`, `POST /api/v1/memory/resolve` | Due episodes → daily bars → append-only outcome. |

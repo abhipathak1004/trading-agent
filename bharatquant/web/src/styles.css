@@ -2026,3 +2026,33 @@ a.nav-item:hover,
   border-color: rgb(239 68 68 / 35%);
   background: rgb(239 68 68 / 8%);
 }
+
+/* Working memory ------------------------------------------------------ */
+
+.working-memory {
+  margin-top: 10px;
+}
+
+.working-memory-record {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.working-memory-record > summary {
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.working-memory-json {
+  max-height: 28rem;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 11px;
+  line-height: 1.45;
+}

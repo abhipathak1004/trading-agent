@@ -11,6 +11,7 @@ import type {
   BatchAnalysis,
   BatchAnalysisItem,
 } from "./analysisContract";
+import WorkingMemoryPanel from "./WorkingMemoryPanel";
 
 type ChainsState =
   | { state: "loading" | "error" }
@@ -184,6 +185,7 @@ function SymbolResult({ item }: { item: BatchAnalysisItem }) {
       {expanded && (
         <div className="batch-detail">
           <AgentFlow entries={run.agents} />
+          {run.run_id !== undefined && <WorkingMemoryPanel runId={run.run_id} />}
           <ul className="agent-tools">
             {run.facts.map((fact) => (
               <li key={fact}>{fact}</li>

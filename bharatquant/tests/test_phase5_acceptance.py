@@ -140,6 +140,12 @@ def test_acceptance_analysis_strategy_trade_fill_reconcile(
                 nodes = {agent["node"] for agent in analysis["agents"]}
                 assert {"evidence_verifier", "final_gate"} <= nodes
                 assert analysis["mode"] == "RULES_ONLY"
+                working = await client.get(
+                    f"/api/v1/analysis/runs/{analysis['run_id']}/working-memory"
+                )
+                assert working.status_code == 200
+                assert len(working.json()["memories"]) == 1
+                assert working.json()["memories"][0]["symbol"] == item["symbol"]
 
             runs = await client.get("/api/v1/analysis/runs")
             assert runs.status_code == 200
@@ -162,6 +168,12 @@ def test_acceptance_analysis_strategy_trade_fill_reconcile(
             strategy_body = strategy.json()
             assert strategy_body["decision"]["source"] == "rules"
             assert strategy_body["accepted"], "acceptance run produced no paper plan"
+            assert strategy_body["run_id"].startswith("strategy:")
+            strategy_memory = await client.get(
+                f"/api/v1/analysis/runs/{strategy_body['run_id']}/working-memory"
+            )
+            assert strategy_memory.status_code == 200
+            assert len(strategy_memory.json()["memories"]) == 3
             assert len(strategy_body["accepted"]) <= 2
 
             account = await client.post(

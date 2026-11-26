@@ -5,6 +5,7 @@ import { parsePlaybookList } from "./playbookContract";
 import type { Playbook } from "./playbookContract";
 import { parseStrategyRun } from "./strategyContract";
 import type { StrategyPlan, StrategyRun, StrategySymbol } from "./strategyContract";
+import WorkingMemoryPanel from "./WorkingMemoryPanel";
 
 type RunState =
   | { state: "idle" | "running" }
@@ -282,6 +283,7 @@ function StrategyResult({
           : ""}
       </p>
       <p className="panel-note">{decision.strategy_summary}</p>
+      {run.run_id !== null && <WorkingMemoryPanel runId={run.run_id} />}
 
       <h3>Ranked actions</h3>
       <table className="judgment-table">

@@ -1118,3 +1118,34 @@ origin checks. Stopping the tunnel kills the link immediately. Auto-download is 
 supply-chain surface accepted for convenience; the binary comes only from
 Cloudflare's GitHub release and is version-checked. This does not weaken ADR-001
 or ADR-013: it exposes the same paper-only app, it does not add a broker path.
+
+## ADR-038: Working memory is append-only decision state, not a second ledger
+
+**Status:** Accepted; Phase 11 implements it.
+
+**Context:** The run ledger stores a 64 KiB `detail_json`, but there was no
+explicit, typed record of the state the coordinator actually had while deciding.
+Confidence reviews and reports need a reproducible state that can be read without
+re-running the pipeline.
+
+**Decision:** Add one append-only working-memory row per `(run_id, symbol)`.
+
+- Migration `031` stores run id, symbol, source, as_of, schema version, a bounded
+  `state_json`, its canonical hash and the recorded time. Update and delete are
+  blocked by triggers.
+- `WorkingState` carries the data provenance, technical summary, model-routing
+  snapshot, specialist briefs, evidence result, debate/verdict/risk, final-gate
+  outcome, proposed plan, vetoes and bounded notes.
+- The key includes the symbol because a Strategy run contains several symbols
+  under one strategy run id. Single and batch runs normally have one symbol.
+- Single, batch and Strategy paths persist after the run ledger. A memory failure
+  is isolated and never breaks the analysis response.
+- The state excludes raw quotes, OHLCV candles, open positions and margins.
+- The owner-only, no-store read route is
+  `GET /api/v1/analysis/runs/{id}/working-memory`; Technical and Strategy show it
+  in an expandable panel. No model call is made to read it.
+
+**Consequences:** The last original memory layer is present and reviewable. It is
+an audit/read model, not an accounting or trading ledger; `analysis_runs` remains
+the run summary and the paper ledger remains the cash authority. The 64 KiB cap
+can drop an oversized optional state, but never corrupts a run.
