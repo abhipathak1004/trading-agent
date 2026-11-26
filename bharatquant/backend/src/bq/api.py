@@ -53,6 +53,7 @@ from bq.infra.schedules import ScheduleStore
 from bq.infra.task_registry import TaskRegistry
 from bq.llm_client import LLMClientError, LLMNotConfigured
 from bq.llm_service import LLMService
+from bq.model_router import ModelRouter, RoutedModelCaller
 from bq.news import PULSE_SOURCE_ID, MemoryKind, NewsError, NewsStore
 from bq.news_agent import NewsResearchAgent
 from bq.paper_accounts import (
@@ -69,12 +70,25 @@ from bq.schedules import (
     next_interval_occurrences,
 )
 from bq.settings import (
+    MAX_AGENT_ROUTING_ENTRIES,
     MAX_API_KEY_CHARS,
+    MAX_ATTEMPTS,
+    MAX_MODEL_NAME_CHARS,
     MAX_SETTING_CHARS,
+    MAX_TIMEOUT_MS,
+    MAX_TOKENS_LIMIT,
+    MIN_TIMEOUT_MS,
+    AgentRoute,
     AppConfig,
+    DecisionFallback,
+    DecisionPolicyConfig,
+    DecisionRoute,
+    PipelineConfig,
     Provider,
     SettingsError,
     SettingsStore,
+    TierConfig,
+    TierName,
 )
 from bq.tools.base import ToolBlocked, ToolError, ToolSpec
 
@@ -459,6 +473,40 @@ class ApiKeyStatus(BaseModel):
     masked: str | None
 
 
+class TierConfigStatus(BaseModel):
+    provider: Provider | None
+    model: str
+    temperature: float
+    max_tokens: int
+    timeout_ms: int
+    max_attempts: int
+    fallback_tier: TierName | None
+    configured: bool
+
+
+class AgentRouteStatus(BaseModel):
+    tier: TierName
+    provider: Provider | None
+    model: str | None
+
+
+class DecisionPolicyStatus(BaseModel):
+    min_choice_confidence: float
+    min_noul_probability: float
+    abstain_score_band: list[int]
+    llm_fallback_size_scale: float
+    heuristic_size_scale: float
+
+
+class PipelineStatus(BaseModel):
+    debate_rounds: int
+    max_tool_rounds_per_agent: int
+    screener_min_score: float
+    final_decision_min_prob: float
+    execution_mode: str
+    decision_fallback_order: list[str]
+
+
 class AppConfigStatus(BaseModel):
     provider: Provider
     model_name: str
@@ -467,6 +515,64 @@ class AppConfigStatus(BaseModel):
     api_keys: list[ApiKeyStatus]
     model_route_configured: bool
     updated_at: datetime | None
+    tiers: dict[str, TierConfigStatus]
+    agent_routing: dict[str, AgentRouteStatus]
+    decision_policy: DecisionPolicyStatus
+    pipeline: PipelineStatus
+    decision_route: DecisionRoute
+    configured_tiers: list[str]
+    decision_preview: str
+
+
+class TierConfigUpdate(BaseModel):
+    provider: Provider | None = None
+    model: str = Field(default="", max_length=MAX_MODEL_NAME_CHARS, strict=True)
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=4096, ge=1, le=MAX_TOKENS_LIMIT, strict=True)
+    timeout_ms: int = Field(
+        default=60000, ge=MIN_TIMEOUT_MS, le=MAX_TIMEOUT_MS, strict=True
+    )
+    max_attempts: int = Field(default=3, ge=1, le=MAX_ATTEMPTS, strict=True)
+    fallback_tier: TierName | None = None
+
+
+class AgentRouteUpdate(BaseModel):
+    tier: TierName
+    provider: Provider | None = None
+    model: str | None = Field(default=None, max_length=MAX_MODEL_NAME_CHARS)
+
+
+class DecisionPolicyUpdate(BaseModel):
+    min_choice_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+    min_noul_probability: float = Field(default=0.60, ge=0.0, le=1.0)
+    abstain_score_band: tuple[int, int] = (2, 3)
+    llm_fallback_size_scale: float = Field(default=0.75, ge=0.0, le=1.0)
+    heuristic_size_scale: float = Field(default=0.50, ge=0.0, le=1.0)
+
+
+class PipelineUpdate(BaseModel):
+    debate_rounds: int = Field(default=1, ge=1, le=3, strict=True)
+    max_tool_rounds_per_agent: int = Field(default=8, ge=1, le=20, strict=True)
+    screener_min_score: float = Field(default=0.60, ge=0.0, le=1.0)
+    final_decision_min_prob: float = Field(default=0.65, ge=0.0, le=1.0)
+    execution_mode: str = Field(default="PAPER", max_length=16, strict=True)
+    decision_fallback_order: list[DecisionFallback] = Field(
+        default_factory=lambda: [
+            DecisionFallback.FLASH,
+            DecisionFallback.REASONING,
+            DecisionFallback.HEURISTIC,
+        ]
+    )
+
+
+class ModelsUpdate(BaseModel):
+    tiers: dict[str, TierConfigUpdate]
+    agent_routing: dict[str, AgentRouteUpdate] = Field(
+        default_factory=dict, max_length=MAX_AGENT_ROUTING_ENTRIES
+    )
+    decision_policy: DecisionPolicyUpdate = DecisionPolicyUpdate()
+    pipeline: PipelineUpdate = PipelineUpdate()
+    decision_route: DecisionRoute = DecisionRoute.AUTO
 
 
 class AppConfigUpdate(BaseModel):
@@ -558,11 +664,52 @@ def _app_config_status(config: AppConfig) -> AppConfigStatus:
         ],
         model_route_configured=config.model_route_configured,
         updated_at=config.updated_at,
+        tiers={
+            name.value: TierConfigStatus(
+                provider=tier.provider,
+                model=tier.model,
+                temperature=tier.temperature,
+                max_tokens=tier.max_tokens,
+                timeout_ms=tier.timeout_ms,
+                max_attempts=tier.max_attempts,
+                fallback_tier=tier.fallback_tier,
+                configured=config.tier_configured(name),
+            )
+            for name, tier in config.tiers
+        },
+        agent_routing={
+            agent_id: AgentRouteStatus(
+                tier=route.tier,
+                provider=route.provider,
+                model=route.model,
+            )
+            for agent_id, route in config.agent_routing
+        },
+        decision_policy=DecisionPolicyStatus(
+            min_choice_confidence=config.decision_policy.min_choice_confidence,
+            min_noul_probability=config.decision_policy.min_noul_probability,
+            abstain_score_band=list(config.decision_policy.abstain_score_band),
+            llm_fallback_size_scale=config.decision_policy.llm_fallback_size_scale,
+            heuristic_size_scale=config.decision_policy.heuristic_size_scale,
+        ),
+        pipeline=PipelineStatus(
+            debate_rounds=config.pipeline.debate_rounds,
+            max_tool_rounds_per_agent=config.pipeline.max_tool_rounds_per_agent,
+            screener_min_score=config.pipeline.screener_min_score,
+            final_decision_min_prob=config.pipeline.final_decision_min_prob,
+            execution_mode=config.pipeline.execution_mode,
+            decision_fallback_order=[
+                item.value for item in config.pipeline.decision_fallback_order
+            ],
+        ),
+        decision_route=config.decision_route,
+        configured_tiers=[name.value for name in config.configured_tiers],
+        decision_preview=config.decision_preview,
     )
 
 
 def _analysis_pipeline(
-    database_path: Path, config: object, settings_store: object
+    database_path: Path, config: AppConfig, settings_store: SettingsStore
 ) -> AnalysisPipeline:
     """Build a ready-to-run pipeline for this configuration.
 
@@ -570,11 +717,16 @@ def _analysis_pipeline(
     wire the debate, or in whether they attach a model at all.
     """
     router = build_analysis_router(database_path, config)
-    service = (
-        LLMService(settings_store)  # type: ignore[arg-type]
-        if getattr(config, "model_route_configured", False)
-        else None
-    )
+    if config.any_tier_configured:
+        model_router = ModelRouter(settings_store)
+        caller = RoutedModelCaller(model_router)
+        return AnalysisPipeline(
+            router,
+            debate=Debate(caller),
+            risk_analyst=RiskAnalyst(caller),
+            routing=caller,
+        )
+    service = LLMService(settings_store) if config.model_route_configured else None
     return AnalysisPipeline(
         router,
         debate=Debate(service) if service is not None else None,
@@ -991,6 +1143,68 @@ def create_app(
                     news_memory_ttl_days=body.news_memory_ttl_days,
                 )
             except SettingsError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return _app_config_status(config)
+
+        @app.put("/api/v1/settings/models")
+        def update_settings_models(
+            request: Request, body: ModelsUpdate
+        ) -> AppConfigStatus:
+            csrf = auth.csrf_for_session(request.cookies.get(COOKIE_NAME))
+            if csrf is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            verify_origin(request)
+            if not compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                csrf.encode("ascii"),
+            ):
+                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            try:
+                tiers = {
+                    TierName(name): TierConfig(
+                        provider=item.provider,
+                        model=item.model,
+                        temperature=item.temperature,
+                        max_tokens=item.max_tokens,
+                        timeout_ms=item.timeout_ms,
+                        max_attempts=item.max_attempts,
+                        fallback_tier=item.fallback_tier,
+                    )
+                    for name, item in body.tiers.items()
+                }
+                routing = {
+                    agent_id: AgentRoute(
+                        tier=item.tier,
+                        provider=item.provider,
+                        model=item.model,
+                    )
+                    for agent_id, item in body.agent_routing.items()
+                }
+                policy = DecisionPolicyConfig(
+                    min_choice_confidence=body.decision_policy.min_choice_confidence,
+                    min_noul_probability=body.decision_policy.min_noul_probability,
+                    abstain_score_band=body.decision_policy.abstain_score_band,
+                    llm_fallback_size_scale=body.decision_policy.llm_fallback_size_scale,
+                    heuristic_size_scale=body.decision_policy.heuristic_size_scale,
+                )
+                pipeline = PipelineConfig(
+                    debate_rounds=body.pipeline.debate_rounds,
+                    max_tool_rounds_per_agent=body.pipeline.max_tool_rounds_per_agent,
+                    screener_min_score=body.pipeline.screener_min_score,
+                    final_decision_min_prob=body.pipeline.final_decision_min_prob,
+                    execution_mode=body.pipeline.execution_mode,
+                    decision_fallback_order=tuple(
+                        body.pipeline.decision_fallback_order
+                    ),
+                )
+                config = settings.save_models(
+                    tiers=tiers,
+                    agent_routing=routing,
+                    pipeline=pipeline,
+                    decision_route=body.decision_route,
+                    decision_policy=policy,
+                )
+            except (SettingsError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             return _app_config_status(config)
 

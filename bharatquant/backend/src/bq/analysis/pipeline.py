@@ -53,6 +53,7 @@ from bq.core import Clock, SystemClock
 from bq.data.symbols import Symbol
 from bq.data.vendors.base import Bar, BarInterval
 from bq.data.vendors.router import VendorResult, VendorRouter
+from bq.model_router import RoutedModelCaller, RouteUse
 
 DEBATE_ROUNDS = {"intraday": 1, "swing": 2}
 MIN_BARS_SWING = 60
@@ -184,6 +185,7 @@ class AnalysisResult:
     output_tokens: int | None
     skipped_nodes: tuple[str, ...]
     trace: tuple[AgentTrace, ...] = ()
+    model_routing: tuple[RouteUse, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -214,6 +216,7 @@ class AnalysisResult:
             },
             "skipped_nodes": list(self.skipped_nodes),
             "agents": [entry.to_dict() for entry in self.trace],
+            "model_routing": [use.to_dict() for use in self.model_routing],
         }
 
 
@@ -288,12 +291,14 @@ class AnalysisPipeline:
         risk_analyst: RiskAnalyst | None = None,
         analyst: TechnicalAnalyst | None = None,
         clock: Clock | None = None,
+        routing: RoutedModelCaller | None = None,
     ) -> None:
         self.router = router
         self.debate = debate
         self.risk_analyst = risk_analyst
         self.analyst = analyst or TechnicalAnalyst()
         self.clock = clock or SystemClock()
+        self.routing = routing
 
     # -- nodes ------------------------------------------------------------
 
@@ -630,6 +635,7 @@ class AnalysisPipeline:
             trace=tuple(
                 sorted(ctx.trace, key=lambda entry: AGENT_ORDER.index(entry.node))
             ),
+            model_routing=(() if self.routing is None else self.routing.routes_used),
         )
 
 

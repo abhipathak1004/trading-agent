@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
 import {
+  ALL_PROVIDERS,
   MAX_MEMORY_TTL_DAYS,
   MAX_MODEL_NAME_CHARS,
   MIN_MEMORY_TTL_DAYS,
   PROVIDERS,
   parseConfig,
 } from "./settingsContract";
-import type { AppConfig, Provider } from "./settingsContract";
+import type { AppConfig, KeyProvider, Provider } from "./settingsContract";
 
 type LoadState =
   | { state: "loading" }
@@ -32,7 +33,7 @@ export default function SettingsConfigPanel({
   const [feedUrl, setFeedUrl] = useState("");
   const [ttlDays, setTtlDays] = useState("365");
   const [save, setSave] = useState<SaveState>({ state: "idle" });
-  const [keyProvider, setKeyProvider] = useState<Provider>("GEMINI");
+  const [keyProvider, setKeyProvider] = useState<KeyProvider>("GEMINI");
   const [apiKey, setApiKey] = useState("");
   const [keySave, setKeySave] = useState<SaveState>({ state: "idle" });
 
@@ -149,7 +150,7 @@ export default function SettingsConfigPanel({
     }
   }
 
-  async function clearKey(target: Provider) {
+  async function clearKey(target: KeyProvider) {
     setKeySave({ state: "saving" });
     try {
       const response = await fetch(`/api/v1/settings/api-keys/${target}`, {
@@ -294,7 +295,7 @@ export default function SettingsConfigPanel({
                 <div>
                   {key.configured ? `Configured · ${key.masked}` : "Not configured"}
                 </div>
-                {key.provider === config.provider && key.configured && (
+                {key.configured && (
                   <button
                     type="button"
                     className="text-button"
@@ -314,10 +315,10 @@ export default function SettingsConfigPanel({
           <select
             id="key-provider"
             value={keyProvider}
-            onChange={(event) => setKeyProvider(event.target.value as Provider)}
+            onChange={(event) => setKeyProvider(event.target.value as KeyProvider)}
             disabled={keySave.state === "saving"}
           >
-            {PROVIDERS.map((item) => (
+            {ALL_PROVIDERS.map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>

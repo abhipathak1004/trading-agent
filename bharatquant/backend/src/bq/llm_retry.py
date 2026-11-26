@@ -16,8 +16,8 @@ from collections.abc import Callable, Mapping
 
 import httpx
 
-# Status codes worth retrying. 408 timeout, 429 rate limit, 5xx upstream.
-TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+# Status codes worth retrying. 408 timeout, 429 rate limit, 529 overloaded, 5xx upstream.
+TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 529})
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BASE_DELAY_SECONDS = 1.5
 MAX_DELAY_SECONDS = 30.0

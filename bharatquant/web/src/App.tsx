@@ -13,6 +13,7 @@ import AnalysisPanel from "./AnalysisPanel";
 import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
 import SettingsOverviewPanel from "./SettingsOverviewPanel";
 import SettingsConfigPanel from "./SettingsConfigPanel";
+import ModelsConfigPanel from "./ModelsConfigPanel";
 
 type WorkspaceView = "today" | "technical" | "research" | "settings";
 
@@ -593,6 +594,7 @@ export default function App() {
             </section>
 
             <SettingsConfigPanel csrfToken={session.csrfToken} />
+            <ModelsConfigPanel csrfToken={session.csrfToken} />
             <SettingsOverviewPanel />
 
             <div className="dashboard-grid dashboard-grid--settings" id="settings-schedules">

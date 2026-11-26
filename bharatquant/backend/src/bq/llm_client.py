@@ -265,6 +265,10 @@ def client_for(
         return OpenAICompatClient(transport=transport)
     if provider is Provider.OPENAI:
         return OpenAICompatClient(OPENAI_ENDPOINT, transport=transport)
+    if provider is Provider.TYPESAFE_JEV:
+        raise LLMNotConfigured(
+            "TypeSafe Jev is a decision provider; use the decision router."
+        )
     # CUSTOM defaults to an OpenAI-compatible wire format.
     return OpenAICompatClient(transport=transport)
 

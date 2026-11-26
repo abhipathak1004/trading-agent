@@ -49,6 +49,7 @@ from bq.execution.paper_executor import ExecutionContext, PaperExecutor
 from bq.infra.database import DatabaseError, check_database, migrate
 from bq.infra.model_attempts import ModelAttemptStore
 from bq.llm_service import LLMService
+from bq.model_router import ModelRouter, RoutedModelCaller
 from bq.news import NewsError
 from bq.news_agent import NewsResearchAgent
 from bq.risk.policy import KillSwitchLevel, RiskLimits
@@ -603,6 +604,64 @@ def main(argv: list[str] | None = None) -> int:
                                 }
                                 for key in config.api_keys
                             ],
+                            "tiers": {
+                                name.value: {
+                                    "provider": (
+                                        None
+                                        if tier.provider is None
+                                        else tier.provider.value
+                                    ),
+                                    "model": tier.model,
+                                    "temperature": tier.temperature,
+                                    "max_tokens": tier.max_tokens,
+                                    "timeout_ms": tier.timeout_ms,
+                                    "max_attempts": tier.max_attempts,
+                                    "fallback_tier": (
+                                        None
+                                        if tier.fallback_tier is None
+                                        else tier.fallback_tier.value
+                                    ),
+                                    "configured": config.tier_configured(name),
+                                }
+                                for name, tier in config.tiers
+                            },
+                            "agent_routing": {
+                                agent_id: {
+                                    "tier": route.tier.value,
+                                    "provider": (
+                                        None
+                                        if route.provider is None
+                                        else route.provider.value
+                                    ),
+                                    "model": route.model,
+                                }
+                                for agent_id, route in config.agent_routing
+                            },
+                            "decision_policy": {
+                                "min_choice_confidence": config.decision_policy.min_choice_confidence,
+                                "min_noul_probability": config.decision_policy.min_noul_probability,
+                                "abstain_score_band": list(
+                                    config.decision_policy.abstain_score_band
+                                ),
+                                "llm_fallback_size_scale": config.decision_policy.llm_fallback_size_scale,
+                                "heuristic_size_scale": config.decision_policy.heuristic_size_scale,
+                            },
+                            "pipeline": {
+                                "debate_rounds": config.pipeline.debate_rounds,
+                                "max_tool_rounds_per_agent": config.pipeline.max_tool_rounds_per_agent,
+                                "screener_min_score": config.pipeline.screener_min_score,
+                                "final_decision_min_prob": config.pipeline.final_decision_min_prob,
+                                "execution_mode": config.pipeline.execution_mode,
+                                "decision_fallback_order": [
+                                    item.value
+                                    for item in config.pipeline.decision_fallback_order
+                                ],
+                            },
+                            "decision_route": config.decision_route.value,
+                            "configured_tiers": [
+                                name.value for name in config.configured_tiers
+                            ],
+                            "decision_preview": config.decision_preview,
                         },
                         sort_keys=True,
                     )
@@ -639,18 +698,30 @@ def main(argv: list[str] | None = None) -> int:
                 result = agent.runner().run(args.name, tool_args)
                 print(json.dumps(result, sort_keys=True, default=str))
             elif args.action == "analyze":
-                config = SettingsStore(path).load()
+                settings_store = SettingsStore(path)
+                config = settings_store.load()
                 router = build_analysis_router(path, config)
-                service = (
-                    LLMService(SettingsStore(path))
-                    if config.model_route_configured
-                    else None
-                )
-                pipeline = AnalysisPipeline(
-                    router,
-                    debate=Debate(service) if service is not None else None,
-                    risk_analyst=RiskAnalyst(service) if service is not None else None,
-                )
+                if config.any_tier_configured:
+                    caller = RoutedModelCaller(ModelRouter(settings_store))
+                    pipeline = AnalysisPipeline(
+                        router,
+                        debate=Debate(caller),
+                        risk_analyst=RiskAnalyst(caller),
+                        routing=caller,
+                    )
+                else:
+                    service = (
+                        LLMService(settings_store)
+                        if config.model_route_configured
+                        else None
+                    )
+                    pipeline = AnalysisPipeline(
+                        router,
+                        debate=Debate(service) if service is not None else None,
+                        risk_analyst=RiskAnalyst(service)
+                        if service is not None
+                        else None,
+                    )
                 analysis = pipeline.run(
                     symbol=resolve_symbol(args.symbol),
                     timeframe=args.timeframe,

@@ -379,3 +379,125 @@ case applied. This mapping is **specifically for paper** and must not be copied
 into a live path: for a live order, delayed data has to be a hard block. Because
 ADR-001 forbids live execution entirely, that is a future decision, not a flag to
 flip — and this ADR exists so the difference is visible rather than implicit.
+
+## ADR-016: Config-driven three-tier model routing
+
+**Status:** Accepted; Phase 2 implements the router.
+
+**Context:** Every agent needs a model choice, but the application had exactly
+one global provider and model name in `app_settings`. The commissioning request
+asked for three tiers — a calibrated decision model, a strong reasoning model and
+a fast worker — switchable from configuration with no code edits. It also asked
+for a YAML settings file and `pydantic-settings`. ADR-012 had already recorded a
+deliberate decision not to port Agent Zero's provider YAML registry or model
+preset system, and `tests/test_runtime_dependencies.py` fails the build if a
+CLI-reachable module imports an undeclared package.
+
+**Decision:** Configuration remains in SQLite `app_settings`, edited through the
+owner-only Settings UI and API. No YAML loader and no `pydantic-settings`.
+
+- The three tiers are `decision`, `reasoning`, `flash`, represented by a new
+  `TierName` enum. **`ModelTier` (`LOCAL`/`FREE`/`PAID`) is not extended** — it
+  belongs to the eligibility gate and to canonical `task_definitions` JSON, and
+  new members would invalidate stored definitions.
+- Per-agent assignment lives in one canonical JSON setting, `agent_routing`.
+  Any unknown agent id resolves to `reasoning` and is logged.
+- Tier models are configured under `tier.<name>.*` keys. When those keys are
+  absent, reasoning and flash derive from the legacy `provider`/`model_name`
+  pair, so an existing install behaves exactly as before.
+- A tier is configured only when it has a model and a matching provider key.
+  `model_route_configured` keeps its legacy meaning for `/api/v1/llm/complete`.
+- `ModelRouter` still runs the existing `select_model` gate for every call; the
+  configuration satisfies the gate rather than bypassing it.
+
+**Consequences:** Swapping a model is a settings change. The cost is one more
+settings surface and a migration to admit `TYPESAFE_JEV` to
+`provider_api_keys`; the settings table itself needs no schema change. The YAML
+question is closed for this project unless a later requirement justifies a
+second configuration source.
+
+## ADR-017: Jev is a preferred decision provider, never a dependency
+
+**Status:** Accepted; Phase 2 implements the client and ladder.
+
+**Context:** TypeSafe Jev is a System One model that answers typed Choice,
+Score and Noul questions with calibrated values faster and cheaper than a text
+model. The commissioning request named it the default decision tier. But an
+external endpoint can be absent, unconfigured, rate-limited, changed or subject
+to terms that have not been reviewed. Making the analysis pipeline depend on it
+would turn an optional accelerator into a single point of failure.
+
+**Decision:** Decision questions use Jev when it is configured and reachable,
+and otherwise run on the configured Flash tier, then Reasoning, as JSON that is
+validated against a schema generated from the same question set. If no model
+tier is configured, the decision node records `rules_only` and the deterministic
+pipeline continues.
+
+- `declared` routes `openrouter_jev` and `requesty_jev` are recognised but
+  rejected at save time until their endpoints and terms are verified.
+- Every answer carries `decision_source` (`jev_native`, `llm_fallback`,
+  `rules_only`) and `fallback_used`/`fallback_from` in the run ledger.
+- Jev receives only pre-computed facts; it never performs arithmetic.
+  Dependent questions are separate coordinator steps because one Jev request
+  evaluates its questions in parallel and in isolation.
+- Brier calibration is bucketed by `decision_source`, so fallback performance is
+  measured separately and never mistaken for Jev's calibration.
+- The Jev API key follows the existing masked-secret rules. The endpoint and
+  request/response shapes are recorded in `external-source-gates.md`; terms and
+  privacy review remain open, so live traffic stays owner-key opt-in.
+
+**Consequences:** A missing or broken Jev key degrades quality, not availability.
+The fallback answers are less calibrated than native Jev by design, which is why
+they are labelled and scored separately. ADR-001 and ADR-013 are untouched: this
+ADR concerns model routing only, not broker execution.
+
+## ADR-018: Jev judgments are a battery; policy, risk and calibration stay in code
+
+**Status:** Accepted; Phase 2 implements the state, battery and client, Phase 3
+the calibration store.
+
+**Context:** Studying a production Jev trading system
+(`buberlo/jev-trader`, MIT, surveyed 2026-11-26) made the correct boundary
+explicit. That system does not ask a model to run the strategy. A deterministic
+feature engine builds a dense numerical state (under 400 tokens), one Jev call
+answers six atomic judgments (two Choice, two Noul, two Score), a code policy
+maps those judgments to an action, a hard risk engine can veto, and every
+`(state, decision, outcome)` triple is logged for calibration. The model supplies
+judgments; code supplies thresholds, execution and risk.
+
+**Decision:** BharatQuant adopts the same separation, with original code:
+
+- `bq/decision/state.py` builds a `DecisionState` from already-computed facts.
+  Floats are rounded, `None` values are dropped, prose is never included, and
+  the serialized state is bounded (16 KiB / ~2,000 tokens).
+- `bq/decision/battery.py` defines atomic question sets per node (screener,
+  news triage, evidence, final gate). One request carries only independent
+  questions; dependent judgments are separate coordinator steps.
+- `bq/decision/client.py` pins the model version, records the returned model,
+  request id and latency, warns on a version mismatch, and sets the HTTP timeout
+  to 80 % of the decision budget. It does not retry past the deadline.
+- `bq/decision/fallback.py` provides a deterministic `HeuristicJudge` with fixed
+  0.5 confidence for the case where no model answers. It is reproducible from
+  the state alone; it never claims calibration.
+- `bq/decision/policy.py` owns every threshold and size multiplier. No prompt or
+  model output may set a threshold.
+- `bq/decision/calibration.py` records decision triples and computes
+  Brier/log-loss/ECE/reliability/Platt **per `decision_source` and per returned
+  model version**, so a fallback or a silent model upgrade cannot be mistaken
+  for native-Jev calibration.
+- The existing hard risk gate stays the last word. Phase 4 maps decision
+  provenance to a deterministic size scale (`jev_native` 1.0,
+  `llm_fallback` 0.75, `heuristic` 0.5, `rules_only` no new entry) and adds a
+  latency breach hold.
+
+We deliberately do **not** reuse: the async SDK (we keep injectable `httpx` and
+no new runtime dependency), Avellaneda–Stoikov pricing, the crypto venue loop,
+`pydantic-settings`, or fractional Kelly. No source is copied; only the
+architecture is reused, consistent with ADR-008 and ADR-011.
+
+**Consequences:** Jev is fast and cheap because it only answers typed questions,
+and a missing key degrades through Flash/Reasoning to the heuristic without
+losing the run. The cost is more modules and a calibration store, but each has a
+single responsibility and can be tested without a network or a model. Thresholds
+are reviewable in code/config rather than buried in prompts, and fallback quality
+is measured instead of assumed.

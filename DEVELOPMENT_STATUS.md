@@ -4,8 +4,23 @@ Start here when resuming work. This file lives in the workspace and does not dep
 
 ## Current handoff
 
-Updated 25 November 2026. The roadmap is **not complete**: the application is
+Updated 26 November 2026. The roadmap is **not complete**: the application is
 an authenticated offline foundation, not an operational paper-trading system.
+
+**Latest slice — Phase 1+2: config-driven three-tier routing and the Jev decision battery.**
+Analysis runs can now route each agent to a decision, reasoning or flash tier from Settings, with no code edit. The decision tier prefers TypeSafe Jev and degrades through the configured LLM tiers to a deterministic heuristic and, finally, `RULES_ONLY`.
+
+- **Reference studied:** `buberlo/jev-trader` (MIT, surveyed 2026-11-26) — deterministic dense state → one atomic Choice/Noul/Score battery → code-owned policy → hard risk vetoes → calibration triples. Architecture reused, original code only (ADR-018).
+- `bq/decision/` — `types.py`, `state.py`, `battery.py`, `client.py`, `fallback.py`, `policy.py`, `calibration.py`. State is dense, rounded, `None`-free and bounded (16 KiB / ~2k tokens); batteries are atomic and independent; Jev pins the model, records the returned version, request id and latency, flags `model_mismatch`, and never retries past its deadline; `HeuristicJudge` is deterministic with fixed 0.5 confidence.
+- `bq/model_router.py` — per-agent tier resolution, `RoutedModelCaller` for the existing `Debate`/`RiskAnalyst`, and the ladder Jev → Flash → Reasoning → heuristic → `RULES_ONLY`. `RouteUse` records the exact source/model/latency/state hash in `analysis_runs.detail_json`; trace summaries show fallbacks.
+- Settings: new tier keys (`tier.*`), `agent_routing`, `decision_route`, `decision_policy.*`, `pipeline.*`; defaults keep the legacy `provider`/`model_name` path working. Migration `026_tier_providers.sql` admits `TYPESAFE_JEV` to `provider_api_keys` (table rebuilt; keys preserved). New `PUT /api/v1/settings/models`; `bq settings show` prints tiers, routing, policy and the decision preview.
+- UI: **Settings → Model tiers, decision policy & routing** — three tier cards, fallback order, thresholds, agent→tier table, and a live "Decision will run on: Jev / Flash / Reasoning / Heuristic / Rules-only" line. `parseModelsConfig` bounds every field.
+- Jev is optional by construction: no key, a 4xx/5xx/timeout, or an invalid/oversized answer falls through to the configured tiers; with no keys the run completes deterministically. `decision_source` and the returned model will bucket Brier/ECE calibration in Phase 3.
+- Docs: `docs/ARCHITECTURE_PLAN.md`, ADR-016/017/018, TypeSafe review in `docs/external-source-gates.md` (endpoint/primitives/errors checked; terms/privacy pending).
+
+Verification: **728 backend tests** pass (51 new: 48 decision-layer + 3 settings API), **46 frontend tests** pass (5 new), ruff and format clean, frontend typecheck + build clean, `bq init`/`bq doctor` OK on a fresh temp database (26 migrations). mypy reports the same 25 pre-existing errors in untouched `cli.py`, `paper_performance.py` and `infra/scheduler.py`; the new modules are clean.
+
+Next: Phase 3 — wire the news agent into `_news_context`, add the Fundamental/Events and Market Regime specialists, the four-layer memory (`episodic_memory`, FTS5 + fallback), shadow trades and source/model-bucketed Brier, then evolve `judge` into the Super Agent and add the Jev final gate.
 
 **Latest slice — Technical Analysis tab: multi-symbol, multi-agent, from the UI.**
 A new **Technical** tab submits one or more stocks and shows every agent's
