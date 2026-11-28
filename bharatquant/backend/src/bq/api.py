@@ -78,6 +78,7 @@ from bq.evals.config import (
     read_categories,
     resolve_paths,
     tool_availability,
+    write_run_config,
 )
 from bq.evals.runner import EvalLaunch, EvalRunner
 from bq.evals.scoring import ScoringError
@@ -117,6 +118,17 @@ from bq.infra.task_registry import TaskRegistry
 from bq.infra.tunnel import TunnelManager, TunnelState, TunnelStatus
 from bq.llm_client import LLMClientError, LLMNotConfigured
 from bq.llm_service import LLMService
+from bq.local_models import (
+    LocalModel,
+    LocalModelError,
+    ModelPullError,
+    ModelPullRunner,
+    PullState,
+    create_local_model,
+    installed_ollama_models,
+    model_is_installed,
+    seed_from_provider_specs,
+)
 from bq.logbook import (
     DEFAULT_FLUSH_MINUTES,
     DEFAULT_RETENTION_DAYS,
@@ -1599,6 +1611,40 @@ class AppConfigUpdate(BaseModel):
     news_memory_ttl_days: int = Field(strict=True)
 
 
+class LocalModelPullStatus(BaseModel):
+    status: str
+    output: str = ""
+
+
+class LocalModelStatus(BaseModel):
+    id: str
+    label: str
+    kind: str
+    model: str
+    endpoint: str | None
+    installed: bool | None
+    pull: LocalModelPullStatus | None
+
+
+class LocalModelList(BaseModel):
+    models: list[LocalModelStatus]
+
+
+class LocalModelCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=80, strict=True)
+    kind: Literal["ollama", "openai_compatible"]
+    model: str = Field(min_length=1, max_length=200, strict=True)
+    endpoint: str | None = Field(default=None, max_length=4096)
+    num_ctx: int = Field(default=16_384, strict=True)
+    num_predict: int = Field(default=512, strict=True)
+    temperature: float = 0.0
+    think: bool = False
+
+
+class LocalModelAction(BaseModel):
+    model_id: str = Field(min_length=1, max_length=300, strict=True)
+
+
 class EvalProviderStatus(BaseModel):
     id: str
     label: str
@@ -2327,6 +2373,7 @@ def create_app(
                     await flush_task
             if eval_runner is not None:
                 await eval_runner.stop()
+            await pull_runner.stop()
             if tunnel is not None:
                 await tunnel.stop()
             if worker_loop is not None:
@@ -2454,6 +2501,50 @@ def create_app(
         )
         evals = EvalStore(database_path)
         eval_runner = EvalRunner(evals, resolve_paths())
+        pull_runner = ModelPullRunner()
+
+        def effective_local_models() -> tuple[LocalModel, ...]:
+            config = settings.load()
+            if config.local_models_configured or config.local_models:
+                return config.local_models
+            try:
+                text = resolve_paths().config.read_text(encoding="utf-8")
+                specs = [
+                    (provider.id, provider.label)
+                    for provider in parse_promptfoo_config(text)
+                ]
+            except (EvalConfigError, OSError):
+                return ()
+            return seed_from_provider_specs(
+                specs, default_endpoint=config.custom_endpoint
+            )
+
+        def local_model_status(
+            model: LocalModel, installed: set[str] | None
+        ) -> LocalModelStatus:
+            pull = pull_runner.state(model.id)
+            return LocalModelStatus(
+                id=model.id,
+                label=model.label,
+                kind=model.kind,
+                model=model.model,
+                endpoint=model.endpoint,
+                installed=model_is_installed(model, installed),
+                pull=(
+                    None
+                    if pull is None
+                    else LocalModelPullStatus(status=pull.status, output=pull.output)
+                ),
+            )
+
+        def model_list_response() -> LocalModelList:
+            installed = installed_ollama_models()
+            return LocalModelList(
+                models=[
+                    local_model_status(model, installed)
+                    for model in effective_local_models()
+                ]
+            )
 
         def verify_origin(request: Request) -> None:
             origin = request.headers.get("origin")
@@ -3753,6 +3844,32 @@ def create_app(
                         body.pipeline.decision_fallback_order
                     ),
                 )
+                local = {model.model: model for model in effective_local_models()}
+                endpoints: set[str] = set()
+                for tier in tiers.values():
+                    if tier.provider is Provider.CUSTOM and tier.model in local:
+                        endpoint = local[tier.model].resolved_endpoint
+                        if endpoint:
+                            endpoints.add(endpoint)
+                for route in routing.values():
+                    if (
+                        route.provider is Provider.CUSTOM
+                        and route.model is not None
+                        and route.model in local
+                    ):
+                        endpoint = local[route.model].resolved_endpoint
+                        if endpoint:
+                            endpoints.add(endpoint)
+                if len(endpoints) > 1:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "Only one local endpoint can be routed at a time; "
+                            "select models that share an endpoint."
+                        ),
+                    )
+                if endpoints:
+                    settings.save_custom_endpoint(next(iter(endpoints)))
                 config = settings.save_models(
                     tiers=tiers,
                     agent_routing=routing,
@@ -3853,23 +3970,91 @@ def create_app(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             return PromptStatus.model_validate(prompt.to_dict())
 
+        @app.get("/api/v1/models")
+        def list_local_models(request: Request) -> LocalModelList:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return model_list_response()
+
+        @app.post("/api/v1/models", status_code=201)
+        def add_local_model(
+            request: Request, body: LocalModelCreate
+        ) -> LocalModelStatus:
+            require_write(request)
+            try:
+                model = create_local_model(**body.model_dump())
+            except LocalModelError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            existing = effective_local_models()
+            if any(item.id == model.id for item in existing):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Model {model.model!r} is already registered.",
+                )
+            try:
+                settings.save_local_models([*existing, model])
+            except (SettingsError, LocalModelError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return local_model_status(model, installed_ollama_models())
+
+        @app.delete("/api/v1/models")
+        def remove_local_model(request: Request, model_id: str) -> LocalModelList:
+            require_write(request)
+            existing = effective_local_models()
+            kept = tuple(item for item in existing if item.id != model_id)
+            if len(kept) == len(existing):
+                raise HTTPException(status_code=404, detail="Model is not registered.")
+            try:
+                settings.save_local_models(kept)
+            except (SettingsError, LocalModelError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return model_list_response()
+
+        @app.post("/api/v1/models/pull")
+        def pull_local_model(
+            request: Request, body: LocalModelAction
+        ) -> LocalModelPullStatus:
+            require_write(request)
+            model = next(
+                (item for item in effective_local_models() if item.id == body.model_id),
+                None,
+            )
+            if model is None:
+                raise HTTPException(status_code=404, detail="Model is not registered.")
+            try:
+                state = pull_runner.start(model)
+            except ModelPullError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return LocalModelPullStatus(status=state.status, output=state.output)
+
+        @app.post("/api/v1/models/pull/cancel")
+        async def cancel_local_model(
+            request: Request, body: LocalModelAction
+        ) -> LocalModelPullStatus:
+            require_write(request)
+            if not await pull_runner.cancel(body.model_id):
+                raise HTTPException(
+                    status_code=409, detail="No pull is running for that model."
+                )
+            state = pull_runner.state(body.model_id) or PullState("cancelled")
+            return LocalModelPullStatus(status=state.status, output=state.output)
+
         @app.get("/api/v1/evals/config")
         def eval_config(request: Request) -> EvalConfigStatus:
             if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
                 raise HTTPException(status_code=401, detail="Authentication required")
             paths = resolve_paths()
             try:
-                providers = parse_promptfoo_config(
-                    paths.config.read_text(encoding="utf-8")
-                )
                 categories = read_categories(paths.dataset)
             except (EvalConfigError, OSError) as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
             active = evals.active_run()
             return EvalConfigStatus(
                 providers=[
-                    EvalProviderStatus(id=p.id, label=p.label, model=p.model)
-                    for p in providers
+                    EvalProviderStatus(
+                        id=model.id, label=model.label, model=model.model
+                    )
+                    for model in effective_local_models()
                 ],
                 categories=categories,
                 tools=tool_availability(),
@@ -3895,14 +4080,14 @@ def create_app(
         ) -> EvalRunStatus:
             require_write(request)
             paths = resolve_paths()
+            known = {model.id: model for model in effective_local_models()}
+            if not known:
+                raise HTTPException(
+                    status_code=422, detail="No local models are registered."
+                )
             try:
-                known = {
-                    p.id: p
-                    for p in parse_promptfoo_config(
-                        paths.config.read_text(encoding="utf-8")
-                    )
-                }
                 categories = set(read_categories(paths.dataset))
+                base_text = paths.config.read_text(encoding="utf-8")
             except (EvalConfigError, OSError) as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -3927,6 +4112,17 @@ def create_app(
                 )
             except EvalRunActive as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            try:
+                generated = write_run_config(
+                    base_text,
+                    [known[item] for item in selected],
+                    paths.dataset,
+                    evals.artifact_dir(run.id) / "promptfooconfig.yaml",
+                )
+                run = evals.set_config_path(run.id, str(generated))
+            except (EvalConfigError, OSError) as exc:
+                evals.mark_failed(run.id, f"could not write the run config: {exc}")
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
             eval_runner.start(
                 EvalLaunch(
                     run=run,
@@ -4012,20 +4208,13 @@ def create_app(
         ) -> EvalPromoteDiff:
             require_write(request)
             paths = resolve_paths()
-            try:
-                providers = {
-                    p.model: p
-                    for p in parse_promptfoo_config(
-                        paths.config.read_text(encoding="utf-8")
-                    )
-                }
-            except (EvalConfigError, OSError) as exc:
-                raise HTTPException(status_code=503, detail=str(exc)) from exc
-            if body.model not in providers:
+            models = {model.model: model for model in effective_local_models()}
+            if body.model not in models:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Unknown model {body.model!r}; not in the eval config.",
+                    detail=f"Unknown model {body.model!r}; not in the registry.",
                 )
+            selected = models[body.model]
             before = _app_config_status(settings.load())
             if body.agent_id not in before.agent_routing:
                 raise HTTPException(
@@ -4033,11 +4222,12 @@ def create_app(
                     detail=f"Unknown agent role {body.agent_id!r}.",
                 )
             try:
-                if body.endpoint is not None:
-                    settings.save_custom_endpoint(body.endpoint)
+                endpoint = body.endpoint or selected.resolved_endpoint
+                if endpoint:
+                    settings.save_custom_endpoint(endpoint)
                 config = settings.save_agent_model(
                     agent_id=body.agent_id,
-                    provider=body.provider,
+                    provider=Provider.CUSTOM,
                     model=body.model,
                 )
             except (SettingsError, ValueError) as exc:

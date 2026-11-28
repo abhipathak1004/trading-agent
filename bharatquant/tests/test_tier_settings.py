@@ -230,3 +230,41 @@ def test_save_models_rejects_an_incomplete_tier_set(tmp_path: Path) -> None:
             decision_route=DecisionRoute.AUTO,
             decision_policy=DecisionPolicyConfig(),
         )
+
+
+def test_local_models_round_trip_through_settings(tmp_path: Path) -> None:
+    from bq.local_models import create_local_model
+
+    store = _store(tmp_path)
+    model = create_local_model(
+        label="Gemma 4 12B (MLX)",
+        kind="ollama",
+        model="gemma4:12b-mlx",
+        created_at=NOW,
+    )
+    config = store.save_local_models([model])
+    assert config.local_models == (model,)
+    assert store.load().local_models == (model,)
+
+
+def test_keyless_custom_tier_counts_as_configured_with_an_endpoint(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    tiers = _tiers()
+    tiers[TierName.FLASH] = TierConfig(
+        provider=Provider.CUSTOM,
+        model="gemma4:12b-mlx",
+        fallback_tier=TierName.REASONING,
+    )
+    store.save_models(
+        tiers=tiers,
+        agent_routing=dict(DEFAULT_AGENT_ROUTING),
+        pipeline=PipelineConfig(),
+        decision_route=DecisionRoute.AUTO,
+        decision_policy=DecisionPolicyConfig(),
+    )
+    assert store.load().tier_configured(TierName.FLASH) is False
+
+    store.save_custom_endpoint("http://127.0.0.1:11434/v1")
+    assert store.load().tier_configured(TierName.FLASH) is True

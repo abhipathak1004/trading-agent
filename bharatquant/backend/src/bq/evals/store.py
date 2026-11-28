@@ -177,6 +177,19 @@ class EvalStore:
             run_id, "cancelled", from_statuses={"queued", "running"}
         )
 
+    def set_config_path(self, run_id: str, config_path: str) -> EvalRun:
+        """Point a queued run at its generated Promptfoo config."""
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                updated = connection.execute(
+                    "UPDATE eval_runs SET config_path = ? WHERE id = ?",
+                    (config_path, run_id),
+                )
+                if not updated.rowcount:
+                    raise EvalRunNotFound(f"Eval run {run_id} does not exist.")
+        return self.get_run(run_id)
+
     def _transition(
         self,
         run_id: str,

@@ -1,7 +1,14 @@
+import re
 from pathlib import Path
 
-from bq.evals.config import resolve_paths
+from bq.evals.config import (
+    MIN_NODE_VERSION,
+    _parse_node_version,
+    render_eval_config,
+    resolve_paths,
+)
 from bq.evals.runner import _actionable_error, build_promptfoo_command
+from bq.local_models import create_local_model
 
 
 def test_command_is_always_sequential_and_disable_telemetry_friendly() -> None:
@@ -21,15 +28,21 @@ def test_command_is_always_sequential_and_disable_telemetry_friendly() -> None:
     assert "--filter-providers" not in command
 
 
-def test_provider_subset_uses_filter_flag() -> None:
+def test_provider_subset_uses_one_anchored_regex() -> None:
+    ids = ("ollama:chat:qwen3.5:9b", "ollama:chat:gemma4:12b-mlx")
     command = build_promptfoo_command(
         paths=resolve_paths(),
         artifact_dir=Path("/tmp/run"),
-        providers=("ollama:chat:qwen3.5:9b", "ollama:chat:gemma4:12b-mlx"),
+        providers=ids,
         no_cache=False,
     )
     index = command.index("--filter-providers")
-    assert command[index + 1] == "ollama:chat:qwen3.5:9b,ollama:chat:gemma4:12b-mlx"
+    pattern = command[index + 1]
+    # Promptfoo treats the value as one regex, so a comma list matches nothing.
+    assert "," not in pattern
+    for model_id in ids:
+        assert re.fullmatch(pattern, model_id)
+    assert not re.search(pattern, "ollama:chat:qwen3.5:9b-extra")
     assert "--no-cache" not in command
 
 
@@ -79,6 +92,56 @@ def test_config_disables_thinking_for_strict_json() -> None:
     lines = _config_lines()
     provider_blocks = sum(1 for line in lines if "ollama:chat:" in line)
     assert sum(1 for line in lines if line == "think: false") == provider_blocks
+
+
+def test_generated_config_replaces_providers_and_absolutises_the_dataset(
+    tmp_path: Path,
+) -> None:
+    paths = resolve_paths()
+    base = paths.config.read_text(encoding="utf-8")
+    models = (
+        create_local_model(label="Gemma 4 12B", kind="ollama", model="gemma4:12b-mlx"),
+        create_local_model(
+            label='MLX "server"',
+            kind="openai_compatible",
+            model="mlx-community/qwen",
+            endpoint="http://127.0.0.1:8080/v1",
+        ),
+    )
+    rendered = render_eval_config(base, models, paths.dataset)
+
+    assert "  - id: ollama:chat:gemma4:12b-mlx" in rendered
+    assert "  - id: openai:chat:mlx-community/qwen" in rendered
+    assert 'apiBaseUrl: "http://127.0.0.1:8080/v1"' in rendered
+    assert 'label: "MLX \\"server\\""' in rendered
+    assert "num_predict: 512" in rendered
+    assert "think: false" in rendered
+    # The template's own providers are gone, but the anchor/prompts/tests survive.
+    assert "  - id: ollama:chat:granite4.2:8b" not in rendered
+    assert "x-trading-tools:" in rendered
+    assert "defaultTest:" in rendered
+    assert f"tests: file://{paths.dataset.resolve()}" in rendered
+
+
+def test_command_can_point_at_a_generated_config(tmp_path: Path) -> None:
+    generated = tmp_path / "promptfooconfig.yaml"
+    command = build_promptfoo_command(
+        paths=resolve_paths(),
+        artifact_dir=tmp_path,
+        providers=(),
+        no_cache=False,
+        config_path=generated,
+    )
+    assert command[command.index("-c") + 1] == str(generated)
+
+
+def test_node_version_parses_and_minimum_matches_promptfoo_engine() -> None:
+    # promptfoo@latest requires node >= 22.22.0; a shadowed 22.17 must be skipped.
+    assert _parse_node_version("v26.13.1\n") == (26, 13, 1)
+    assert _parse_node_version("v22.17.0") == (22, 17, 0)
+    assert _parse_node_version("v22.17.0") < MIN_NODE_VERSION
+    assert _parse_node_version("garbage") is None
+    assert MIN_NODE_VERSION == (22, 22, 0)
 
 
 def test_actionable_error_prefers_last_meaningful_line() -> None:

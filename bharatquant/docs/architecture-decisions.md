@@ -1541,3 +1541,61 @@ real call, and two nearly identical routing blocks can drift.
 - *Force every call through a manifest* — adds cost and complexity to commentary
   that cannot change a trade, contradicting the cost-first posture and the rule
   that deterministic code owns the numbers.
+
+## ADR-049: Local models are a configuration registry; eval configs are generated per run
+
+**Status:** Accepted; implemented by `bq/local_models.py`, `SettingsStore`
+(`app_settings.local_models`), `bq/evals/config.render_eval_config`, the
+`/api/v1/models` routes, and the Model Evals / Settings panels.
+
+**Context:** The three benchmarked models were hardcoded in
+`evals/promptfooconfig.yaml`, so adding an open-source model meant editing a
+tracked file and rebuilding nothing else. Promptfoo's `--filter-providers` can
+only select providers already declared in a config; it cannot add one. Routing
+also needed the same model to be selectable in Settings without retyping a
+string. The registry must stay deterministic configuration, and the shipped YAML
+must remain the golden-set template (prompts, tools, assertions, tests).
+
+**Decision:**
+
+- A model is a `LocalModel` id `ollama:chat:<model>` or
+  `openai:chat:<model>`, stored as JSON in `app_settings.local_models` with a
+  bounded shape (label, kind, model, endpoint, context/predict tokens,
+  temperature, think). No migration. An explicitly emptied registry stays empty;
+  only an absent key seeds the shipped YAML providers, so the original three are
+  never silently lost or resurrected.
+- Eval runs render a **per-run** `promptfooconfig.yaml` into the run artifact
+  directory: only the top-level `providers:` block is replaced, the
+  `x-trading-tools` anchor and assertions are preserved, and the dataset path is
+  rewritten absolute because the generated file lives outside `evals/`. The
+  shipped YAML is never mutated.
+- Presence uses `ollama list`; `installed: null` means "unknown" (not Ollama, or
+  the daemon is unreachable). Pulling is a single background `ollama pull` with
+  bounded output, mirroring the eval runner's lifecycle.
+- Local models route through `Provider.CUSTOM` (keyless when a loopback
+  `custom_endpoint` is set) — that keyless endpoint now counts as configured.
+  Selecting a registry model in a tier derives its endpoint. Only one local
+  endpoint can be routed at a time; conflicting selections return `422`.
+- Promotion validates against the registry, not the YAML, and writes the
+  endpoint plus the agent override.
+
+**Consequences:**
+
+- A new model is added, pulled, evaluated and routed from the UI with no code
+  edit and no hardcoded list.
+- Each run is reproducible from its artifact config; historical runs keep the
+  provider set they actually used.
+- The registry is configuration, so it is bounded (32 models) and validated at
+  the API boundary; pulling is the only heavy operation and reports progress.
+- Risk: the CUSTOM client still resolves one global endpoint, so an Ollama model
+  and a different OpenAI-compatible endpoint cannot be routed in different tiers
+  simultaneously. Per-model endpoints would need a routing change (follow-up).
+
+**Alternatives rejected:**
+
+- *Append providers to the tracked YAML* — mutates a versioned golden-set file
+  and makes runs non-reproducible.
+- *Keep filtering the static YAML only* — cannot evaluate a model that is not
+  already declared, which is the feature.
+- *A new SQL table + migration* — the data is configuration edited by one owner;
+  `app_settings` already stores tiers and routing in the same form.

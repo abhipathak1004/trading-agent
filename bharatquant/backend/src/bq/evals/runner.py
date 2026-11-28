@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from bq.evals.config import EvalsPaths
+from bq.evals.config import MIN_NODE_VERSION, EvalsPaths, supported_node_dir
 from bq.evals.scoring import analyze_results_file, export_scorecard_csv
 from bq.evals.store import EvalRun, EvalStore
 
@@ -70,6 +70,7 @@ def build_promptfoo_command(
     providers: Sequence[str],
     categories: Sequence[str] = (),
     no_cache: bool,
+    config_path: Path | None = None,
 ) -> list[str]:
     """Build the sequential ``promptfoo eval`` argv (never parallel)."""
     command = [
@@ -79,14 +80,16 @@ def build_promptfoo_command(
         "--max-concurrency",
         "1",
         "-c",
-        str(paths.config),
+        str(config_path or paths.config),
         "-o",
         str(artifact_dir / "results.json"),
     ]
     if no_cache:
         command.append("--no-cache")
     if providers:
-        command.extend(["--filter-providers", ",".join(providers)])
+        # Promptfoo treats --filter-providers as one regex, not a comma list.
+        alternatives = "|".join(re.escape(item) for item in providers)
+        command.extend(["--filter-providers", f"^(?:{alternatives})$"])
     if categories:
         command.extend(["--filter-metadata", f"category={','.join(categories)}"])
     return command
@@ -119,14 +122,29 @@ class EvalRunner:
         run_id = launch.run.id
         artifact_dir = self.store.artifact_dir(run_id)
         artifact_dir.mkdir(parents=True, exist_ok=True)
+        run = self.store.get_run(run_id)
         command = build_promptfoo_command(
             paths=self.paths,
             artifact_dir=artifact_dir,
             providers=launch.providers,
-            categories=launch.run.categories,
+            categories=run.categories,
             no_cache=launch.no_cache,
+            config_path=Path(run.config_path),
         )
-        env = {**os.environ, "PROMPTFOO_DISABLE_TELEMETRY": "1"}
+        node_dir = supported_node_dir()
+        if node_dir is None:
+            minimum = ".".join(str(part) for part in MIN_NODE_VERSION)
+            self._run_id = None
+            self.store.mark_failed(
+                run_id,
+                f"No supported Node.js (>={minimum}) found for npx.",
+            )
+            return
+        env = {
+            **os.environ,
+            "PROMPTFOO_DISABLE_TELEMETRY": "1",
+            "PATH": node_dir + os.pathsep + os.environ.get("PATH", ""),
+        }
         try:
             self.store.mark_started(run_id)
             self._process = await asyncio.create_subprocess_exec(
@@ -166,6 +184,13 @@ class EvalRunner:
             summaries, categories = analyze_results_file(
                 self.paths.scorer, results_path
             )
+            if not summaries:
+                self.store.mark_failed(
+                    run_id,
+                    "Promptfoo produced no case results; check the selected "
+                    "models and filters.",
+                )
+                return
             self.store.save_scores(run_id, summaries)
             export_scorecard_csv(
                 self.paths.scorer,

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shutil
 from pathlib import Path
 
@@ -85,6 +86,78 @@ def test_missing_results_file_marks_failed(tmp_path: Path, monkeypatch) -> None:
     assert failed.status == "failed"
     assert failed.error_message
     assert store.get_scores(run.id) == []
+
+
+def test_promptfoo_runs_with_the_supported_node_first(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = _store(tmp_path)
+    runner = EvalRunner(store, resolve_paths())
+    run = store.create_run(models=("m",), categories=(), config_path="c")
+    captured: dict[str, object] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        captured.update(kwargs)
+        return FakeProcess(1)
+
+    monkeypatch.setattr("bq.evals.runner.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "bq.evals.runner.supported_node_dir", lambda: "/opt/homebrew/bin"
+    )
+    asyncio.run(runner._execute(EvalLaunch(run=run, providers=("x",), no_cache=True)))
+
+    path = captured["env"]["PATH"]  # type: ignore[index]
+    assert isinstance(path, str)
+    assert path.startswith("/opt/homebrew/bin" + os.pathsep)
+    argv = captured["args"]
+    assert isinstance(argv, tuple)
+    assert argv[argv.index("-c") + 1] == run.config_path
+
+
+def test_no_supported_node_fails_before_spawn(tmp_path: Path, monkeypatch) -> None:
+    store = _store(tmp_path)
+    runner = EvalRunner(store, resolve_paths())
+    run = store.create_run(models=("m",), categories=(), config_path="c")
+
+    async def fake_exec(*_args, **_kwargs):
+        raise AssertionError("must not spawn without a supported Node")
+
+    monkeypatch.setattr("bq.evals.runner.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("bq.evals.runner.supported_node_dir", lambda: None)
+    asyncio.run(runner._execute(EvalLaunch(run=run, providers=("x",), no_cache=True)))
+
+    failed = store.get_run(run.id)
+    assert failed.status == "failed"
+    assert "No supported Node.js" in (failed.error_message or "")
+
+
+def test_zero_case_results_is_a_failure_not_an_empty_scorecard(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = _store(tmp_path)
+    runner = EvalRunner(store, resolve_paths())
+    run = store.create_run(models=("m",), categories=(), config_path="c")
+
+    async def fake_exec(*_args, **_kwargs):
+        target = store.artifact_dir(store.active_run().id)  # type: ignore[union-attr]
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "results.json").write_text(
+            '{"results": {"results": []}}', encoding="utf-8"
+        )
+        return FakeProcess(0)
+
+    monkeypatch.setattr("bq.evals.runner.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "bq.evals.runner.supported_node_dir", lambda: "/opt/homebrew/bin"
+    )
+    asyncio.run(runner._execute(EvalLaunch(run=run, providers=("x",), no_cache=True)))
+
+    failed = store.get_run(run.id)
+    assert failed.status == "failed"
+    assert "no case results" in (failed.error_message or "")
+    assert store.get_scores(run.id) == []
+    assert not (store.artifact_dir(run.id) / "scorecard.csv").is_file()
 
 
 @pytest.mark.parametrize("returncode", [0, 100])

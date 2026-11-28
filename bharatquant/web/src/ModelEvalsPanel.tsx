@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 
 import TableScroll from "./TableScroll";
@@ -26,6 +26,14 @@ import type {
   EvalRun,
   ScoreColumn,
 } from "./evalContract.ts";
+import {
+  MODEL_KINDS,
+  isPulling,
+  parseLocalModel,
+  parseLocalModels,
+  pullTone,
+} from "./modelsContract.ts";
+import type { LocalModel, ModelKind } from "./modelsContract.ts";
 
 const POLL_MS = 3000;
 
@@ -50,6 +58,11 @@ async function detailMessage(response: Response, fallback: string): Promise<stri
     /* fall through */
   }
   return fallback;
+}
+
+function numberOr(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function ScoreCell({
@@ -372,6 +385,20 @@ export default function ModelEvalsPanel({ csrfToken }: { csrfToken: string }) {
   const [promoteModel, setPromoteModel] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [models, setModels] = useState<LocalModel[]>([]);
+  const [modelsError, setModelsError] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [modelBusy, setModelBusy] = useState("");
+  const [form, setForm] = useState({
+    label: "",
+    kind: "ollama" as ModelKind,
+    model: "",
+    endpoint: "",
+    num_ctx: "16384",
+    num_predict: "512",
+    temperature: "0",
+    think: false,
+  });
 
   const activeRun = useMemo(() => {
     if (load.state !== "ready") {
@@ -394,6 +421,9 @@ export default function ModelEvalsPanel({ csrfToken }: { csrfToken: string }) {
       const config = parseEvalConfig(await configResponse.json());
       const runs = parseEvalRuns(await runsResponse.json());
       setLoad({ state: "ready", config, runs });
+      setSelectedModels((current) =>
+        current.filter((id) => config.providers.some((item) => item.id === id)),
+      );
       setSelectedRun((current) => {
         if (current && runs.some((run) => run.id === current)) {
           return current;
@@ -428,6 +458,153 @@ export default function ModelEvalsPanel({ csrfToken }: { csrfToken: string }) {
     const timer = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(timer);
   }, [running]);
+
+  const loadModels = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const response = await fetch("/api/v1/models", { cache: "no-store", signal });
+      if (!response.ok) {
+        throw new Error("Local models are unavailable");
+      }
+      setModels(parseLocalModels(await response.json()));
+      setModelsError("");
+    } catch {
+      if (!signal?.aborted) {
+        setModelsError("Local models are unavailable.");
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadModels(controller.signal);
+    return () => controller.abort();
+  }, [loadModels]);
+
+  const pulling = models.some(isPulling);
+  useEffect(() => {
+    if (!pulling) {
+      return;
+    }
+    const timer = window.setInterval(() => void loadModels(), 2000);
+    return () => window.clearInterval(timer);
+  }, [pulling, loadModels]);
+
+  async function addModel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setModelBusy("add");
+    setModelsError("");
+    try {
+      const response = await fetch("/api/v1/models", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({
+          label: form.label.trim(),
+          kind: form.kind,
+          model: form.model.trim(),
+          endpoint:
+            form.kind === "openai_compatible" ? form.endpoint.trim() || null : null,
+          num_ctx: Math.round(numberOr(form.num_ctx, 16384)),
+          num_predict: Math.round(numberOr(form.num_predict, 512)),
+          temperature: numberOr(form.temperature, 0),
+          think: form.think,
+        }),
+      });
+      if (!response.ok) {
+        setModelsError(await detailMessage(response, "Could not add the model."));
+        return;
+      }
+      parseLocalModel(await response.json());
+      setForm({
+        label: "",
+        kind: "ollama",
+        model: "",
+        endpoint: "",
+        num_ctx: "16384",
+        num_predict: "512",
+        temperature: "0",
+        think: false,
+      });
+      setAddOpen(false);
+      await loadModels();
+      await refresh();
+    } catch {
+      setModelsError("Could not add the model. Check the local service.");
+    } finally {
+      setModelBusy("");
+    }
+  }
+
+  async function pullModel(model: LocalModel) {
+    setModelBusy(model.id);
+    setModelsError("");
+    try {
+      const response = await fetch("/api/v1/models/pull", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ model_id: model.id }),
+      });
+      if (!response.ok) {
+        setModelsError(await detailMessage(response, "Could not start the pull."));
+        return;
+      }
+      await loadModels();
+    } catch {
+      setModelsError("Could not start the pull. Check the local service.");
+    } finally {
+      setModelBusy("");
+    }
+  }
+
+  async function cancelPull(model: LocalModel) {
+    setModelBusy(model.id);
+    setModelsError("");
+    try {
+      const response = await fetch("/api/v1/models/pull/cancel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ model_id: model.id }),
+      });
+      if (!response.ok) {
+        setModelsError(await detailMessage(response, "Could not cancel the pull."));
+        return;
+      }
+      await loadModels();
+    } catch {
+      setModelsError("Could not cancel the pull. Check the local service.");
+    } finally {
+      setModelBusy("");
+    }
+  }
+
+  async function removeModel(model: LocalModel) {
+    setModelBusy(model.id);
+    setModelsError("");
+    try {
+      const response = await fetch(
+        `/api/v1/models?model_id=${encodeURIComponent(model.id)}`,
+        { method: "DELETE", headers: { "X-CSRF-Token": csrfToken } },
+      );
+      if (!response.ok) {
+        setModelsError(await detailMessage(response, "Could not remove the model."));
+        return;
+      }
+      setModels(parseLocalModels(await response.json()));
+      await refresh();
+    } catch {
+      setModelsError("Could not remove the model. Check the local service.");
+    } finally {
+      setModelBusy("");
+    }
+  }
 
   async function startRun() {
     setBusy(true);
@@ -518,6 +695,256 @@ export default function ModelEvalsPanel({ csrfToken }: { csrfToken: string }) {
         <span className="status-badge status-badge--provisional">SEQUENTIAL</span>
       </div>
 
+      <div className="eval-models">
+        <div className="panel-header">
+          <div>
+            <h3>Local models</h3>
+            <p className="panel-note">
+              Registered open-source models. Pull Ollama models here; they appear
+              in the run launcher below and in Settings → Models &amp; keys.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setAddOpen((value) => !value)}
+            aria-expanded={addOpen}
+          >
+            {addOpen ? "Close" : "Add model"}
+          </button>
+        </div>
+
+        {modelsError !== "" && (
+          <p className="auth-error" role="alert">
+            {modelsError}
+          </p>
+        )}
+
+        {addOpen && (
+          <form
+            className="config-form eval-model-form"
+            onSubmit={(event) => void addModel(event)}
+          >
+            <div className="models-grid models-grid--compact">
+              <label htmlFor="model-label">
+                Label
+                <input
+                  id="model-label"
+                  type="text"
+                  value={form.label}
+                  onChange={(event) =>
+                    setForm({ ...form, label: event.target.value })
+                  }
+                  maxLength={80}
+                  required
+                />
+              </label>
+              <label htmlFor="model-kind">
+                Backend
+                <select
+                  id="model-kind"
+                  value={form.kind}
+                  onChange={(event) =>
+                    setForm({ ...form, kind: event.target.value as ModelKind })
+                  }
+                >
+                  {MODEL_KINDS.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {kind}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label htmlFor="model-name">
+                Model id
+                <input
+                  id="model-name"
+                  type="text"
+                  value={form.model}
+                  onChange={(event) =>
+                    setForm({ ...form, model: event.target.value })
+                  }
+                  placeholder="gemma4:12b-mlx"
+                  maxLength={200}
+                  required
+                />
+              </label>
+              {form.kind === "openai_compatible" && (
+                <label htmlFor="model-endpoint">
+                  Endpoint
+                  <input
+                    id="model-endpoint"
+                    type="text"
+                    value={form.endpoint}
+                    onChange={(event) =>
+                      setForm({ ...form, endpoint: event.target.value })
+                    }
+                    placeholder="http://127.0.0.1:8080/v1"
+                    required
+                  />
+                </label>
+              )}
+              <label htmlFor="model-ctx">
+                Context tokens
+                <input
+                  id="model-ctx"
+                  type="number"
+                  min={256}
+                  max={131072}
+                  value={form.num_ctx}
+                  onChange={(event) =>
+                    setForm({ ...form, num_ctx: event.target.value })
+                  }
+                />
+              </label>
+              <label htmlFor="model-predict">
+                Prediction tokens
+                <input
+                  id="model-predict"
+                  type="number"
+                  min={32}
+                  max={16384}
+                  value={form.num_predict}
+                  onChange={(event) =>
+                    setForm({ ...form, num_predict: event.target.value })
+                  }
+                />
+              </label>
+              <label htmlFor="model-temperature">
+                Temperature
+                <input
+                  id="model-temperature"
+                  type="number"
+                  step="0.05"
+                  min="0"
+                  max="2"
+                  value={form.temperature}
+                  onChange={(event) =>
+                    setForm({ ...form, temperature: event.target.value })
+                  }
+                />
+              </label>
+              <label className="eval-check" htmlFor="model-think">
+                <input
+                  id="model-think"
+                  type="checkbox"
+                  checked={form.think}
+                  onChange={(event) =>
+                    setForm({ ...form, think: event.target.checked })
+                  }
+                />
+                Think
+              </label>
+            </div>
+            <button
+              type="submit"
+              className="auth-button"
+              disabled={modelBusy === "add"}
+            >
+              {modelBusy === "add" ? "Adding..." : "Add model"}
+            </button>
+          </form>
+        )}
+
+        {models.length === 0 ? (
+          <p className="panel-note">
+            No local models registered yet. Add one above, or run an eval to seed
+            the shipped three.
+          </p>
+        ) : (
+          <TableScroll label="Local models">
+            <table className="judgment-table eval-models-table">
+              <thead>
+                <tr>
+                  <th scope="col">Model</th>
+                  <th scope="col">Backend</th>
+                  <th scope="col">Installed</th>
+                  <th scope="col">Pull</th>
+                  <th scope="col" />
+                </tr>
+              </thead>
+              <tbody>
+                {models.map((model) => (
+                  <Fragment key={model.id}>
+                    <tr>
+                      <th scope="row">
+                        <div>{model.label}</div>
+                        <div className="prompt-meta">{model.id}</div>
+                      </th>
+                      <td>
+                        {model.kind === "ollama" ? "Ollama" : "OpenAI-compatible"}
+                      </td>
+                      <td>
+                        {model.installed === null ? (
+                          "—"
+                        ) : (
+                          <span
+                            className={`status-badge status-badge--${model.installed ? "ok" : "danger"}`}
+                          >
+                            {model.installed ? "installed" : "not installed"}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        {model.pull === null ? (
+                          "—"
+                        ) : (
+                          <span
+                            className={`status-badge status-badge--${pullTone(model.pull.status)}`}
+                          >
+                            {model.pull.status}
+                          </span>
+                        )}
+                      </td>
+                      <td className="eval-model-actions">
+                        {model.kind === "ollama" &&
+                          (isPulling(model) ? (
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => void cancelPull(model)}
+                              disabled={modelBusy === model.id}
+                            >
+                              Cancel
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => void pullModel(model)}
+                              disabled={modelBusy === model.id}
+                            >
+                              Pull
+                            </button>
+                          ))}
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => void removeModel(model)}
+                          disabled={modelBusy === model.id || isPulling(model)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                    {model.pull !== null && model.pull.output !== "" && (
+                      <tr>
+                        <td colSpan={5}>
+                          <details className="eval-pull-output">
+                            <summary>Pull output</summary>
+                            <pre>{model.pull.output}</pre>
+                          </details>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
+        )}
+      </div>
+
       <div className="eval-launcher">
         <div className="eval-launcher__group">
           <h3>Models</h3>
@@ -539,7 +966,9 @@ export default function ModelEvalsPanel({ csrfToken }: { csrfToken: string }) {
             </label>
           ))}
           <p className="eval-hint">
-            Leave all unchecked to run every configured model.
+            {config.providers.length === 0
+              ? "Add a local model above to start a benchmark."
+              : "Leave all unchecked to run every registered model."}
           </p>
         </div>
 
@@ -581,7 +1010,7 @@ export default function ModelEvalsPanel({ csrfToken }: { csrfToken: string }) {
               type="button"
               className="auth-button"
               onClick={() => void startRun()}
-              disabled={running || busy}
+              disabled={running || busy || config.providers.length === 0}
             >
               {busy ? "Starting..." : "Run benchmark"}
             </button>
@@ -599,7 +1028,8 @@ export default function ModelEvalsPanel({ csrfToken }: { csrfToken: string }) {
 
       {!config.tools.npx && (
         <p className="auth-error" role="alert">
-          `npx` is not on PATH. Promptfoo cannot start until Node is installed.
+          No supported Node.js (22.22 or newer) with `npx` was found on PATH.
+          Promptfoo cannot start until one is installed.
         </p>
       )}
       {!config.tools.ollama && (

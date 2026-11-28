@@ -17,6 +17,8 @@ import type {
   TierConfig,
   TierName,
 } from "./settingsContract";
+import { parseLocalModels } from "./modelsContract";
+import type { LocalModel } from "./modelsContract";
 
 type LoadState =
   | { state: "loading" }
@@ -45,20 +47,34 @@ export default function ModelsConfigPanel({ csrfToken }: { csrfToken: string }) 
   const [load, setLoad] = useState<LoadState>({ state: "loading" });
   const [retry, setRetry] = useState(0);
   const [save, setSave] = useState<SaveState>({ state: "idle" });
+  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
 
   useEffect(() => {
     const controller = new AbortController();
     async function loadModels() {
       try {
-        const response = await fetch("/api/v1/settings/config", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!response.ok) {
+        const [configResponse, modelsResponse] = await Promise.all([
+          fetch("/api/v1/settings/config", {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+          fetch("/api/v1/models", {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        ]);
+        if (!configResponse.ok) {
           throw new Error("Models configuration unavailable");
         }
-        const value: unknown = await response.json();
+        const value: unknown = await configResponse.json();
         setLoad({ state: "ready", models: parseModelsConfig(value) });
+        if (modelsResponse.ok) {
+          try {
+            setLocalModels(parseLocalModels(await modelsResponse.json()));
+          } catch {
+            setLocalModels([]);
+          }
+        }
       } catch {
         if (!controller.signal.aborted) {
           setLoad({ state: "error" });
@@ -238,6 +254,13 @@ export default function ModelsConfigPanel({ csrfToken }: { csrfToken: string }) 
       </p>
 
       <form className="config-form" onSubmit={(event) => void submit(event)}>
+        <datalist id="bq-local-models">
+          {localModels.map((model) => (
+            <option key={model.id} value={model.model}>
+              {model.label}
+            </option>
+          ))}
+        </datalist>
         <div className="models-grid">
           {TIER_NAMES.map((name) => {
             const tier = models.tiers[name];
@@ -274,8 +297,18 @@ export default function ModelsConfigPanel({ csrfToken }: { csrfToken: string }) 
                 <input
                   id={`tier-${name}-model`}
                   type="text"
+                  list="bq-local-models"
                   value={tier.model}
-                  onChange={(event) => updateTier(name, { model: event.target.value })}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    const match = localModels.find((item) => item.model === value);
+                    updateTier(
+                      name,
+                      match === undefined
+                        ? { model: value }
+                        : { model: value, provider: "CUSTOM" },
+                    );
+                  }}
                 />
 
                 <label htmlFor={`tier-${name}-temperature`}>Temperature</label>
@@ -349,6 +382,12 @@ export default function ModelsConfigPanel({ csrfToken }: { csrfToken: string }) 
             );
           })}
         </div>
+
+        <p className="panel-note">
+          Choosing a registered local model switches that tier to CUSTOM. Saving
+          derives the local endpoint from the model; only one local endpoint can
+          be routed at a time.
+        </p>
 
         <h3>Decision fallback order</h3>
         <div className="fallback-row">

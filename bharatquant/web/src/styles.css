@@ -2543,6 +2543,47 @@ a.nav-item:hover,
   gap: 16px;
 }
 
+.eval-models {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.eval-model-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.eval-models-table td,
+.eval-models-table th {
+  vertical-align: top;
+}
+
+.eval-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.eval-pull-output {
+  margin-top: 8px;
+}
+
+.eval-pull-output pre {
+  max-height: 200px;
+  overflow: auto;
+  margin: 8px 0 0;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .eval-launcher {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

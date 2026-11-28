@@ -6,6 +6,46 @@ task. History lives in git and
 
 ## Current state
 
+- **Eval timeout 30 s (28 Nov 2026):** `defaultTest.options.timeout` in
+  `evals/promptfooconfig.yaml` is now 30000, not 15000. At `num_predict: 512`
+  an 8B model needs ~12.6 s here (40.6 tok/s) but a 14B reasoning model needs
+  ~20 s (25.8 tok/s), so 15 s truncated the 14B mid-JSON and scored it a
+  timeout. `latency_under_10s` is unchanged and still scores the 14B 0 — that
+  is the intended comparison, not a bug.
+- **Ollama runtime is 0.14.2 (28 Nov 2026):** `gemma4:12b-mlx` and
+  `qwen3.5:9b` are stored in the new `tensor`/safetensors manifest format this
+  build cannot load — they fail at generation while still reporting
+  `installed: true` (the check is name-based off `ollama list`). Registry holds
+  four explicit entries: granite4.2:8b (router) and deepseek-r1:14b (reasoning)
+  work; the two above need an Ollama upgrade past 0.40, or removal.
+- **Local model registry (28 Nov 2026):** open-source models can be added from
+  **Model Evals**, pulled with `ollama pull`, benchmarked, and then selected in
+  **Settings → Models & keys**. `bq/local_models.py` owns a bounded `LocalModel`
+  registry stored in `app_settings.local_models` (no migration); an explicitly
+  emptied registry stays empty, and only an absent key seeds the three shipped
+  YAML providers. Each eval run generates its own `promptfooconfig.yaml` in the
+  run artifact dir (providers block replaced, anchor/assertions kept, dataset
+  path absolute) — the tracked `evals/promptfooconfig.yaml` is never mutated.
+  API: `GET/POST/DELETE /api/v1/models`, `POST /api/v1/models/pull[/cancel]`;
+  `/evals/config`, `/evals/runs` and `/evals/promote` now read the registry.
+  Presence uses `ollama list` (`installed: null` = unknown); pulls run one at a
+  time with bounded output. Local models route through `CUSTOM`; a keyless
+  loopback `custom_endpoint` now counts as configured, and saving a tier derives
+  the endpoint from the selected model (one local endpoint at a time). UI: a
+  Local models section (add/pull/remove) in Model Evals and a registry-backed
+  datalist on the tier model fields. ADR-049.
+- **Empty scorecards fixed (28 Nov 2026):** `--filter-providers` is a single
+  **regex** in Promptfoo, not a comma list. The runner joined selected ids with
+  commas, so any multi-model selection matched no provider, ran zero cases and
+  wrote a header-only `scorecard.csv` while the run showed "completed". It now
+  passes `^(?:id1|id2|…)$` with each id escaped, and a run with zero case results
+  is marked **failed** ("Promptfoo produced no case results") instead of
+  completed, so an empty scorecard can no longer look successful. Existing
+  empty runs are historical; re-run to get scores.
+- **Node preflight for evals (28 Nov 2026):** the runner now picks the first PATH
+  `node` that satisfies Promptfoo's engine range (`>=22.22.0`) and prepends its
+  directory, so a shadowing `/usr/local/bin/node` (22.17) no longer breaks
+  `npx promptfoo@latest`; it fails fast with a clear message if none exists.
 - **Agent harness unification (28 Nov 2026):** every agent now shares one
   config-driven harness. `ResearchAgent` routes through `ModelRouter` (so a
   promoted local model in Model Evals actually applies to the Agent Console),
@@ -171,10 +211,10 @@ task. History lives in git and
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
   execution/realism, memory, confidence, opportunities/shadows, scheduler,
   reports, backtests, research dossiers and runtime hardening.
-- **Verification:** 1000 backend tests pass (2 pre-existing failures unchanged),
-  141 frontend tests; ruff/format clean; frontend typecheck/build clean; new
-  `bq/evals` is mypy-clean; a fresh DB applies **40 migrations** (`040` is the
-  agent-runs migration). Three real local sweeps and a live promote completed
+- **Verification:** 1021 backend tests pass (the same 2 pre-existing failures
+  unchanged), 146 frontend tests; ruff/format clean; frontend typecheck/build
+  clean; `bq/local_models.py` and `bq/evals` are mypy-clean; a fresh DB applies
+  **40 migrations** (`040` is the agent-runs migration). Three real local sweeps and a live promote completed
   end to end (see Model Evals above).
 - **mypy:** pre-existing errors remain in `cli.py`, `triggers.py`, `campaign.py`,
   `campaign_feedback.py`, `catalysts.py`, `reports/engine.py`,
@@ -243,6 +283,7 @@ maintenance/optional breadth:
 | Campaign | `bq/campaign.py`, `bq/catalysts.py`, `bq/shortlist.py`, `bq/triggers.py`, `bq/campaign_feedback.py`, `bq/data/equity_master.py`, `web/src/CampaignPanel.tsx` |
 | Logging | `bq/logbook.py`, `bq/infra/job_handlers.py` (`logs.flush`), `web/src/LoggingPanel.tsx`, `web/src/loggingContract.ts` |
 | Model Evals | `bq/evals/` (`config.py`, `store.py`, `scoring.py`, `runner.py`), `evals/*` (bundle), `web/src/ModelEvalsPanel.tsx`, `web/src/evalContract.ts` |
+| Local models | `bq/local_models.py` (registry, presence, pull), `bq/settings.py` (`local_models`), `web/src/modelsContract.ts`, Model Evals + `ModelsConfigPanel` |
 
 ## Commands
 

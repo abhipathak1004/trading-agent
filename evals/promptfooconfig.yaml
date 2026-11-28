@@ -68,7 +68,7 @@ providers:
   #   ollama pull granite4.2:8b
   #
   # `num_predict` caps generation. Without it an 8B model can ramble past a
-  # thousand tokens per case, which blows the 15 s test timeout and makes the
+  # thousand tokens per case, which blows the 30 s test timeout and makes the
   # sweep take hours. 512 tokens fits every golden summary plus its JSON block.
   #
   # `think: false` is forwarded to Ollama and disables reasoning generation.
@@ -118,7 +118,10 @@ providers:
 
 defaultTest:
   options:
-    timeout: 15000
+    # 30 s, not 15 s. At num_predict 512 an 8B model needs ~12.6 s on this
+    # M4 Pro (40.6 tok/s) but a 14B reasoning model needs ~20 s (25.8 tok/s),
+    # and 15 s cut the 14B off before it emitted its JSON block.
+    timeout: 30000
     # A serial sweep must not stall on one rambling generation: abort the request
     # (localhost, so no data leaves the machine) and score it as a timeout.
     failOnError: false

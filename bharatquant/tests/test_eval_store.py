@@ -140,6 +140,16 @@ def test_missing_run_raises(tmp_path: Path) -> None:
         store.get_run("does-not-exist")
 
 
+def test_set_config_path_points_at_the_generated_config(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    run = store.create_run(models=("a",), categories=(), config_path="placeholder")
+    updated = store.set_config_path(run.id, "/artifacts/run/promptfooconfig.yaml")
+    assert updated.config_path == "/artifacts/run/promptfooconfig.yaml"
+    assert store.get_run(run.id).config_path == "/artifacts/run/promptfooconfig.yaml"
+    with pytest.raises(EvalRunNotFound):
+        store.set_config_path("missing", "x")
+
+
 def test_timestamps_are_utc_and_parseable() -> None:
     moment = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
     assert timestamp(utc(moment)) == "2026-11-26T12:00:00.000000Z"

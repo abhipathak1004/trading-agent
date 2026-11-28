@@ -39,6 +39,13 @@ from bq.core import (
     utc as core_utc,
 )
 from bq.infra.audit import append_event
+from bq.local_models import (
+    LocalModel,
+    LocalModelError,
+    parse_local_models,
+    serialize_local_models,
+    validate_local_models,
+)
 from bq.logbook import LoggingConfig, LoggingConfigError
 from bq.news import DEFAULT_MEMORY_TTL, PULSE_FEED_URL
 from bq.risk.policy import RiskLimits
@@ -97,6 +104,7 @@ KEY_PIPELINE = "pipeline"
 KEY_RISK_LIMITS = "risk_limits"
 KEY_CAMPAIGN = "campaign"
 KEY_LOGGING = "logging"
+KEY_LOCAL_MODELS = "local_models"
 
 MAX_AGENT_ROUTING_ENTRIES = 32
 MAX_AGENT_ID_CHARS = 64
@@ -230,6 +238,8 @@ class AppConfig:
     campaign: CampaignConfig = CampaignConfig()
     logging: LoggingConfig = LoggingConfig()
     custom_endpoint: str | None = None
+    local_models: tuple[LocalModel, ...] = ()
+    local_models_configured: bool = False
 
     def tier(self, name: TierName) -> TierConfig | None:
         for key, value in self.tiers:
@@ -240,6 +250,8 @@ class AppConfig:
     def _has_key(self, provider: Provider | None) -> bool:
         if provider is None:
             return False
+        if provider is Provider.CUSTOM and self.custom_endpoint:
+            return True
         return any(key.provider is provider and key.configured for key in self.api_keys)
 
     def tier_configured(self, name: TierName) -> bool:
@@ -1013,6 +1025,8 @@ class SettingsStore:
             campaign=_load_campaign(rows),
             logging=_load_logging(rows),
             custom_endpoint=custom_endpoint,
+            local_models=parse_local_models(rows.get(KEY_LOCAL_MODELS)),
+            local_models_configured=KEY_LOCAL_MODELS in rows,
         )
 
     def api_key(self, provider: Provider | str) -> str | None:
@@ -1410,6 +1424,39 @@ class SettingsStore:
                     object_type="app_settings",
                     object_id=KEY_CUSTOM_ENDPOINT,
                     payload={"custom_endpoint": value},
+                )
+        return self.load()
+
+    def save_local_models(self, models: Sequence[LocalModel]) -> AppConfig:
+        """Replace the local model registry."""
+        try:
+            validated = validate_local_models(models)
+        except LocalModelError as exc:
+            raise SettingsError(str(exc)) from exc
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "INSERT INTO app_settings (setting_key, setting_value, updated_at) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(setting_key) DO UPDATE SET "
+                    "setting_value = excluded.setting_value, "
+                    "updated_at = excluded.updated_at",
+                    (
+                        KEY_LOCAL_MODELS,
+                        serialize_local_models(validated),
+                        _timestamp(updated_at),
+                    ),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.local_models.updated",
+                    object_type="app_settings",
+                    object_id=KEY_LOCAL_MODELS,
+                    payload={"models": ",".join(model.id for model in validated)},
                 )
         return self.load()
 
