@@ -27,7 +27,11 @@ from bq.decision.types import (
     JudgmentSet,
     Question,
 )
+from bq.infra.model_attempts import AttemptOutcome, AttemptStatus, UsageKind
+from bq.infra.task_registry import TaskDefinitionNotFound, TaskRegistry
 from bq.llm_client import LLMNotConfigured, ModelClient, client_for
+from bq.llm_gateway import LLMGateway, build_prompt_context
+from bq.llm_result import LLMResult
 from bq.llm_service import (
     ALLOWED_DATA,
     HOSTED_CLASSES,
@@ -53,12 +57,14 @@ from bq.settings import (
     TierName,
 )
 from bq.structured_output import complete_structured
+from bq.task_registry import TaskDefinition
 
 TASK_AGENTS = {
     "analysis.bull": "bull_debater",
     "analysis.bear": "bear_debater",
     "analysis.judge": "research_judge",
     "analysis.risk": "risk_analyst",
+    "research.agent": "research",
 }
 DEFAULT_AGENT_ID = "research_judge"
 DECISION_TASK = "decision.battery"
@@ -190,28 +196,36 @@ class ModelRouter:
         timeout: float | None = None,
     ) -> CompletionOutcome:
         route = self.resolve(agent_id, task_id=task_id)
-        try:
-            outcome = self._complete_route(
-                route,
-                prompt=prompt,
-                system=system,
-                task_id=task_id,
-                task_version=task_version,
-                timeout=timeout,
-            )
-        except Exception as primary:
-            if route.fallback_tier is None:
-                raise
-            fallback = self._route_for_tier(route.fallback_tier, agent_id)
-            try:
-                outcome = self._complete_route(
-                    fallback,
+        task = self._registered_task(task_id, task_version)
+
+        def run(selected: Route) -> CompletionOutcome:
+            if task is None:
+                return self._complete_route(
+                    selected,
                     prompt=prompt,
                     system=system,
                     task_id=task_id,
                     task_version=task_version,
                     timeout=timeout,
                 )
+            return self._complete_governed(
+                task,
+                selected,
+                prompt=prompt,
+                system=system,
+                task_id=task_id,
+                task_version=task_version,
+                timeout=timeout,
+            )
+
+        try:
+            outcome = run(route)
+        except Exception as primary:
+            if route.fallback_tier is None:
+                raise
+            fallback = self._route_for_tier(route.fallback_tier, agent_id)
+            try:
+                outcome = run(fallback)
             except Exception:
                 raise primary
             self._record(
@@ -524,18 +538,7 @@ class ModelRouter:
         task_version: str,
         timeout: float | None,
     ) -> CompletionOutcome:
-        api_key = self._key(route.provider)
-        candidate = ModelCandidate(
-            model_id=route.model,
-            tier=ModelTier.PAID,
-            available=True,
-            capability_verified=True,
-            terms_reviewed=True,
-            supported_classes=HOSTED_CLASSES,
-            approved_data=ALLOWED_DATA,
-            model_sha256=None,
-            evaluations=frozenset(),
-        )
+        candidate = self._candidate_for(route)
         policy = TaskPolicy(
             task_id=task_id or f"agent.{route.agent_id}",
             version=task_version,
@@ -553,6 +556,124 @@ class ModelRouter:
             raise LLMNotConfigured(str(exc)) from exc
         except RoutingError as exc:
             raise LLMNotConfigured(str(exc)) from exc
+        result = self._invoke(
+            route,
+            prompt=prompt,
+            system=system,
+            task_id=task_id,
+            task_version=task_version,
+            timeout=timeout,
+        )
+        return CompletionOutcome(
+            provider=route.provider, model=route.model, result=result
+        )
+
+    def _complete_governed(
+        self,
+        task: TaskDefinition,
+        route: Route,
+        *,
+        prompt: str,
+        system: str,
+        task_id: str,
+        task_version: str,
+        timeout: float | None,
+    ) -> CompletionOutcome:
+        """Run a task-bearing call through the gateway (ADR-048)."""
+        candidate = self._candidate_for(route)
+        gateway = LLMGateway(
+            self.store.path,
+            candidates=(candidate,),
+            clock=self.store.clock,
+        )
+        bundle = build_prompt_context(
+            task,
+            prompt=prompt,
+            system=system,
+            model_id=route.model,
+            scope=route.agent_id,
+            as_of=self.store.clock.now(),
+        )
+        selected_task, selected, manifest_hash = gateway.prepare(
+            task_id=task_id,
+            task_version=task_version,
+            data_classes=frozenset(
+                {task.system_classification, task.schema_classification}
+            ),
+            bundle=bundle,
+            model_id=route.model,
+            candidates=(candidate,),
+        )
+        result = self._invoke(
+            route,
+            prompt=prompt,
+            system=system,
+            task_id=task_id,
+            task_version=task_version,
+            timeout=timeout,
+        )
+        gateway.validate_output(
+            task=selected_task,
+            manifest_hash=manifest_hash,
+            model_id=selected.model_id,
+            output=result.text,
+        )
+        gateway.complete(
+            task_id=task_id,
+            task_version=task_version,
+            manifest_hash=manifest_hash,
+            model_id=selected.model_id,
+            outcome=AttemptOutcome(
+                status=AttemptStatus.SUCCEEDED,
+                usage_kind=(
+                    UsageKind.UNKNOWN
+                    if result.input_tokens is None and result.output_tokens is None
+                    else UsageKind.REPORTED
+                ),
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+            ),
+        )
+        return CompletionOutcome(
+            provider=route.provider, model=route.model, result=result
+        )
+
+    def _registered_task(
+        self, task_id: str, task_version: str
+    ) -> TaskDefinition | None:
+        if not task_id or not task_version:
+            return None
+        try:
+            return TaskRegistry(self.store.path, self.store.clock).load(
+                task_id, task_version
+            )
+        except TaskDefinitionNotFound:
+            return None
+
+    def _candidate_for(self, route: Route) -> ModelCandidate:
+        return ModelCandidate(
+            model_id=route.model,
+            tier=ModelTier.PAID,
+            available=True,
+            capability_verified=True,
+            terms_reviewed=True,
+            supported_classes=HOSTED_CLASSES,
+            approved_data=ALLOWED_DATA,
+            model_sha256=None,
+            evaluations=frozenset(),
+        )
+
+    def _invoke(
+        self,
+        route: Route,
+        *,
+        prompt: str,
+        system: str,
+        task_id: str,
+        task_version: str,
+        timeout: float | None,
+    ) -> LLMResult:
+        api_key = self._key(route.provider)
         started = time.monotonic()
         try:
             result = self._client(route.provider).complete(
@@ -596,9 +717,7 @@ class ModelRouter:
             response=result.text,
             reasoning=result.reasoning,
         )
-        return CompletionOutcome(
-            provider=route.provider, model=route.model, result=result
-        )
+        return result
 
     def _record(self, use: RouteUse) -> None:
         self._routes.append(use)

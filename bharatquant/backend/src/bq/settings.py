@@ -195,6 +195,7 @@ DEFAULT_AGENT_ROUTING: tuple[tuple[str, AgentRoute], ...] = tuple(
             "super_agent_cio": AgentRoute(TierName.REASONING),
             "reflection_writer": AgentRoute(TierName.REASONING),
             "news_research": AgentRoute(TierName.FLASH),
+            "research": AgentRoute(TierName.FLASH),
             "fundamental_events": AgentRoute(TierName.FLASH),
             "market_regime": AgentRoute(TierName.FLASH),
             "technical_analyst": AgentRoute(TierName.FLASH),

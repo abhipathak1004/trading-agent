@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bq.agent_prompts import AgentPrompt
 from bq.agent_runtime import AgentStep
 from bq.infra.database import migrate
 from bq.llm_result import FunctionCall, LLMResult, LLMUsage
@@ -53,23 +54,35 @@ class _FakeStore:
         return _fake_config()
 
 
+class _Route:
+    def __init__(self, provider: str, model: str) -> None:
+        self.provider = provider
+        self.model = model
+
+
 class ScriptedService:
-    """Stands in for LLMService: returns pre-scripted replies in order."""
+    """Stands in for ModelRouter: returns pre-scripted replies in order."""
 
     def __init__(self, replies: list[LLMResult]) -> None:
         self.replies = replies
         self.calls = 0
-        self.store = _FakeStore()
+        self.routes_used = (_Route("gemini", "gemini-2.5-pro"),)
+        self.last_system = ""
+        self.last_prompt = ""
 
     def complete(
         self,
+        agent_id: str,
         *,
         prompt: str,
         system: str = "",
         task_id: str = "research.agent",
         task_version: str = "v1",
+        timeout: float | None = None,
     ) -> CompletionOutcome:
-
+        assert agent_id == "research"
+        self.last_system = system
+        self.last_prompt = prompt
         reply = self.replies[min(self.calls, len(self.replies) - 1)]
         self.calls += 1
         config = _fake_config()
@@ -99,7 +112,7 @@ def test_agent_runs_tools_then_responds(tmp_path: Path) -> None:
         ]
     )
     agent = ResearchAgent(
-        path, clock=FrozenClock(), feed_url="https://example.com/feed", service=service
+        path, clock=FrozenClock(), feed_url="https://example.com/feed", router=service
     )
     run = agent.run("What did the RBI do?")
     assert run.stopped is True
@@ -120,7 +133,7 @@ def test_agent_step_records_arguments_and_output(tmp_path: Path) -> None:
         ]
     )
     run = ResearchAgent(
-        path, clock=FrozenClock(), feed_url="https://x/feed", service=service
+        path, clock=FrozenClock(), feed_url="https://x/feed", router=service
     ).run("digest please")
     first = run.steps[0]
     assert first.tool == "news_digest"
@@ -137,7 +150,7 @@ def test_agent_handles_blocked_and_unknown_tools(tmp_path: Path) -> None:
         ]
     )
     run = ResearchAgent(
-        path, clock=FrozenClock(), feed_url="https://x/feed", service=service
+        path, clock=FrozenClock(), feed_url="https://x/feed", router=service
     ).run("try something")
     assert run.final_text == "recovered"
     assert run.steps[0].kind == "error"
@@ -149,11 +162,13 @@ def test_agent_uses_native_function_calls(tmp_path: Path) -> None:
     class NativeService(ScriptedService):
         def complete(
             self,
+            agent_id: str,
             *,
             prompt: str,
             system: str = "",
             task_id: str = "research.agent",
             task_version: str = "v1",
+            timeout: float | None = None,
         ) -> CompletionOutcome:
 
             self.calls += 1
@@ -180,7 +195,7 @@ def test_agent_uses_native_function_calls(tmp_path: Path) -> None:
 
     service = NativeService([])
     run = ResearchAgent(
-        path, clock=FrozenClock(), feed_url="https://x/feed", service=service
+        path, clock=FrozenClock(), feed_url="https://x/feed", router=service
     ).run("native")
     assert run.final_text == "native done"
     assert run.tool_calls == ("news_digest", "response")
@@ -195,3 +210,33 @@ def test_agent_step_to_dict_roundtrip() -> None:
         "arguments": {"query": "x"},
         "output": "out",
     }
+
+
+def test_agent_honours_prompt_override(tmp_path: Path) -> None:
+    path = _seed(tmp_path)
+    service = ScriptedService([tool_call("response", {"text": "done"})])
+
+    class CustomPrompts:
+        def get(self, agent_id: str) -> AgentPrompt:
+            return AgentPrompt(
+                agent_id=agent_id,
+                label="Research agent (console)",
+                description="custom",
+                system="CUSTOM RESEARCH SYSTEM",
+                template="Task: {task}\n\n{history}\n\nCustom answer now.",
+                required_fields=("task", "history"),
+                version=1,
+                updated_at=NOW,
+                is_default=False,
+            )
+
+    agent = ResearchAgent(
+        path,
+        clock=FrozenClock(),
+        feed_url="https://x/feed",
+        router=service,
+        prompts=CustomPrompts(),
+    )
+    agent.run("custom prompt")
+    assert "CUSTOM RESEARCH SYSTEM" in service.last_system
+    assert service.last_prompt.endswith("Custom answer now.")

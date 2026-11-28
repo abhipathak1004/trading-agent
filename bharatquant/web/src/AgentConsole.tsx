@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
-import { parseAgentRun, parseAgentStatus } from "./agentContract";
-import type { AgentRun, AgentStatus } from "./agentContract";
+import {
+  parseAgentRun,
+  parseAgentRunDetail,
+  parseAgentRunHistory,
+  parseAgentStatus,
+} from "./agentContract";
+import type {
+  AgentRun,
+  AgentRunDetail,
+  AgentRunHistoryItem,
+  AgentStatus,
+} from "./agentContract";
 
 type Status =
   | { state: "loading" | "error" }
@@ -38,6 +48,10 @@ export default function AgentConsole({ csrfToken }: { csrfToken: string }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [running, setRunning] = useState(false);
   const [showTools, setShowTools] = useState(false);
+  const [history, setHistory] = useState<AgentRunHistoryItem[]>([]);
+  const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
+  const [openRunId, setOpenRunId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<AgentRunDetail | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async (signal: AbortSignal) => {
@@ -64,8 +78,52 @@ export default function AgentConsole({ csrfToken }: { csrfToken: string }) {
   }, [load, retry]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    async function loadHistory() {
+      try {
+        const response = await fetch("/api/v1/agent/runs", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error("Agent history unavailable");
+        }
+        setHistory(parseAgentRunHistory(await response.json()));
+        setHistoryState("ready");
+      } catch {
+        if (!controller.signal.aborted) {
+          setHistoryState("error");
+        }
+      }
+    }
+    void loadHistory();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns, running]);
+
+  async function toggleHistory(runId: string) {
+    if (openRunId === runId) {
+      setOpenRunId(null);
+      setDetail(null);
+      return;
+    }
+    setOpenRunId(runId);
+    setDetail(null);
+    try {
+      const response = await fetch(`/api/v1/agent/runs/${encodeURIComponent(runId)}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error("Run detail unavailable");
+      }
+      setDetail(parseAgentRunDetail(await response.json()));
+    } catch {
+      setDetail(null);
+    }
+  }
 
   async function ask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -169,6 +227,50 @@ export default function AgentConsole({ csrfToken }: { csrfToken: string }) {
           ))}
         </ul>
       )}
+
+      <details className="agent-history">
+        <summary>History ({history.length})</summary>
+        {historyState === "loading" && <p role="status">Loading history...</p>}
+        {historyState === "error" && <p role="alert">History is unavailable.</p>}
+        {historyState === "ready" && history.length === 0 && (
+          <p className="panel-note">No saved runs yet.</p>
+        )}
+        {historyState === "ready" && history.length > 0 && (
+          <ul className="agent-history__list">
+            {history.map((run) => (
+              <li key={run.run_id}>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => void toggleHistory(run.run_id)}
+                  aria-expanded={openRunId === run.run_id}
+                >
+                  {new Date(run.finished_at).toLocaleString()} · {run.task}
+                </button>
+                {openRunId === run.run_id && detail !== null && (
+                  <div className="agent-history__detail">
+                    <p>{detail.final_text}</p>
+                    <ol className="agent-steps">
+                      {detail.steps.map((step) => (
+                        <li
+                          key={`${step.turn}-${step.tool}`}
+                          className={`agent-step agent-step--${step.kind}`}
+                        >
+                          <div className="agent-step__head">
+                            <strong>{step.tool}</strong>
+                            <span>turn {step.turn}</span>
+                          </div>
+                          <pre>{step.output}</pre>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
 
       <div className="agent-thread" aria-live="polite">
         {turns.length === 0 && (

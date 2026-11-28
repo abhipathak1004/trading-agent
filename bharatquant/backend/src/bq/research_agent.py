@@ -20,14 +20,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from bq.agent_prompts import (
+    RESEARCH_SYSTEM,
+    RESEARCH_TEMPLATE,
+    PromptSource,
+    resolve_prompt,
+)
+from bq.agent_run_store import AgentRunStep, AgentRunStore
 from bq.agent_runtime import (
     AgentStep,
     LoopOutcome,
     ModelReply,
     run_agent_loop,
 )
-from bq.core import Clock, SystemClock
-from bq.llm_service import CompletionOutcome, LLMService
+from bq.core import Clock, SystemClock, utc
+from bq.llm_service import CompletionOutcome
+from bq.model_router import ModelRouter, RouteUse
 from bq.settings import SettingsStore
 from bq.tools.base import Tool
 from bq.tools.control import ResponseTool, UnknownTool
@@ -38,47 +46,23 @@ from bq.tools.registry import AgentToolPolicy, ToolRegistry, ToolRunner
 AGENT_ID = "research"
 MAX_TURNS = 10
 
-_SYSTEM_PROMPT = """\
-You are the BharatQuant research agent for Indian equity markets. You are a \
-paper-only research assistant: you never place orders and you never give \
-investment advice as a certainty.
 
-You work by calling tools, one turn at a time. On each turn reply with EXACTLY \
-one JSON object and nothing else — no prose, no markdown fences:
-
-    {"tool_name": "<tool>", "tool_args": {<arguments>}}
-
-Rules:
-- Use only the tools listed below, with the exact names shown.
-- Read tool output carefully; it is real data, cite it plainly, do not invent numbers.
-- Prefer specific tools over guessing. If a user names a company, resolve its \
-  Yahoo symbol (e.g. RELIANCE.NS, TCS.NS, INFY.NS, HDFCBANK.NS).
-- When you have enough for a useful, concise answer, call `response` with a \
-  tight, well-structured summary. If data is missing or a tool failed, say so \
-  rather than fabricating.
-- Keep going until you call `response`; do not stop mid-investigation.
-"""
-
-_FINAL_TEMPLATE = """\
-Task: {task}
-
-Conversation so far:
-{history}
-
-Reply with the next single JSON tool call now."""
-
-
-class ModelService(Protocol):
-    """The slice of ``LLMService`` the agent needs. Tests inject a fake."""
+class RouterLike(Protocol):
+    """The slice of ``ModelRouter`` the agent needs. Tests inject a fake."""
 
     def complete(
         self,
+        agent_id: str,
         *,
         prompt: str,
         system: str = "",
         task_id: str = ...,
         task_version: str = ...,
+        timeout: float | None = None,
     ) -> CompletionOutcome: ...
+
+    @property
+    def routes_used(self) -> tuple[RouteUse, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,15 +90,17 @@ class ResearchAgent:
         *,
         clock: Clock | None = None,
         feed_url: str,
-        service: ModelService | None = None,
+        router: RouterLike | None = None,
+        prompts: PromptSource | None = None,
+        run_store: AgentRunStore | None = None,
         transport: object = None,
     ) -> None:
         self.path = path
         self.clock = clock or SystemClock()
         self.feed_url = feed_url
-        self.service: ModelService = service or LLMService(
-            SettingsStore(path, self.clock)
-        )
+        self.router: RouterLike = router or ModelRouter(SettingsStore(path, self.clock))
+        self.prompts = prompts
+        self.run_store = run_store
         self.transport = transport
 
     def tools(self) -> tuple[Tool, ...]:
@@ -150,11 +136,15 @@ class ResearchAgent:
                 f"{getattr(entry, 'role', '')}: {getattr(entry, 'content', '')}"
                 for entry in history
             ]
-            prompt = _FINAL_TEMPLATE.format(task=task, history="\n\n".join(entries))
-            system = _SYSTEM_PROMPT + "\n\n" + runner.tools_prompt()
-            outcome = self.service.complete(
+            system, template = resolve_prompt(
+                self.prompts, AGENT_ID, RESEARCH_SYSTEM, RESEARCH_TEMPLATE
+            )
+            prompt = template.format(task=task, history="\n\n".join(entries))
+            system_text = system + "\n\n" + runner.tools_prompt()
+            outcome = self.router.complete(
+                AGENT_ID,
                 prompt=prompt,
-                system=system,
+                system=system_text,
                 task_id="research.agent",
                 task_version="v1",
             )
@@ -180,20 +170,46 @@ class ResearchAgent:
         )
         return turn
 
-    def _config(self) -> object:
-        store = getattr(self.service, "store", None)
-        if store is None:
+    def _last_route(self) -> RouteUse | None:
+        routes = getattr(self.router, "routes_used", ())
+        if not routes:
             return None
-        return store.load()
+        return routes[-1]
 
     def run(self, task: str, *, max_turns: int = MAX_TURNS) -> ResearchRun:
         runner = self.runner()
-        config = self._config()
         turn = self._model_turn(runner)
+        started_at = utc(self.clock.now())
         outcome: LoopOutcome = run_agent_loop(
             task=task, runner=runner, model_turn=turn, max_turns=max_turns
         )
         input_tokens, output_tokens = turn.usage()  # type: ignore[attr-defined]
+        route = self._last_route()
+        provider = "" if route is None else route.provider
+        model = "" if route is None else route.model
+        if self.run_store is not None:
+            self.run_store.record(
+                agent_id=AGENT_ID,
+                task=task,
+                final_text=outcome.final_text,
+                turns=outcome.turns,
+                stopped=outcome.stopped,
+                provider=provider,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                steps=tuple(
+                    AgentRunStep(
+                        turn=step.turn,
+                        kind=step.kind,
+                        tool=step.tool,
+                        arguments=dict(step.arguments),
+                        output=step.output,
+                    )
+                    for step in outcome.steps
+                ),
+                started_at=started_at,
+            )
         return ResearchRun(
             task=task,
             final_text=outcome.final_text,
@@ -201,8 +217,8 @@ class ResearchAgent:
             stopped=outcome.stopped,
             tool_calls=outcome.tool_calls,
             steps=outcome.steps,
-            provider=getattr(getattr(config, "provider", None), "value", ""),
-            model=str(getattr(config, "model_name", "")),
+            provider=provider,
+            model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )

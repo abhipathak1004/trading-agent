@@ -6,18 +6,16 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from bq.analysis.wiring import build_analysis_router
-from bq.campaign import CampaignService
 from bq.infra.job_worker import JobHandler
 from bq.infra.jobs import JobRun
 from bq.logbook import configure_logbook
 from bq.memory import EpisodicMemoryStore, OutcomeResolver
-from bq.news_agent import NewsResearchAgent
 from bq.paper_square_off import PaperSquareOff
 from bq.paper_stops import PaperStopStore
 from bq.reports.engine import ReportEngine
 from bq.reports.store import ReportStore
+from bq.services import build_services
 from bq.settings import SettingsStore
-from bq.triggers import TriggerEngine
 
 MEMORY_RESOLVE_JOB = "memory.resolve"
 NEWS_INGEST_JOB = "news.ingest"
@@ -35,6 +33,8 @@ DEFAULT_RESOLVE_MAX_EPISODES = 50
 def build_job_handlers(
     database_path: Path, settings: SettingsStore
 ) -> dict[str, JobHandler]:
+    services = build_services(database_path, settings)
+
     def resolve_memory(run: JobRun) -> dict[str, object]:
         config = settings.load()
         router = build_analysis_router(database_path, config)
@@ -48,10 +48,7 @@ def build_job_handlers(
 
     def ingest_news(_run: JobRun) -> dict[str, object]:
         config = settings.load()
-        report = NewsResearchAgent(
-            database_path,
-            feed_url=config.news_feed_url,
-        ).run(memory_ttl_days=config.news_memory_ttl_days)
+        report = services.news_agent().run(memory_ttl_days=config.news_memory_ttl_days)
         return {
             "source_id": report.source_id,
             "fetched": report.fetched,
@@ -96,17 +93,13 @@ def build_job_handlers(
         return report.to_dict()
 
     def campaign_research(run: JobRun) -> dict[str, object]:
-        campaign = CampaignService(database_path, settings).research(
+        campaign = services.campaign_service().research(
             as_of=run.scheduled_at, force=True
         )
         return campaign.to_dict()
 
     def campaign_triggers(run: JobRun) -> dict[str, object]:
-        return (
-            TriggerEngine(database_path, settings)
-            .scan(as_of=run.scheduled_at)
-            .to_dict()
-        )
+        return services.trigger_engine().scan(as_of=run.scheduled_at).to_dict()
 
     def flush_logs(_run: JobRun) -> dict[str, object]:
         config = settings.load().logging

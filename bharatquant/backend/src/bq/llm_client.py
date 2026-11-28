@@ -210,6 +210,10 @@ class OpenAICompatClient:
             if endpoint.rstrip("/").endswith("/chat/completions")
             else f"{endpoint.rstrip('/')}/chat/completions"
         )
+        # A loopback endpoint is a local model server (e.g. Ollama). Ask it not
+        # to generate chain-of-thought: reasoning burns the token budget before
+        # any answer and dilutes strict JSON. Hosted providers keep their default.
+        self._loopback = loopback_http
         self.transport = transport
 
     def complete(
@@ -231,6 +235,8 @@ class OpenAICompatClient:
             "temperature": 0.2,
             "stream": False,
         }
+        if self._loopback:
+            body["reasoning_effort"] = "none"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",

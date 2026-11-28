@@ -35,6 +35,23 @@ export type AgentRun = {
   output_tokens: number | null;
 };
 
+export type AgentRunHistoryItem = {
+  run_id: string;
+  agent_id: string;
+  task: string;
+  final_text: string;
+  turns: number;
+  stopped: boolean;
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  started_at: string;
+  finished_at: string;
+};
+
+export type AgentRunDetail = AgentRunHistoryItem & { steps: AgentStep[] };
+
 function parseToolSpec(value: unknown): AgentToolSpec {
   if (
     !isRecord(value) ||
@@ -128,4 +145,56 @@ export function parseAgentRun(value: unknown): AgentRun {
     input_tokens: value.input_tokens as number | null,
     output_tokens: value.output_tokens as number | null,
   };
+}
+
+function parseHistoryItem(value: unknown): AgentRunHistoryItem {
+  if (
+    !isRecord(value) ||
+    typeof value.run_id !== "string" ||
+    value.run_id.length === 0 ||
+    typeof value.agent_id !== "string" ||
+    typeof value.task !== "string" ||
+    typeof value.final_text !== "string" ||
+    !isCount(value.turns) ||
+    typeof value.stopped !== "boolean" ||
+    typeof value.provider !== "string" ||
+    typeof value.model !== "string" ||
+    (value.input_tokens !== null && !isCount(value.input_tokens)) ||
+    (value.output_tokens !== null && !isCount(value.output_tokens)) ||
+    typeof value.started_at !== "string" ||
+    !Number.isFinite(Date.parse(value.started_at)) ||
+    typeof value.finished_at !== "string" ||
+    !Number.isFinite(Date.parse(value.finished_at))
+  ) {
+    throw new Error("Invalid agent run history item");
+  }
+  return {
+    run_id: value.run_id,
+    agent_id: value.agent_id,
+    task: value.task,
+    final_text: value.final_text,
+    turns: value.turns,
+    stopped: value.stopped,
+    provider: value.provider,
+    model: value.model,
+    input_tokens: value.input_tokens as number | null,
+    output_tokens: value.output_tokens as number | null,
+    started_at: value.started_at,
+    finished_at: value.finished_at,
+  };
+}
+
+export function parseAgentRunHistory(value: unknown): AgentRunHistoryItem[] {
+  if (!isRecord(value) || !Array.isArray(value.runs)) {
+    throw new Error("Invalid agent run history");
+  }
+  return value.runs.map(parseHistoryItem);
+}
+
+export function parseAgentRunDetail(value: unknown): AgentRunDetail {
+  const item = parseHistoryItem(value);
+  if (!isRecord(value) || !Array.isArray(value.steps)) {
+    throw new Error("Invalid agent run detail");
+  }
+  return { ...item, steps: value.steps.map(parseStep) };
 }

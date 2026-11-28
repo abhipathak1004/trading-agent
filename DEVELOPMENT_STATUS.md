@@ -6,6 +6,18 @@ task. History lives in git and
 
 ## Current state
 
+- **Agent harness unification (28 Nov 2026):** every agent now shares one
+  config-driven harness. `ResearchAgent` routes through `ModelRouter` (so a
+  promoted local model in Model Evals actually applies to the Agent Console),
+  `research`/`news_research` prompts are editable from the Agent Lab, a new
+  `GET /api/v1/agents` catalogue drives one tab per agent, loop-agent runs are
+  persisted (`agent_runs`/`agent_run_steps`, migration **040**) with history in
+  the Agent Console, and `bq/services.py` centralizes wiring for the scheduler.
+  **ADR-048 is implemented:** `ModelRouter.complete` sends any call naming a
+  registered `TaskDefinition` through `LLMGateway` (manifest, schema validation,
+  citation check, attempt record); generic text keeps the synthetic route path.
+  No task definitions are seeded yet, so production behaviour is unchanged until
+  one is registered.
 - **Model Evals tab (28 Nov 2026):** a new **Build → Model Evals** page benchmarks
   local Apple Silicon LLMs (Gemma 4 12B, Qwen3.5-9B, Granite 4.2 8B) against the
   50-case trading golden set via Promptfoo. Migration **039** adds `eval_runs` +
@@ -159,15 +171,16 @@ task. History lives in git and
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
   execution/realism, memory, confidence, opportunities/shadows, scheduler,
   reports, backtests, research dossiers and runtime hardening.
-- **Verification:** 986 backend tests, 139 frontend tests; ruff/format clean;
-  frontend typecheck/build clean; new `bq/evals` is mypy-clean; a fresh DB applies
-  **39 migrations** (`039` is the Model Evals migration). Three real local sweeps
-  and a live promote completed end to end (see Model Evals above).
+- **Verification:** 1000 backend tests pass (2 pre-existing failures unchanged),
+  141 frontend tests; ruff/format clean; frontend typecheck/build clean; new
+  `bq/evals` is mypy-clean; a fresh DB applies **40 migrations** (`040` is the
+  agent-runs migration). Three real local sweeps and a live promote completed
+  end to end (see Model Evals above).
 - **mypy:** pre-existing errors remain in `cli.py`, `triggers.py`, `campaign.py`,
   `campaign_feedback.py`, `catalysts.py`, `reports/engine.py`,
   `infra/scheduler.py` and some test fakes. Do not “fix” them as part of
   maintenance; the Model Evals change adds none.
-- **Next migration number:** `040` if a new migration is needed.
+- **Next migration number:** `041` if a new migration is needed.
 - **Known pre-existing test failures:** `test_logbook` (filename is hard-coded to a
   date, breaks off that day) and `test_phase5_acceptance` (produces no paper plan).
   Both fail without this change too; do not attribute them to Model Evals.

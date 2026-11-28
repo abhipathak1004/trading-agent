@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import TableScroll from "./TableScroll";
 
+import { parseAgentCatalogue } from "./agentCatalogueContract";
+import type { AgentCatalogueItem } from "./agentCatalogueContract";
 import { parseDecisionPreview } from "./decisionContract";
 import type { DecisionPreview } from "./decisionContract";
 import { parsePrompt, parsePromptList } from "./promptsContract";
@@ -20,6 +22,10 @@ type SaveState =
   | { state: "idle" | "saving" }
   | { state: "saved"; message: string }
   | { state: "failed"; message: string };
+
+type CatalogueLoad =
+  | { state: "loading" | "error" }
+  | { state: "ready"; agents: AgentCatalogueItem[] };
 
 function formatValue(value: string | number): string {
   if (typeof value === "number") {
@@ -51,6 +57,8 @@ export default function AgentLabPanel({ csrfToken }: { csrfToken: string }) {
   const [system, setSystem] = useState("");
   const [template, setTemplate] = useState("");
   const [promptSave, setPromptSave] = useState<SaveState>({ state: "idle" });
+  const [catalogue, setCatalogue] = useState<CatalogueLoad>({ state: "loading" });
+  const [catalogueRetry, setCatalogueRetry] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -83,6 +91,28 @@ export default function AgentLabPanel({ csrfToken }: { csrfToken: string }) {
     // agentId is intentionally read once per load; selection is user-driven.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [promptRetry]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadCatalogue() {
+      try {
+        const response = await fetch("/api/v1/agents", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error("Agent catalogue unavailable");
+        }
+        setCatalogue({ state: "ready", agents: parseAgentCatalogue(await response.json()) });
+      } catch {
+        if (!controller.signal.aborted) {
+          setCatalogue({ state: "error" });
+        }
+      }
+    }
+    void loadCatalogue();
+    return () => controller.abort();
+  }, [catalogueRetry]);
 
   const prompts = promptLoad.state === "ready" ? promptLoad.prompts : [];
   const selected = prompts.find((prompt) => prompt.agent_id === agentId) ?? null;
@@ -365,6 +395,67 @@ export default function AgentLabPanel({ csrfToken }: { csrfToken: string }) {
           <p className="auth-error" role="alert">
             {promptSave.message}
           </p>
+        )}
+      </section>
+
+      <section className="settings-panel" aria-labelledby="agent-catalogue-title">
+        <h2 id="agent-catalogue-title">Agent catalogue</h2>
+        <p className="panel-note">
+          One entry per agent, with its resolved model route. The prompt editor
+          above edits the editable agents; decision batteries are code-owned.
+        </p>
+
+        {catalogue.state === "loading" && <p role="status">Loading agents...</p>}
+        {catalogue.state === "error" && (
+          <p role="alert">
+            Agent catalogue is unavailable.{" "}
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                setCatalogue({ state: "loading" });
+                setCatalogueRetry((value) => value + 1);
+              }}
+            >
+              Retry
+            </button>
+          </p>
+        )}
+
+        {catalogue.state === "ready" && (
+          <TableScroll label="Agent catalogue">
+            <table className="judgment-table">
+              <thead>
+                <tr>
+                  <th scope="col">Agent</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">Default tier</th>
+                  <th scope="col">Resolved route</th>
+                  <th scope="col">Prompt</th>
+                  <th scope="col">Tools</th>
+                </tr>
+              </thead>
+              <tbody>
+                {catalogue.agents.map((agent) => (
+                  <tr key={agent.agent_id}>
+                    <th scope="row">
+                      <div>{agent.label}</div>
+                      <div>{agent.agent_id}</div>
+                    </th>
+                    <td>{agent.kind}</td>
+                    <td>{agent.tier}</td>
+                    <td>
+                      {agent.route.configured
+                        ? `${agent.route.provider ?? "?"} · ${agent.route.model ?? "?"}`
+                        : `${agent.route.tier} (not configured)`}
+                    </td>
+                    <td>{agent.prompt_id ?? "—"}</td>
+                    <td>{agent.tools.length > 0 ? agent.tools.join(", ") : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         )}
       </section>
     </>

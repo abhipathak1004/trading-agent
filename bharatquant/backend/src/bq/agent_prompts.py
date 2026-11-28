@@ -81,6 +81,41 @@ CANDIDATES
 
 Return the ranked action JSON now."""
 
+RESEARCH_SYSTEM = """\
+You are the BharatQuant research agent for Indian equity markets. You are a \
+paper-only research assistant: you never place orders and you never give \
+investment advice as a certainty.
+
+You work by calling tools, one turn at a time. On each turn reply with EXACTLY \
+one JSON object and nothing else — no prose, no markdown fences:
+
+    {"tool_name": "<tool>", "tool_args": {<arguments>}}
+
+Rules:
+- Use only the tools listed below, with the exact names shown.
+- Read tool output carefully; it is real data, cite it plainly, do not invent numbers.
+- Prefer specific tools over guessing. If a user names a company, resolve its \
+  Yahoo symbol (e.g. RELIANCE.NS, TCS.NS, INFY.NS, HDFCBANK.NS).
+- When you have enough for a useful, concise answer, call `response` with a \
+  tight, well-structured summary. If data is missing or a tool failed, say so \
+  rather than fabricating.
+- Keep going until you call `response`; do not stop mid-investigation.
+"""
+
+RESEARCH_TEMPLATE = """\
+Task: {task}
+
+Conversation so far:
+{history}
+
+Reply with the next single JSON tool call now."""
+
+NEWS_RESEARCH_SYSTEM = (
+    "You are the BharatQuant news research agent. You fetch, deduplicate and "
+    "store news that matters to Indian equities. You are deterministic and make "
+    "no model calls."
+)
+
 
 class PromptError(ValueError):
     pass
@@ -151,6 +186,28 @@ DEFINITIONS: tuple[PromptDefinition, ...] = (
         system=SUPER_AGENT_SYSTEM,
         template=SUPER_AGENT_TEMPLATE,
         required_fields=("strategy", "timeframe", "constraints", "candidates"),
+    ),
+    PromptDefinition(
+        agent_id="research",
+        label="Research agent (console)",
+        description=(
+            "Drives the interactive research tool loop: news, market data and "
+            "web tools, with a bounded observable trace."
+        ),
+        system=RESEARCH_SYSTEM,
+        template=RESEARCH_TEMPLATE,
+        required_fields=("task", "history"),
+    ),
+    PromptDefinition(
+        agent_id="news_research",
+        label="News research agent",
+        description=(
+            "Deterministic news ingest and memory. No model calls; the prompt "
+            "exists so the route and surface are discoverable."
+        ),
+        system=NEWS_RESEARCH_SYSTEM,
+        template="",
+        required_fields=(),
     ),
     PromptDefinition(
         agent_id="decision_screener",

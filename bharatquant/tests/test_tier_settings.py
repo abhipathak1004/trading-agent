@@ -89,6 +89,7 @@ def test_defaults_keep_the_legacy_route_and_preview_heuristic(tmp_path: Path) ->
     assert config.tier(TierName.DECISION).model == "jev-1.14.0"  # type: ignore[union-attr]
     assert config.decision_preview == "heuristic"
     assert config.route_for("bull_debater").tier is TierName.REASONING
+    assert config.route_for("research").tier is TierName.FLASH
     assert config.route_for("unknown_agent").tier is TierName.REASONING
 
 

@@ -23,7 +23,7 @@ export type AgentDoc = {
   limits: string[];
 };
 
-export const GUIDE_REVIEWED = "2026-11-26";
+export const GUIDE_REVIEWED = "2026-11-28";
 
 export const GUIDE_SECTIONS: DocSection[] = [
   {
@@ -36,7 +36,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       },
       {
         kind: "p",
-        text: "The product is organised around the workspace sidebar: Daily (Today, Opportunities, Trade), Analyze (Research, Technical, Reports), Build (Strategy, Agent Lab), Operate (Data, Schedules) and System (Settings, How to use). This guide documents each tab, then explains every agent in detail, and finishes with the model-routing rules, a glossary and the guardrails.",
+        text: "The product is organised around the workspace sidebar: Daily (Today, Opportunities, Trade), Analyze (Research, Technical, Reports), Build (Strategy, Agent Lab, Model Evals), Operate (Data, Schedules) and System (Settings, How to use). This guide documents each tab, then explains every agent in detail, and finishes with the model-routing rules, a glossary and the guardrails.",
       },
       {
         kind: "note",
@@ -153,16 +153,17 @@ export const GUIDE_SECTIONS: DocSection[] = [
       { kind: "subheading", text: "Research agent" },
       {
         kind: "p",
-        text: "Ask a question in plain language, for example about long-term news risks, RBI decisions or a specific ticker. The agent is a bounded tool loop: it chooses a tool, reads the result, and repeats until it writes a final answer. The card shows the provider and model in use, the tool list (write-capable tools are tagged), the answer, token usage, the number of turns and a full step trace of every tool call and its output.",
+        text: "Ask a question in plain language, for example about long-term news risks, RBI decisions or a specific ticker. The agent is a bounded tool loop: it chooses a tool, reads the result, and repeats until it writes a final answer. It resolves its model through the same per-agent routing as every other agent (the research agent is on the flash tier by default), so a model you promote for research is the model the console actually uses. Its system prompt and user template are editable in Agent Lab.",
       },
       {
         kind: "list",
         items: [
+          "The header shows the resolved provider and model plus the tool list; write-capable tools are tagged.",
           "Tools include news search, news memory, news digest and ingest, stock quotes, historical bar download, and HTTPS-only web fetch.",
           "Mutation is allowed for ingest and download; there is no order or broker tool anywhere in the registry, so the agent structurally cannot trade.",
           "The UI caps the task at 4,000 characters and requests at most 10 turns; the runtime enforces its own hard turn and history limits.",
-          "If no provider, key or model is configured, the input is disabled and you are sent to Settings. With a model configured, this agent does make real provider calls.",
-          "The final answer is rendered as plain text; the step trace is the auditable record of how it got there.",
+          "If the research route is not configured, the input is disabled and you are sent to Settings. With a model configured, this agent does make real provider calls.",
+          "Every completed run is saved; History lists past runs and expands one to show its persisted step trace. The final answer is rendered as plain text.",
         ],
       },
       { kind: "subheading", text: "Technical analysis (single symbol)" },
@@ -213,7 +214,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
     blocks: [
       {
         kind: "p",
-        text: "Agent Lab is where you test the decision agent and edit the prompts used by the analysis agents. Testing and refining only; it never trades.",
+        text: "Agent Lab is where you test the decision agent, edit the prompts used by every model-backed agent, and read the catalogue of agents with the model route each one currently resolves. Testing and refining only; it never trades.",
       },
       { kind: "subheading", text: "Decision agent preview" },
       {
@@ -242,7 +243,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       { kind: "subheading", text: "Agent prompts" },
       {
         kind: "p",
-        text: "Edits the instructions for six agent prompts: the bull advocate, the bear advocate, the research judge, the risk analyst, the Super Agent (CIO) and the decision screener. Each prompt has a system message and, where applicable, a user template with required placeholders. Saving appends an immutable new version; resetting restores the code default as a new version. The JSON contracts, numeric thresholds and risk gates stay in code and cannot be changed from the editor.",
+        text: "Edits the instructions for eight agent prompts: the bull advocate, the bear advocate, the research judge, the risk analyst, the Super Agent (CIO), the research agent console, the news research agent and the decision screener. Each prompt has a system message and, where applicable, a user template with required placeholders. Saving appends an immutable new version; resetting restores the code default as a new version. The JSON contracts, numeric thresholds and risk gates stay in code and cannot be changed from the editor.",
       },
       {
         kind: "facts",
@@ -252,8 +253,19 @@ export const GUIDE_SECTIONS: DocSection[] = [
           { label: "Research judge", value: "Placeholders: symbol, timeframe, as_of, confidence_ceiling, facts, bull, bear." },
           { label: "Risk analyst", value: "Placeholders: symbol, timeframe, as_of, facts." },
           { label: "Super Agent (CIO)", value: "Placeholders: strategy, timeframe, constraints, candidates." },
+          { label: "Research agent (console)", value: "Placeholders: task, history. Edits the tool-loop agent's system prompt and next-turn template." },
+          { label: "News research agent", value: "System prompt only. The agent is deterministic and makes no model calls today." },
           { label: "Decision screener", value: "System prompt only. The question set and answer types are code-owned." },
         ],
+      },
+      { kind: "subheading", text: "Agent catalogue" },
+      {
+        kind: "p",
+        text: "The catalogue lists every agent the harness knows (loop, DAG node, decision battery, coordinator and deterministic), and shows for each one its kind, default tier, resolved provider and model, whether that route is configured, whether it has an editable prompt and which tools it may use. It is read-only and is filled from the same catalogue the backend exposes, so it cannot drift from what the run will actually use.",
+      },
+      {
+        kind: "note",
+        text: "The catalogue shows the route, not a promise that the route works: a tier with no key, or a local endpoint that is down, still shows as configured until a call is attempted. Model spend happens only when you run something.",
       },
     ],
   },
@@ -279,6 +291,29 @@ export const GUIDE_SECTIONS: DocSection[] = [
       {
         kind: "note",
         text: "Optionally select a procedural playbook; its guidance is passed to the Super Agent with its id, name and version. A playbook can shape emphasis and ranking commentary but cannot change thresholds or risk. At most eight symbols and ten positions per run; execution is sequential. The Super Agent prompt is editable in Agent Lab, but the cash gate, position cap, sizing and risk rules are code-owned.",
+      },
+    ],
+  },
+  {
+    id: "model-evals",
+    title: "Model Evals tab",
+    blocks: [
+      {
+        kind: "p",
+        text: "Model Evals benchmarks local Apple Silicon models against the trading golden set through Promptfoo. Start a sweep, watch it run, review the per-model scorecard, then promote a winner for a role.",
+      },
+      {
+        kind: "list",
+        items: [
+          "One run is active at a time; a second start is refused with a 409. Runs are sequential because one local model occupies memory at a time.",
+          "The scorecard shows overall and task accuracy, JSON parse rate, p50/p95 latency, Brier score and calibration error for each model and category.",
+          "Promoting a winner writes that role's agent route (for example research or news_research) and mirrors a readable config file; SQLite remains the source of truth.",
+          "A local OpenAI-compatible endpoint may be keyless, and the runner uses the Promptfoo bundle in the repository's evals directory.",
+        ],
+      },
+      {
+        kind: "note",
+        text: "The sweep runs a local process. A non-zero exit code can mean some cases failed rather than that the run crashed; the result file is still scored when it exists.",
       },
     ],
   },
@@ -322,12 +357,12 @@ export const GUIDE_SECTIONS: DocSection[] = [
           "Run now enqueues one durable job and returns it as PENDING; the worker executes it later. Repeating the same idempotency key returns the original run.",
           "Dry run validates the saved schedule and enqueues nothing.",
           "Disabled schedules do not dispatch. Missed runs are recorded, never back-filled with hindsight.",
-          "The catalogue currently contains memory.resolve and news.ingest.",
+          "The catalogue contains memory.resolve, news.ingest, campaign.research, campaign.triggers, report.morning, report.evening_accuracy, paper.stops, paper.square_off and logs.flush.",
         ],
       },
       {
         kind: "note",
-        text: "The Schedules page does not execute handlers inside the browser request and cannot place orders. Report jobs arrive in the next phase and will use the same catalogue and worker.",
+        text: "The Schedules page does not execute handlers inside the browser request and cannot place orders. Reports, the catalyst campaign, paper stops/square-off and log flush all use the same catalogue and worker.",
       },
     ],
   },
@@ -388,7 +423,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       {
         kind: "list",
         items: [
-          "Model provider: Gemini, DeepSeek, OpenAI or a custom OpenAI-compatible provider.",
+          "Model provider: Gemini, DeepSeek, OpenAI or a custom OpenAI-compatible endpoint, including a local server such as Ollama. Loopback HTTP is allowed, and reasoning is disabled for loopback endpoints so a local model answers directly instead of spending its budget on chain-of-thought.",
           "Model name: the model identifier passed to that provider.",
           "News feed URL: must be HTTPS and must not contain embedded credentials.",
           "Long-term memory retention: 1 to 3,650 days; memories older than this are eligible for pruning.",
@@ -418,7 +453,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
         rows: [
           { label: "Decision-tier agents", value: "watchlist_screener, news_triage, evidence_verifier, final_decision_gate." },
           { label: "Reasoning-tier agents", value: "bull_debater, bear_debater, research_judge, super_agent_cio, reflection_writer." },
-          { label: "Flash-tier agents", value: "news_research, fundamental_events, market_regime, technical_analyst, risk_analyst." },
+          { label: "Flash-tier agents", value: "research, news_research, fundamental_events, market_regime, technical_analyst, risk_analyst." },
         ],
       },
       {
@@ -428,7 +463,7 @@ export const GUIDE_SECTIONS: DocSection[] = [
       { kind: "subheading", text: "Configuration overview" },
       {
         kind: "p",
-        text: "A read-only summary of registered task definitions, schedules, model usage groups, the resolved model route, configured API-key count and the research-agent feed and retention. The task-definition list is empty unless tasks have been registered in the backend; choosing models for individual tasks is not implemented in this UI.",
+        text: "A read-only summary of registered task definitions, schedules, model usage groups, the resolved model route, configured API-key count and the research-agent feed and retention. A registered task definition governs any model call that names it: the reply is validated against the task's output schema in the offline gateway, and a citation-bearing task checks the cited records, before the attempt is counted. The task-definition list is empty until tasks are registered in the backend; choosing models per task is still not implemented in this UI.",
       },
       { kind: "subheading", text: "Model usage" },
       {
@@ -448,7 +483,11 @@ export const GUIDE_SECTIONS: DocSection[] = [
     blocks: [
       {
         kind: "p",
-        text: "Every model-backed agent is mapped to a tier, and the tier supplies the provider and model. The debate agents receive a routed caller that maps their task ids to agent ids, so the run ledger can record each call. If no tier is configured but a single legacy provider and model are set, the analysis agents fall back to that single model with no per-call routing.",
+        text: "Every model-backed agent is mapped to a tier, and the tier supplies the provider and model. This includes the interactive research agent (flash by default) as well as the debate, risk and coordinator agents, so promoting a model for a role changes the next call for that role. The routed callers map their task ids to agent ids, so the run ledger records each call, and Agent Lab's catalogue shows the resolved route for every agent. If no tier is configured but a single legacy provider and model are set, the analysis agents fall back to that single model with no per-call routing.",
+      },
+      {
+        kind: "p",
+        text: "When a call names a registered task definition, the offline gateway governs it: the reply is validated against the task's output schema, a citation path checks the cited records against the point-in-time store, and only then is a model attempt recorded. Calls with no registered task (the generic text path and the research loop's tool turns) stay on the direct route. No task definitions are seeded by default, so this governance activates only once one is registered.",
       },
       {
         kind: "p",
@@ -522,7 +561,9 @@ export const GUIDE_SECTIONS: DocSection[] = [
         kind: "facts",
         rows: [
           { label: "Service offline", value: "Start the local BharatQuant service, then press Retry in the status strip." },
-          { label: "Research agent disabled", value: "Set a provider, an API key and a model name in Settings. Without all three the agent cannot run." },
+          { label: "Research agent disabled", value: "The research route is not configured. Set the flash tier (or the research agent's route) and its provider key in Settings → Models & keys." },
+          { label: "Local model rambles or returns empty", value: "Point the custom endpoint at the OpenAI-compatible base (for example http://127.0.0.1:11434/v1). Loopback endpoints disable reasoning automatically; a hosted endpoint keeps its own default." },
+          { label: "Agent catalogue shows a route as not configured", value: "The resolved tier has no provider or model, or its provider has no key. Fix the tier in Settings → Models & keys." },
           { label: "Snapshot unavailable", value: "Check the record ID exists and was retained at the requested as-of time. Invalid thresholds or inconsistent timestamps return a validation error." },
           { label: "Decision preview falls back", value: "No Jev key, the decision route does not allow Jev, or the decision tier is not configured for Jev. The route panel names the source actually used." },
           { label: "Prompt save rejected", value: "A required placeholder is missing, the template does not format, or it contains control characters. Restore the required placeholders and try again." },
@@ -540,24 +581,24 @@ export const AGENT_DOCS: AgentDoc[] = [
     name: "Analysis orchestrator",
     role: "Deterministic pipeline (no model)",
     summary:
-      "Runs the nine-node analysis graph for one symbol and produces either a validated trade plan or an explicit no-plan result. It is the backbone behind the Technical tab, the single-symbol analysis and the decision preview.",
+      "Runs the fourteen-node analysis graph for one symbol and produces either a validated trade plan or an explicit no-plan result. The graph gathers data and point-in-time specialists, scores the chart, runs the bull/bear/judge/risk agents, sizes and builds the plan, then passes it through the final gate and the confidence engine. It is the backbone behind the Technical tab, the single-symbol analysis and the decision preview.",
     inputs: [
       "Symbol, timeframe (swing or intraday), equity and available cash in paise, risk in basis points.",
       "Optional as-of instant for point-in-time runs.",
     ],
     outputs: [
-      "Technical report, optional trade plan, mode (FULL or RULES_ONLY), per-node trace, vetoes, notes and model-routing ledger.",
-      "A degraded node is recorded rather than raised, so one model outage cannot skip sizing or decision.",
+      "Technical report, optional trade plan, mode (FULL or RULES_ONLY), per-node trace, specialist briefs, evidence verification, final gate, confidence assessment, vetoes, notes and model-routing ledger.",
+      "A degraded optional node is recorded rather than raised, so one model outage cannot skip sizing or decision.",
     ],
-    model: "No model. It orchestrates deterministic nodes and optional model-backed nodes.",
+    model: "No model itself. It orchestrates deterministic nodes and optional model-backed nodes.",
     tools: [
       "Read-only vendor router: daily bars, live quotes, intraday bars and indices.",
-      "News is a placeholder node today and contributes no facts.",
+      "Point-in-time news store for the news, fundamental-event and evidence agents.",
     ],
     limits: [
       "Emits a plan only; never places an order.",
       "Only long BUY is supported.",
-      "The news-context node is not wired in this build.",
+      "A failed required node fails the run; an optional specialist, debate or gate node degrades and is visible in the trace.",
     ],
   },
   {
@@ -695,9 +736,15 @@ export const AGENT_DOCS: AgentDoc[] = [
     role: "Tool-using model loop",
     summary:
       "Answers a research question by calling tools one turn at a time and writing a final answer, while exposing every step it took.",
-    inputs: ["A task of up to 4,000 characters, and up to 10 turns requested from the UI."],
-    outputs: ["Final text, a list of steps, tool calls, stop reason and token usage."],
-    model: "The single configured research model, not the tier router. No deterministic fallback: unconfigured returns 409, provider failure returns 502.",
+    inputs: [
+      "A task of up to 4,000 characters, and up to 10 turns requested from the UI.",
+      "A system prompt and next-turn template that are editable in Agent Lab.",
+    ],
+    outputs: [
+      "Final text, a list of steps, tool calls, stop reason and token usage.",
+      "Each completed run is persisted with its step trace and appears under History in the console.",
+    ],
+    model: "The per-agent router maps this agent to the research route (flash tier by default), so promoting a model for research changes the console too. No deterministic fallback: an unconfigured route returns 409 and a provider failure returns 502.",
     tools: [
       "News search, memory, digest and ingest.",
       "Quote and historical download.",
@@ -714,7 +761,7 @@ export const AGENT_DOCS: AgentDoc[] = [
     name: "Decision screener & battery",
     role: "Decision tier with a fallback ladder",
     summary:
-      "Answers a fixed battery of machine-checkable questions about a setup, such as direction, quality, whether deeper research is warranted and event risk. The first battery is the screener; news triage, evidence and the final gate are implemented but not yet exposed by a route.",
+      "Answers a fixed battery of machine-checkable questions about a setup, such as direction, quality, whether deeper research is warranted and event risk. The screener preview runs the first battery; the evidence and final-gate batteries run inside the analysis pipeline.",
     inputs: ["A compact deterministic decision state of at most 16 KiB, and the questions for the battery."],
     outputs: ["Typed answers with confidence, the source actually used, the route and the state hash."],
     model: "Ladder: Jev native, then flash, then reasoning, then the heuristic, then rules-only. Each source has a size multiplier.",
@@ -722,7 +769,7 @@ export const AGENT_DOCS: AgentDoc[] = [
     limits: [
       "Thresholds and answer types are code-owned, never prompt-owned.",
       "A decision cannot exceed the state it was given.",
-      "Only the screener battery is reachable from the UI today.",
+      "The screener is the only owner-triggered battery; the evidence and final-gate batteries run as pipeline nodes.",
     ],
   },
   {
@@ -761,6 +808,26 @@ export const AGENT_DOCS: AgentDoc[] = [
       "Downgrade-only: a blocked gate adds a veto and leaves the plan intact for inspection.",
       "No order is placed by the gate or the pipeline.",
       "Thresholds and sizing remain code-owned.",
+    ],
+  },
+  {
+    id: "confidence-engine",
+    name: "Confidence engine",
+    role: "Deterministic scoring (no model)",
+    summary:
+      "Scores a long candidate from evidence families and its symbol-scoped base rate, returning a probability and a level. It runs only when the pipeline produced a plan.",
+    inputs: [
+      "The technical report, the plan, the specialist briefs, the bars and the run's as-of.",
+    ],
+    outputs: [
+      "Probability, level, confirming families, EV/R, vetoes and the base-rate sample size.",
+      "A candidate with missing history or a failed mandatory family is discarded rather than guessed.",
+    ],
+    model: "No model. Confidence v1 is deterministic and deliberately narrow: structure, volume, momentum and market context.",
+    tools: ["Indicator output, specialist facts and the setup base-rate store."],
+    limits: [
+      "It ranks opportunities; it never places or sizes an order.",
+      "A base rate with no samples is shown as n=0 rather than treated as a probability.",
     ],
   },
   {

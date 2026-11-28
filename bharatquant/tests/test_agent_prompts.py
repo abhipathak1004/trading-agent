@@ -133,6 +133,23 @@ def test_prompt_validation_rejects_broken_templates(tmp_path: Path) -> None:
         store.save("bull_debater", system="x", template=BULL_TEMPLATE + "\n{")
 
 
+def test_research_and_news_prompts_round_trip(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    research = store.get("research")
+    assert research.required_fields == ("task", "history")
+    assert "task" in research.template and "history" in research.template
+    news = store.get("news_research")
+    assert news.template == ""
+    assert news.required_fields == ()
+
+    saved = store.save("research", system="CUSTOM", template="{task}\n\n{history}")
+    assert saved.version == 1
+    assert saved.system == "CUSTOM"
+    reset = store.reset("research")
+    assert reset.is_default is True
+    assert reset.system != "CUSTOM"
+
+
 def test_prompt_saves_are_audited_without_the_prompt_text(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.save("bull_debater", system="SECRET PROMPT TEXT", template=BULL_TEMPLATE)

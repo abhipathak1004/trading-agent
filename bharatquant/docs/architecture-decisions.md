@@ -1474,3 +1474,70 @@ telemetry with the audit contract.
 without touching immutable accounting or audit tables. Full prompts are stored in
 plain text under the local app-data directory, so the UI says so plainly. Losing
 logs cannot affect trading state or the audit chain.
+
+## ADR-048: The LLM gateway governs task-bearing calls; generic text bypasses it explicitly
+
+**Status:** Accepted; implemented by `bq/llm_gateway.py` and
+`ModelRouter.complete` (registered tasks delegate to the gateway; generic text
+keeps the synthetic route path). No task definitions are seeded yet, so the
+governed path activates only once one is registered.
+
+**Context:** `bq/llm_gateway.py` defines the intended authoritative offline
+boundary: it loads a registered `TaskDefinition`, applies `select_model`
+(ADR-005), persists the `BuiltContext` manifest, validates the output against the
+task schema, verifies citation versions against `DataRecordStore` (ADR-004), and
+records a `ModelAttempt`. Nothing in production currently calls it. Live calls go
+through two independent paths — `ModelRouter._complete_route` and
+`LLMService.complete` — each building a synthetic `ModelCandidate` and
+`TaskPolicy` inline and then calling `client.complete`. The schema, citation and
+manifest guarantees the gateway exists to enforce are therefore absent from every
+real call, and two nearly identical routing blocks can drift.
+
+**Decision:**
+
+- `LLMGateway` is the only path for *task-bearing* calls: any call that names a
+  registered `TaskDefinition` — the research dossier, evidence verification, the
+  final decision gate, confidence review, and any future task with a
+  `citation_path` or an output a deterministic gate consumes.
+- Those paths call `gateway.prepare(...)` → provider call →
+  `gateway.validate_output(...)` → the attempt recorded via
+  `gateway.complete(...)`. `ModelRouter` and `LLMService` delegate to the gateway
+  for them instead of constructing a `ModelCandidate`/`TaskPolicy` inline.
+- Generic text completion with no registered task keeps the current synthetic
+  route path (`select_model` + `client.complete`) and is documented as explicitly
+  un-manifested: the interactive research loop's tool turns, `POST /api/v1/llm/complete`,
+  and the debate/risk commentary that carries only bounded facts. `LLMService`
+  remains a thin helper for that path.
+- A task is registered only when its output is consumed by a deterministic gate
+  or produces citations. Commentary that cannot change a trade does not get a
+  manifest; output that can change a decision does.
+- The decision ladder (native Jev → text tiers → heuristic, ADR-017/018) is
+  unchanged. The gateway wraps the text-tier call, not the ladder.
+- `bq/services.py` builds the gateway alongside `ModelRouter` so the API, CLI and
+  scheduler share one instance.
+
+**Consequences:**
+
+- Decision-changing model output is schema-validated and citation-checked at one
+  choke point, with the manifest stored before the call, so "what did the model
+  see" stays answerable after the fact.
+- The task-definition registry grows deliberately: a new task-bearing agent must
+  register a `TaskDefinition` before it can reach a provider through the governed
+  path. That is the point.
+- Generic commentary stays cheap: no manifest, no citation lookup, no extra model
+  call. Deterministic arithmetic, sizing, gates and risk remain in code.
+- `tests/test_llm_gateway.py` extends to cover the delegated
+  `ModelRouter`/`LLMService` path; `tests/test_model_router.py` confirms generic
+  completion is unchanged.
+- Risk to manage: the gateway and the router must resolve eligibility from the
+  same configured candidates so a model allowed in one path is not silently
+  rejected in the other.
+
+**Alternatives rejected:**
+
+- *Retire the gateway and keep only the synthetic path* — loses the schema,
+  citation and manifest guarantees that ADR-004/005 promise for decision-bearing
+  calls.
+- *Force every call through a manifest* — adds cost and complexity to commentary
+  that cannot change a trade, contradicting the cost-first posture and the rule
+  that deterministic code owns the numbers.

@@ -24,12 +24,14 @@ from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from bq.agent_catalogue import catalogue_for
 from bq.agent_prompts import (
     MAX_PROMPT_CHARS,
     PromptError,
     PromptNotFound,
     PromptStore,
 )
+from bq.agent_run_store import AgentRunError, AgentRunStore
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.builder import build_analysis_pipeline
 from bq.analysis.decision import TradePlan, TradePlanError, trade_plan_from_json
@@ -999,12 +1001,70 @@ class AgentRunResponse(BaseModel):
     output_tokens: int | None
 
 
+class AgentRunHistoryItem(BaseModel):
+    run_id: str
+    agent_id: str
+    task: str
+    final_text: str
+    turns: int
+    stopped: bool
+    provider: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+    started_at: str
+    finished_at: str
+
+
+class AgentRunListResponse(BaseModel):
+    runs: list[AgentRunHistoryItem]
+
+
+class AgentRunDetailResponse(BaseModel):
+    run_id: str
+    agent_id: str
+    task: str
+    final_text: str
+    turns: int
+    stopped: bool
+    provider: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+    started_at: str
+    finished_at: str
+    steps: list[AgentStepStatus]
+
+
 class AgentStatus(BaseModel):
     agent_id: str
     configured: bool
     provider: str
     model: str
     tools: list[ToolSpecStatus]
+
+
+class AgentCatalogueRoute(BaseModel):
+    tier: str
+    provider: str | None
+    model: str | None
+    configured: bool
+
+
+class AgentCatalogueItem(BaseModel):
+    agent_id: str
+    kind: str
+    label: str
+    description: str
+    tier: str
+    prompt_id: str | None
+    tools: list[str]
+    read_only: bool
+    route: AgentCatalogueRoute
+
+
+class AgentCatalogueResponse(BaseModel):
+    agents: list[AgentCatalogueItem]
 
 
 class AnalysisRunRequest(BaseModel):
@@ -5170,11 +5230,49 @@ def create_app(
                 long_term_memories=report.long_term_memories,
             )
 
+        def _research_agent() -> ResearchAgent:
+            config = settings.load()
+            prompts = PromptStore(database_path)
+            return ResearchAgent(
+                database_path,
+                feed_url=config.news_feed_url,
+                router=ModelRouter(settings, prompts=prompts),
+                prompts=prompts,
+                run_store=AgentRunStore(database_path),
+            )
+
+        @app.get("/api/v1/agents")
+        def agents_catalogue(request: Request) -> AgentCatalogueResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            config = settings.load()
+            return AgentCatalogueResponse(
+                agents=[
+                    AgentCatalogueItem(
+                        agent_id=item.agent_id,
+                        kind=item.kind,
+                        label=item.label,
+                        description=item.description,
+                        tier=item.tier,
+                        prompt_id=item.prompt_id,
+                        tools=list(item.tools),
+                        read_only=item.read_only,
+                        route=AgentCatalogueRoute(
+                            tier=item.route_tier,
+                            provider=item.provider,
+                            model=item.model,
+                            configured=item.configured,
+                        ),
+                    )
+                    for item in catalogue_for(config)
+                ]
+            )
+
         @app.get("/api/v1/tools/research")
         def research_tools(request: Request) -> ToolCatalog:
             if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
                 raise HTTPException(status_code=401, detail="Authentication required")
-            agent = ResearchAgent(database_path, feed_url=settings.load().news_feed_url)
+            agent = _research_agent()
             runner = agent.runner()
             return ToolCatalog(
                 agent_id="research",
@@ -5187,7 +5285,7 @@ def create_app(
             if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
                 raise HTTPException(status_code=401, detail="Authentication required")
             config = settings.load()
-            agent = ResearchAgent(database_path, feed_url=config.news_feed_url)
+            agent = _research_agent()
             return AgentStatus(
                 agent_id="research",
                 configured=config.model_route_configured,
@@ -5209,8 +5307,7 @@ def create_app(
                 csrf.encode("ascii"),
             ):
                 raise HTTPException(status_code=403, detail="Invalid CSRF token")
-            config = settings.load()
-            agent = ResearchAgent(database_path, feed_url=config.news_feed_url)
+            agent = _research_agent()
             try:
                 run = agent.run(body.task, max_turns=body.max_turns)
             except LLMNotConfigured as exc:
@@ -5243,6 +5340,66 @@ def create_app(
                 output_tokens=run.output_tokens,
             )
 
+        @app.get("/api/v1/agent/runs")
+        def agent_run_history(request: Request) -> AgentRunListResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            runs = AgentRunStore(database_path).recent()
+            return AgentRunListResponse(
+                runs=[
+                    AgentRunHistoryItem(
+                        run_id=item.run_id,
+                        agent_id=item.agent_id,
+                        task=item.task,
+                        final_text=item.final_text,
+                        turns=item.turns,
+                        stopped=item.stopped,
+                        provider=item.provider,
+                        model=item.model,
+                        input_tokens=item.input_tokens,
+                        output_tokens=item.output_tokens,
+                        started_at=item.started_at.isoformat(),
+                        finished_at=item.finished_at.isoformat(),
+                    )
+                    for item in runs
+                ]
+            )
+
+        @app.get("/api/v1/agent/runs/{run_id}")
+        def agent_run_detail(request: Request, run_id: str) -> AgentRunDetailResponse:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            store = AgentRunStore(database_path)
+            try:
+                run = store.get(run_id)
+                steps = store.steps(run_id)
+            except AgentRunError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return AgentRunDetailResponse(
+                run_id=run.run_id,
+                agent_id=run.agent_id,
+                task=run.task,
+                final_text=run.final_text,
+                turns=run.turns,
+                stopped=run.stopped,
+                provider=run.provider,
+                model=run.model,
+                input_tokens=run.input_tokens,
+                output_tokens=run.output_tokens,
+                started_at=run.started_at.isoformat(),
+                finished_at=run.finished_at.isoformat(),
+                steps=[
+                    AgentStepStatus(
+                        turn=step.turn,
+                        kind=step.kind,
+                        tool=step.tool,
+                        arguments=dict(step.arguments),
+                        output=step.output,
+                    )
+                    for step in steps
+                ],
+            )
+
         @app.post("/api/v1/tools/research/run")
         def research_tool_run(
             request: Request, body: ToolRunRequest
@@ -5256,8 +5413,7 @@ def create_app(
                 csrf.encode("ascii"),
             ):
                 raise HTTPException(status_code=403, detail="Invalid CSRF token")
-            config = settings.load()
-            agent = ResearchAgent(database_path, feed_url=config.news_feed_url)
+            agent = _research_agent()
             runner = agent.runner()
             try:
                 result = runner.run(body.name, body.arguments)

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseAgentRun, parseAgentStatus } from "../src/agentContract.ts";
+import {
+  parseAgentRun,
+  parseAgentRunDetail,
+  parseAgentRunHistory,
+  parseAgentStatus,
+} from "../src/agentContract.ts";
 
 const status = {
   agent_id: "research",
@@ -77,4 +82,32 @@ test("malformed agent run is rejected", () => {
   ]) {
     assert.throws(() => parseAgentRun(bad));
   }
+});
+
+const historyItem = {
+  run_id: "run-1",
+  agent_id: "research",
+  task: "What did the RBI do?",
+  final_text: "The RBI held the repo rate.",
+  turns: 2,
+  stopped: true,
+  provider: "GEMINI",
+  model: "gemini-2.5-pro",
+  input_tokens: 100,
+  output_tokens: 40,
+  started_at: "2026-11-28T12:00:00+00:00",
+  finished_at: "2026-11-28T12:00:01+00:00",
+};
+
+test("agent run history and detail parse", () => {
+  const history = parseAgentRunHistory({ runs: [historyItem] });
+  assert.equal(history.length, 1);
+  assert.equal(history[0].run_id, "run-1");
+  const detail = parseAgentRunDetail({ ...historyItem, steps: run.steps });
+  assert.equal(detail.steps[0].tool, "news_search");
+});
+
+test("malformed agent history is rejected", () => {
+  assert.throws(() => parseAgentRunHistory({ runs: [{ ...historyItem, run_id: "" }] }));
+  assert.throws(() => parseAgentRunDetail({ ...historyItem, steps: [1] }));
 });
