@@ -15,7 +15,7 @@ single prompt with a strict output contract, calls the provider, and hands the
 parsed tool call back to the loop. No hidden state, no streaming.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -34,6 +34,7 @@ from bq.agent_runtime import (
     run_agent_loop,
 )
 from bq.core import Clock, SystemClock, utc
+from bq.llm_client import ToolCallRequest, ToolResult
 from bq.llm_service import CompletionOutcome
 from bq.model_router import ModelRouter, RouteUse
 from bq.settings import SettingsStore
@@ -45,6 +46,14 @@ from bq.tools.registry import AgentToolPolicy, ToolRegistry, ToolRunner
 
 AGENT_ID = "research"
 MAX_TURNS = 10
+
+
+def _as_call(value: object) -> ToolCallRequest | None:
+    return value if isinstance(value, ToolCallRequest) else None
+
+
+def _as_result(value: object) -> ToolResult | None:
+    return value if isinstance(value, ToolResult) else None
 
 
 class RouterLike(Protocol):
@@ -59,6 +68,9 @@ class RouterLike(Protocol):
         task_id: str = ...,
         task_version: str = ...,
         timeout: float | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        tool_call: ToolCallRequest | None = None,
+        tool_result: ToolResult | None = None,
     ) -> CompletionOutcome: ...
 
     @property
@@ -98,7 +110,11 @@ class ResearchAgent:
         self.path = path
         self.clock = clock or SystemClock()
         self.feed_url = feed_url
-        self.router: RouterLike = router or ModelRouter(SettingsStore(path, self.clock))
+        self.router: RouterLike = (
+            router
+            if router is not None
+            else ModelRouter(SettingsStore(path, self.clock))
+        )
         self.prompts = prompts
         self.run_store = run_store
         self.transport = transport
@@ -130,6 +146,14 @@ class ResearchAgent:
         total across every provider call, not just the last one.
         """
         totals = {"input": 0, "output": 0, "seen": False}
+        # The native tool call awaiting its result. Set when the model answers
+        # with a native call and cleared once that call and its result have been
+        # replayed, so the protocol is sent to the provider exactly once.
+        pending: dict[str, ToolCallRequest | ToolResult | None] = {
+            "call": None,
+            "result": None,
+        }
+        tools = [spec.as_function_schema() for spec in runner.permitted_specs()]
 
         def turn(task: str, history: Sequence[object]) -> ModelReply:
             entries = [
@@ -140,6 +164,9 @@ class ResearchAgent:
                 self.prompts, AGENT_ID, RESEARCH_SYSTEM, RESEARCH_TEMPLATE
             )
             prompt = template.format(task=task, history="\n\n".join(entries))
+            # The tool listing stays in the prompt: it is what a provider
+            # without native tool use reads, and a useful backstop for one that
+            # has it but ignores the schema.
             system_text = system + "\n\n" + runner.tools_prompt()
             outcome = self.router.complete(
                 AGENT_ID,
@@ -147,7 +174,14 @@ class ResearchAgent:
                 system=system_text,
                 task_id="research.agent",
                 task_version="v1",
+                tools=tools or None,
+                tool_call=_as_call(pending.get("call")),
+                tool_result=_as_result(pending.get("result")),
             )
+            if pending["call"] is not None or pending["result"] is not None:
+                # Sent; the provider now has both halves of that exchange.
+                pending["call"] = None
+                pending["result"] = None
             if outcome.input_tokens is not None:
                 totals["input"] += outcome.input_tokens
                 totals["seen"] = True
@@ -159,10 +193,16 @@ class ResearchAgent:
             if outcome.result.function_calls:
                 call = outcome.result.function_calls[0]
                 return ModelReply(
-                    text=text, tool_name=call.name, tool_args=call.arguments
+                    text=text,
+                    tool_name=call.name,
+                    tool_args=call.arguments,
+                    tool_call_id=call.call_id or None,
                 )
             return ModelReply(text=text)
 
+        # The loop hands the just-executed call and its output back here, so
+        # the next turn can replay the native protocol exactly once.
+        turn.pending = pending  # type: ignore[attr-defined]
         turn.usage = lambda: (  # type: ignore[attr-defined]
             (int(totals["input"]), int(totals["output"]))
             if totals["seen"]
@@ -171,7 +211,7 @@ class ResearchAgent:
         return turn
 
     def _last_route(self) -> RouteUse | None:
-        routes = getattr(self.router, "routes_used", ())
+        routes: tuple[RouteUse, ...] = self.router.routes_used
         if not routes:
             return None
         return routes[-1]

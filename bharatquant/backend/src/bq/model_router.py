@@ -29,7 +29,13 @@ from bq.decision.types import (
 )
 from bq.infra.model_attempts import AttemptOutcome, AttemptStatus, UsageKind
 from bq.infra.task_registry import TaskDefinitionNotFound, TaskRegistry
-from bq.llm_client import LLMNotConfigured, ModelClient, client_for
+from bq.llm_client import (
+    LLMNotConfigured,
+    ModelClient,
+    ToolCallRequest,
+    ToolResult,
+    client_for,
+)
 from bq.llm_gateway import LLMGateway, build_prompt_context
 from bq.llm_result import LLMResult
 from bq.llm_service import (
@@ -194,6 +200,9 @@ class ModelRouter:
         task_id: str,
         task_version: str = "v1",
         timeout: float | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        tool_call: ToolCallRequest | None = None,
+        tool_result: ToolResult | None = None,
     ) -> CompletionOutcome:
         route = self.resolve(agent_id, task_id=task_id)
         task = self._registered_task(task_id, task_version)
@@ -207,6 +216,9 @@ class ModelRouter:
                     task_id=task_id,
                     task_version=task_version,
                     timeout=timeout,
+                    tools=tools,
+                    tool_call=tool_call,
+                    tool_result=tool_result,
                 )
             return self._complete_governed(
                 task,
@@ -520,12 +532,20 @@ class ModelRouter:
         client = self._clients.get(provider)
         if client is not None:
             return client
+        config = self.store.load()
         if provider is Provider.CUSTOM:
-            endpoint = self.store.load().custom_endpoint
-            if endpoint:
+            if config.custom_endpoint:
                 return client_for(
-                    provider, transport=self._transport, custom_endpoint=endpoint
+                    provider,
+                    transport=self._transport,
+                    custom_endpoint=config.custom_endpoint,
                 )
+        if provider is Provider.BEDROCK:
+            return client_for(
+                provider,
+                transport=self._transport,
+                bedrock_region=config.bedrock_region,
+            )
         return client_for(provider, transport=self._transport)
 
     def _complete_route(
@@ -537,6 +557,9 @@ class ModelRouter:
         task_id: str,
         task_version: str,
         timeout: float | None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        tool_call: ToolCallRequest | None = None,
+        tool_result: ToolResult | None = None,
     ) -> CompletionOutcome:
         candidate = self._candidate_for(route)
         policy = TaskPolicy(
@@ -563,6 +586,9 @@ class ModelRouter:
             task_id=task_id,
             task_version=task_version,
             timeout=timeout,
+            tools=tools,
+            tool_call=tool_call,
+            tool_result=tool_result,
         )
         return CompletionOutcome(
             provider=route.provider, model=route.model, result=result
@@ -672,6 +698,9 @@ class ModelRouter:
         task_id: str,
         task_version: str,
         timeout: float | None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        tool_call: ToolCallRequest | None = None,
+        tool_result: ToolResult | None = None,
     ) -> LLMResult:
         api_key = self._key(route.provider)
         started = time.monotonic()
@@ -684,6 +713,9 @@ class ModelRouter:
                 timeout=(
                     route.timeout_ms / 1000.0 if timeout is None else float(timeout)
                 ),
+                tools=tools,
+                tool_call=tool_call,
+                tool_result=tool_result,
             )
         except Exception as exc:
             record_llm_call(

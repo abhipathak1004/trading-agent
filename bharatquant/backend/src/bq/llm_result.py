@@ -104,11 +104,23 @@ def parse_arguments(raw: object) -> dict[str, object]:
 
 
 def parse_usage(raw: object) -> LLMUsage:
-    """Read usage from the shapes Gemini and OpenAI-compatible APIs emit."""
+    """Read usage from the shapes the provider APIs emit.
+
+    Bedrock's ``Converse`` reports camelCase ``inputTokens``/``outputTokens``,
+    which is distinct from Gemini's ``*TokenCount`` and OpenAI's
+    ``*_tokens``; missing it would mark every Bedrock call as unreported.
+    """
     if not isinstance(raw, Mapping):
         return LLMUsage(reported=False)
     input_tokens = _first_int(
-        raw, ("promptTokenCount", "prompt_tokens", "input_tokens", "inputTokenCount")
+        raw,
+        (
+            "promptTokenCount",
+            "prompt_tokens",
+            "input_tokens",
+            "inputTokenCount",
+            "inputTokens",
+        ),
     )
     output_tokens = _first_int(
         raw,
@@ -117,6 +129,7 @@ def parse_usage(raw: object) -> LLMUsage:
             "completion_tokens",
             "output_tokens",
             "outputTokenCount",
+            "outputTokens",
         ),
     )
     reported = input_tokens is not None or output_tokens is not None

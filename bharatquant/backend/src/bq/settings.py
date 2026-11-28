@@ -81,6 +81,7 @@ KEY_NEWS_FEED_URL = "news_feed_url"
 KEY_NEWS_MEMORY_TTL_DAYS = "news_memory_ttl_days"
 KEY_KITE_ENABLED = "kite_enabled"
 KEY_CUSTOM_ENDPOINT = "custom_endpoint"
+KEY_BEDROCK_REGION = "bedrock_region"
 
 
 class SettingsError(ValueError):
@@ -93,6 +94,7 @@ class Provider(StrEnum):
     OPENAI = "OPENAI"
     CUSTOM = "CUSTOM"
     TYPESAFE_JEV = "TYPESAFE_JEV"
+    BEDROCK = "BEDROCK"
 
 
 DEFAULT_PROVIDER = Provider.GEMINI
@@ -105,6 +107,10 @@ KEY_RISK_LIMITS = "risk_limits"
 KEY_CAMPAIGN = "campaign"
 KEY_LOGGING = "logging"
 KEY_LOCAL_MODELS = "local_models"
+KEY_AIHF_SECRETS = "aihf_secrets"
+
+# Financial Datasets keys are ~40 chars; this is a ceiling, not a format check.
+MAX_DATA_KEY_CHARS = 256
 
 MAX_AGENT_ROUTING_ENTRIES = 32
 MAX_AGENT_ID_CHARS = 64
@@ -238,6 +244,7 @@ class AppConfig:
     campaign: CampaignConfig = CampaignConfig()
     logging: LoggingConfig = LoggingConfig()
     custom_endpoint: str | None = None
+    bedrock_region: str | None = None
     local_models: tuple[LocalModel, ...] = ()
     local_models_configured: bool = False
 
@@ -349,6 +356,26 @@ def validate_news_feed_url(value: str) -> str:
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
+# A bare AWS region name, e.g. us-east-1 or ap-south-1. Validated because it is
+# interpolated into a Bedrock hostname; an arbitrary string would let stored
+# configuration choose the host a request is sent to.
+_AWS_REGION = re.compile(r"[a-z]{2}(?:-[a-z]+)+-\d{1,2}")
+DEFAULT_BEDROCK_REGION = "us-east-1"
+
+
+def validate_bedrock_region(value: str) -> str:
+    """A Bedrock region: empty means the default, anything odd is rejected."""
+    if not isinstance(value, str):
+        raise SettingsError("Bedrock region must be text.")
+    region = value.strip().lower()
+    if not region:
+        return ""
+    if len(region) > 32 or _AWS_REGION.fullmatch(region) is None:
+        raise SettingsError(
+            "Bedrock region must be an AWS region name such as us-east-1."
+        )
+    return region
+
 
 def validate_custom_endpoint(value: str) -> str:
     """A local model endpoint: https anywhere, plain http only on loopback."""
@@ -403,6 +430,70 @@ def mask_api_key(value: str) -> str:
     if len(value) <= 8:
         return "*" * len(value)
     return f"{'*' * 8}{value[-4:]}"
+
+
+@dataclass(frozen=True, slots=True)
+class AiHfSecrets:
+    """The Financial Datasets credential used by the ``aihf`` sidecar.
+
+    Deliberately *not* part of ``AppConfig``: provider keys reach the API
+    through ``AppConfigStatus``, and this one must never ride along there.
+    Only ``load_aihf_secrets`` (write path) and ``aihf_secrets`` (read path)
+    touch it.
+    """
+
+    financial_datasets_api_key: str | None = None
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.financial_datasets_api_key)
+
+    @property
+    def masked(self) -> str | None:
+        if not self.financial_datasets_api_key:
+            return None
+        return mask_api_key(self.financial_datasets_api_key)
+
+    def to_projection(self) -> dict[str, object]:
+        """The only shape allowed to leave the process."""
+        return {
+            "financial_datasets": {
+                "configured": self.configured,
+                "masked": self.masked,
+            }
+        }
+
+
+def validate_data_api_key(value: str | None) -> str:
+    if not isinstance(value, str):
+        raise SettingsError("Financial Datasets API key must be text.")
+    key = value.strip()
+    if not MIN_API_KEY_CHARS <= len(key) <= MAX_DATA_KEY_CHARS:
+        raise SettingsError(
+            f"Financial Datasets API key must be between {MIN_API_KEY_CHARS} and "
+            f"{MAX_DATA_KEY_CHARS} characters."
+        )
+    if not key.isprintable() or any(char.isspace() for char in key):
+        raise SettingsError(
+            "Financial Datasets API key must be a single printable token."
+        )
+    return key
+
+
+def load_aihf_secrets(raw: str | None) -> AiHfSecrets:
+    """Defensive read: a malformed row falls back to "not configured"."""
+    if not raw:
+        return AiHfSecrets()
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return AiHfSecrets()
+    if not isinstance(parsed, dict):
+        return AiHfSecrets()
+    value = parsed.get("financial_datasets_api_key")
+    if not isinstance(value, str) or not value.strip():
+        return AiHfSecrets()
+    return AiHfSecrets(financial_datasets_api_key=value.strip())
 
 
 def validate_temperature(value: float) -> float:
@@ -1025,6 +1116,7 @@ class SettingsStore:
             campaign=_load_campaign(rows),
             logging=_load_logging(rows),
             custom_endpoint=custom_endpoint,
+            bedrock_region=rows.get(KEY_BEDROCK_REGION) or None,
             local_models=parse_local_models(rows.get(KEY_LOCAL_MODELS)),
             local_models_configured=KEY_LOCAL_MODELS in rows,
         )
@@ -1482,6 +1574,109 @@ class SettingsStore:
             decision_route=config.decision_route,
             decision_policy=config.decision_policy,
         )
+
+    def save_bedrock_region(self, region: str) -> AppConfig:
+        """Store the Bedrock region; an empty value removes it."""
+        value = validate_bedrock_region(region)
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                if value:
+                    connection.execute(
+                        "INSERT INTO app_settings "
+                        "(setting_key, setting_value, updated_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(setting_key) DO UPDATE SET "
+                        "setting_value = excluded.setting_value, "
+                        "updated_at = excluded.updated_at",
+                        (KEY_BEDROCK_REGION, value, _timestamp(updated_at)),
+                    )
+                else:
+                    connection.execute(
+                        "DELETE FROM app_settings WHERE setting_key = ?",
+                        (KEY_BEDROCK_REGION,),
+                    )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.bedrock_region.updated",
+                    object_type="app_settings",
+                    object_id=KEY_BEDROCK_REGION,
+                    payload={"bedrock_region": value},
+                )
+        return self.load()
+
+    # ---- AI Hedge Fund sidecar secrets -----------------------------------
+    def aihf_secrets(self) -> AiHfSecrets:
+        """The Financial Datasets credential, for injecting into a run only.
+
+        Never project this into ``AppConfig``: it is read here and handed
+        straight to the scoped environment of a subprocess.
+        """
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+                (KEY_AIHF_SECRETS,),
+            ).fetchone()
+        return load_aihf_secrets(None if row is None else str(row[0]))
+
+    def save_aihf_secrets(
+        self, *, financial_datasets_api_key: str | None
+    ) -> AiHfSecrets:
+        """Store the credential; ``None`` or empty clears it."""
+        if financial_datasets_api_key is None or not financial_datasets_api_key.strip():
+            return self.clear_aihf_secrets()
+        key = validate_data_api_key(financial_datasets_api_key)
+        value = json.dumps(
+            {"financial_datasets_api_key": key}, sort_keys=True, separators=(",", ":")
+        )
+        if len(value) > MAX_SETTING_CHARS:
+            raise SettingsError(
+                "The stored AI Hedge Fund settings exceed the storage limit."
+            )
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "INSERT INTO app_settings (setting_key, setting_value, updated_at) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(setting_key) DO UPDATE SET "
+                    "setting_value = excluded.setting_value, "
+                    "updated_at = excluded.updated_at",
+                    (KEY_AIHF_SECRETS, value, _timestamp(updated_at)),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.aihf_secrets.updated",
+                    object_type="app_settings",
+                    object_id=KEY_AIHF_SECRETS,
+                    payload={"financial_datasets": mask_api_key(key)},
+                )
+        return self.aihf_secrets()
+
+    def clear_aihf_secrets(self) -> AiHfSecrets:
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                connection.execute(
+                    "DELETE FROM app_settings WHERE setting_key = ?",
+                    (KEY_AIHF_SECRETS,),
+                )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.aihf_secrets.cleared",
+                    object_type="app_settings",
+                    object_id=KEY_AIHF_SECRETS,
+                    payload={},
+                )
+        return AiHfSecrets()
 
 
 def _agent_routing_json(entries: Mapping[str, AgentRoute]) -> str:

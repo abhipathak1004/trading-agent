@@ -1599,3 +1599,145 @@ must remain the golden-set template (prompts, tools, assertions, tests).
   already declared, which is the feature.
 - *A new SQL table + migration* — the data is configuration edited by one owner;
   `app_settings` already stores tiers and routing in the same form.
+
+## ADR-050: `aihf` runs from an isolated sidecar venv, driven as a subprocess
+
+**Status:** accepted (28 Nov 2026). Adds the **AI Hedge Fund** tab.
+
+**Context.** The request was to install `aihf` (PyPI, `virattt/ai-hedge-fund`
+v2) and expose its mandates, backtests and paper desk in this app. Measuring
+the distribution before writing any code changed the design:
+
+- **The dependency conflict is hard.** `aihf==2.7.2` requires
+  `pandas>=2.1,<3` and `numpy<2`. This project is locked to
+  `pandas>=3.1,<4` (3.1.1) and `numpy>=2.5` (2.5.5). `uv` reports *"your
+  requirements are unsatisfiable"*; there is no resolution that keeps both.
+- **The import name is `hedge_fund`.** `aihf` is only the console script, so
+  `import aihf` can never succeed regardless of installation.
+- **It has no HTTP API.** It is a CLI with a Textual TUI. The machine surface
+  is JSON on stdout from `aihf backtest` / `paper tick` / `paper scorecard`.
+- **`aihf paper tick` has no dry run.** One call decides, executes and appends
+  a hash-chained record.
+
+**Decision.**
+
+1. **A sidecar virtual environment** (`.aihf-venv`, provisioned by
+   `just aihf-install`), invoked through `asyncio.create_subprocess_exec` with
+   `start_new_session=True` and `killpg` escalation. `bq` never imports
+   `hedge_fund`, so the core lock is untouched and the two pandas versions
+   cannot collide.
+2. **Settings remain the single source of truth.** Each run gets a scoped
+   `env` built by `get_aihf_runtime_env`, and every variable it owns is
+   removed from the inherited environment first. `aihf` loads its own `.env`
+   with `override=False`, so an injected variable always wins — verified
+   against `hedge_fund/tui/keys.py`, not assumed.
+3. **A private `HOME` per run** (`<BQ_HOME>/aihf/home`). aihf resolves
+   mandates, paper, research, cache *and* `.env` through `Path.home()`, so this
+   confines it to state this app owns and makes a stray `~/.hedge-fund/.env`
+   unreadable.
+4. **Approval by adoption.** Because a tick cannot be previewed, a preview runs
+   that same tick against a *copy* of the fund, and approval copies aihf's own
+   ledger/broker/events files back over the live fund. Nothing is
+   re-serialised: aihf's `Ledger.replay` re-verifies every hash on the next
+   read, so an adopted record cannot be forged. The kill switch is checked
+   *before* preview state, and the ledger head is re-checked before adoption.
+5. **The Financial Datasets key is not a provider key.** `provider_api_keys`
+   has a `CHECK` over provider names, so adding one would force a migration.
+   It lives in its own `app_settings` row (`aihf_secrets`), is masked on read,
+   and is deliberately **not** on `AppConfig`, so it cannot ride along in any
+   existing settings projection.
+6. **Honest progress.** `aihf backtest` prints nothing until it finishes, so
+   the SSE journal streams real phases and an elapsed clock rather than an
+   invented per-session percentage.
+
+**Consequences.**
+
+- The sidecar is not in `uv.lock`, so `test_dependency_notices.py` is
+  unaffected; `README` documents the provisioning step and `.gitignore` covers
+  the venv.
+- The LLM model list comes from aihf's registry and, because `make_llm`
+  derives the provider *from the model id*, an unlisted id would silently go to
+  Anthropic. Overrides outside the registry are therefore refused (422), and a
+  model is only selectable when its provider's key is bridged.
+- Bridging is limited to what both sides share: `GEMINI→Google`,
+  `OPENAI→OpenAI`, `DEEPSEEK→DeepSeek`, `TYPESAFE_JEV→TypeSafe`. BharatQuant
+  stores no Anthropic/xAI/Kimi key, so those aihf providers are listed but not
+  runnable.
+- aihf's registry ids are placeholders (`claude-opus-5-5`, `gpt-6-sol`, …).
+  A first real run may need an id the vendor actually serves.
+
+**Alternatives rejected.**
+
+- *Install into the app venv and downgrade pandas* — rewrites a locked core
+  dependency that backtests, features, campaign, technical analysis and
+  reports all build on.
+- *Reimplement aihf's engine in-tree* — large, and drifts from upstream;
+  the value is its real pipeline.
+- *Preview by replaying the ledger narrative only* — cheap, but the approval
+  modal could not show the orders it is asking you to approve.
+
+## ADR-051: AWS Bedrock is an additive provider using a bearer API key
+
+**Status:** accepted (28 Nov 2026).
+
+**Context.** The owner wanted Bedrock available as a model provider. Three
+facts decided the design, all verified against AWS's documentation:
+
+- Bedrock issues **API keys that are bearer tokens** (`Authorization: Bearer`,
+  or `AWS_BEARER_TOKEN_BEDROCK`). They are not AWS secret access keys, and no
+  SigV4 signing is involved.
+- There are two kinds: **short-term** (≤12 hours, locked to the region it was
+  minted in, inherits the generating principal's permissions) and
+  **long-term** (until an expiry date, backed by a purpose-made IAM user with
+  `AmazonBedrockLimitedAccess`). AWS recommends short-term for production and
+  describes long-term as exploration-grade.
+- Bedrock's model-neutral request format is **`Converse`**, which is a third
+  wire shape here (neither Gemini's `generateContent` nor OpenAI chat).
+
+**Decision.** Bedrock is a **new provider member alongside the existing five**,
+not a replacement: every current provider, its stored key and the active
+selection are untouched (asserted by test).
+
+1. **Bearer token, stored like any other key.** The owner chose a long-term API
+   key held in Settings, consistent with every other provider. Accepted cost,
+   recorded here rather than glossed: a long-term key creates an IAM user in
+   the AWS account, and short-term/SigV4 remain the better production answer.
+2. **A `BedrockClient` speaking `Converse`.** One client, because `Converse` is
+   model-neutral. The model id is validated against `[A-Za-z0-9._:-]` rather
+   than path-escaped: it lands in the URL path, so a slash would silently
+   address a different resource.
+3. **Region is configuration.** It is interpolated into a hostname, so
+   `validate_bedrock_region` accepts only a bare AWS region name — arbitrary
+   text would let stored configuration choose the host. Default is `us-east-1`.
+   It is stored separately from the key so it can be corrected without
+   re-entering the key.
+4. **Migration 041** rebuilds `provider_api_keys` to widen the CHECK, the same
+   copy/drop/rename as 026. Verified as an **incremental** upgrade: an existing
+   database went 40 → 41 with a pre-existing GEMINI key intact.
+5. **`parse_usage` learns Bedrock's shape.** `Converse` reports camelCase
+   `inputTokens`/`outputTokens`. Without this, every Bedrock call would have
+   been recorded as *unreported* usage — a silent hole in cost and
+   confidence accounting that the tests caught.
+
+**Consequences.**
+
+- Bedrock is a legitimate reasoning/flash tier provider; it is **rejected on the
+  decision tier**, which accepts only TypeSafe Jev. The tier validator was
+  already exclusion-based, so no change was needed there.
+- Model ids are region-namespaced (`us.anthropic.claude-sonnet-4-6`). The
+  Settings placeholder shows that form.
+- A 403 from Bedrock (bad or expired key) surfaces as HTTP 502 with the status
+  only; the response body is never echoed, since it can contain key fragments.
+- Tool/function calling is **not** implemented for Bedrock: `Converse` exposes
+  `toolUse`, which the pipeline does not send. Text completion is the supported
+  surface.
+
+**Alternatives rejected.**
+
+- *Short-term keys auto-refreshed via `aws-bedrock-token-generator`* — no
+  phantom IAM user, but adds a dependency and requires working AWS credentials
+  on the host; the owner preferred the settings-only model.
+- *SigV4 with a profile/role or boto3* — the conventional AWS answer, but it
+  moves credentials outside Settings and adds a heavy dependency.
+- *Reusing `OpenAICompatClient`* — `Converse` is not OpenAI-shaped; the request
+  and response differ structurally.

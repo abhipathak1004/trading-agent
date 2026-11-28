@@ -14,6 +14,7 @@ export type NavView =
   | "strategy"
   | "agents"
   | "evals"
+  | "hedgefund"
   | "data"
   | "schedules"
   | "settings"

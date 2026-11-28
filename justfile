@@ -46,6 +46,21 @@ run: build init doctor
 web-dev:
     cd bharatquant/web && npm run dev
 
+# ---- ai hedge fund (aihf sidecar) ----
+#
+# aihf pins pandas<3 / numpy<2 and cannot share this project's environment, so
+# it lives in its own venv and is driven as a subprocess. `bq` never imports it.
+aihf-install:
+    cd bharatquant && rm -rf .aihf-venv && .venv/bin/python -m venv .aihf-venv
+    cd bharatquant && .aihf-venv/bin/python -m pip install -q --upgrade pip
+    cd bharatquant && .aihf-venv/bin/python -m pip install -q "aihf==2.7.2"
+    cd bharatquant && .aihf-venv/bin/python -c "import hedge_fund; print('aihf sidecar ready')"
+
+# The sidecar's version and whether `bq` can reach it.
+aihf-status:
+    cd bharatquant && .aihf-venv/bin/python -c "from importlib.metadata import version; print('aihf', version('aihf'))"
+    cd bharatquant && .aihf-venv/bin/aihf paper list
+
 news:
     cd bharatquant && uv run --locked bq news ingest
 

@@ -10,7 +10,10 @@ export type ConfiguredTask = {
   spec_version: string;
 };
 
-export const PROVIDERS = ["GEMINI", "DEEPSEEK", "OPENAI", "CUSTOM"] as const;
+// The legacy "provider + model" field. BEDROCK is deliberately included: it is
+// a real hosted provider with a bearer key, unlike TypeSafe Jev which belongs
+// only to the decision tier.
+export const PROVIDERS = ["GEMINI", "DEEPSEEK", "OPENAI", "CUSTOM", "BEDROCK"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export const ALL_PROVIDERS = [...PROVIDERS, "TYPESAFE_JEV"] as const;
@@ -89,6 +92,8 @@ export type AppConfig = {
   api_keys: ApiKeyStatus[];
   model_route_configured: boolean;
   updated_at: string | null;
+  // Bedrock is regional; absent means the client default (us-east-1).
+  bedrock_region: string | null;
 };
 
 export type SettingsOverview = {
@@ -220,6 +225,10 @@ export function parseConfig(value: unknown): AppConfig {
     api_keys: apiKeys,
     model_route_configured: value.model_route_configured,
     updated_at: value.updated_at as string | null,
+    bedrock_region:
+      typeof value.bedrock_region === "string" && value.bedrock_region.length > 0
+        ? value.bedrock_region
+        : null,
   };
 }
 

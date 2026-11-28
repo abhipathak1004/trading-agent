@@ -32,6 +32,11 @@ from bq.agent_prompts import (
     PromptStore,
 )
 from bq.agent_run_store import AgentRunError, AgentRunStore
+from bq.aihf.config import resolve_paths as ai_paths_resolve
+from bq.aihf.routes import AiHfDeps
+from bq.aihf.routes import register as register_aihf
+from bq.aihf.runner import AiHfRunner
+from bq.aihf.runtime_env import build_runtime
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.builder import build_analysis_pipeline
 from bq.analysis.decision import TradePlan, TradePlanError, trade_plan_from_json
@@ -1551,6 +1556,7 @@ class AppConfigStatus(BaseModel):
     configured_tiers: list[str]
     decision_preview: str
     custom_endpoint: str | None = None
+    bedrock_region: str | None = None
 
 
 class TierConfigUpdate(BaseModel):
@@ -1859,6 +1865,21 @@ class ApiKeyUpdate(BaseModel):
     api_key: str = Field(min_length=1, max_length=MAX_API_KEY_CHARS, strict=True)
 
 
+class BedrockRegionUpdate(BaseModel):
+    region: str = Field(default="", max_length=32)
+
+
+class BedrockApply(BaseModel):
+    """Point the text tiers at Bedrock, keeping the decision tier as it is.
+
+    The reasoning and flash tiers carry every non-decision agent, so this is
+    what "use Bedrock for the agents" means in one call.
+    """
+
+    model: str = Field(min_length=1, max_length=MAX_MODEL_NAME_CHARS)
+    region: str = Field(default="", max_length=32)
+
+
 class SettingsOverview(BaseModel):
     """Read-only settings surface: what is configured, and what is not."""
 
@@ -2061,6 +2082,7 @@ def _app_config_status(config: AppConfig) -> AppConfigStatus:
         configured_tiers=[name.value for name in config.configured_tiers],
         decision_preview=config.decision_preview,
         custom_endpoint=config.custom_endpoint,
+        bedrock_region=config.bedrock_region,
     )
 
 
@@ -2348,6 +2370,7 @@ def create_app(
     worker_loop: JobWorkerLoop | None = None
     settings_store: SettingsStore | None = None
     eval_runner: EvalRunner | None = None
+    aihf_runner: AiHfRunner | None = None
     flush_task: asyncio.Task[None] | None = None
     tunnel = tunnel_manager
     if tunnel is None and database_path is not None:
@@ -2373,6 +2396,8 @@ def create_app(
                     await flush_task
             if eval_runner is not None:
                 await eval_runner.stop()
+            if aihf_runner is not None:
+                await aihf_runner.stop()
             await pull_runner.stop()
             if tunnel is not None:
                 await tunnel.stop()
@@ -2426,6 +2451,7 @@ def create_app(
                 "/api/v1/opportunities",
                 "/api/v1/reports",
                 "/api/v1/prompts/",
+                "/api/v1/aihf/",
             )
         ):
             response.headers["Cache-Control"] = "no-store"
@@ -2502,6 +2528,16 @@ def create_app(
         evals = EvalStore(database_path)
         eval_runner = EvalRunner(evals, resolve_paths())
         pull_runner = ModelPullRunner()
+        aihf_paths = ai_paths_resolve(database_path=database_path)
+        aihf_runner = AiHfRunner(
+            aihf_paths,
+            lambda model: (
+                build_runtime(
+                    settings, model_override=model, environ={}, paths=aihf_paths
+                ).env
+            ),
+            name="backtest",
+        )
 
         def effective_local_models() -> tuple[LocalModel, ...]:
             config = settings.load()
@@ -2564,6 +2600,11 @@ def create_app(
                 csrf.encode("ascii"),
             ):
                 raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+        def require_read(request: Request) -> None:
+            """Authenticated read: a session is required, CSRF is not."""
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
 
         def cookie_is_secure(request: Request) -> bool:
             """Mark the cookie Secure only when the login arrives over the tunnel."""
@@ -3880,6 +3921,61 @@ def create_app(
             except (SettingsError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             return _app_config_status(config)
+
+        @app.put("/api/v1/settings/bedrock-region")
+        def set_bedrock_region(
+            request: Request, body: BedrockRegionUpdate
+        ) -> AppConfigStatus:
+            """Store the Bedrock region (ADR-051); an empty value clears it.
+
+            Separate from the key so the region can be corrected without
+            re-entering the key. A short-term Bedrock API key only works in the
+            region it was minted in, so this has to be explicit.
+            """
+            require_write(request)
+            try:
+                config = settings.save_bedrock_region(body.region)
+            except SettingsError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return _app_config_status(config)
+
+        @app.post("/api/v1/settings/bedrock/apply")
+        def apply_bedrock(request: Request, body: BedrockApply) -> AppConfigStatus:
+            """Route every text agent through Bedrock in one step.
+
+            Ten of the fifteen agent roles live on the reasoning or flash tier,
+            so switching those two tiers is what "use Bedrock for the agents"
+            means. The decision tier is untouched: it accepts only TypeSafe Jev
+            and the four decision agents stay on it.
+            """
+            require_write(request)
+            config = settings.load()
+            tiers = dict(config.tiers)
+            try:
+                if body.region:
+                    config = settings.save_bedrock_region(body.region)
+                    tiers = dict(config.tiers)
+                for name in (TierName.REASONING, TierName.FLASH):
+                    current = tiers[name]
+                    tiers[name] = TierConfig(
+                        provider=Provider.BEDROCK,
+                        model=body.model,
+                        temperature=current.temperature,
+                        max_tokens=current.max_tokens,
+                        timeout_ms=current.timeout_ms,
+                        max_attempts=current.max_attempts,
+                        fallback_tier=current.fallback_tier,
+                    )
+                saved = settings.save_models(
+                    tiers=tiers,
+                    agent_routing=dict(config.agent_routing),
+                    pipeline=config.pipeline,
+                    decision_route=config.decision_route,
+                    decision_policy=config.decision_policy,
+                )
+            except (SettingsError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return _app_config_status(saved)
 
         @app.put("/api/v1/settings/api-keys/{provider}")
         def set_provider_api_key(
@@ -6072,6 +6168,20 @@ def create_app(
             return response
 
     static_root = web_root or WEB_ROOT
+    if database_path is not None and aihf_runner is not None:
+        # Registered from its own module, but before the SPA catch-all mount
+        # below, which would otherwise answer every /api/v1/aihf/* path 404.
+        register_aihf(
+            app,
+            AiHfDeps(
+                paths=aihf_paths,
+                settings=settings,
+                read_auth=require_read,
+                require_write=require_write,
+                backtest_runner=aihf_runner,
+            ),
+        )
+
     if static_root.is_dir():
 
         @app.get("/api/{path:path}", include_in_schema=False)

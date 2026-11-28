@@ -58,10 +58,58 @@ uv run --locked bq auth setup
 uv run --locked bq serve
 ```
 
+### AWS Bedrock as a model provider
+
+Bedrock is selectable in **Settings → Models & keys** alongside Gemini, OpenAI,
+DeepSeek and a custom endpoint. It authenticates with a **Bedrock API key**,
+which is a bearer token — not an AWS secret access key, and no SigV4 signing
+happens in this app.
+
+1. In the AWS console, open **Bedrock → API keys** and generate a key.
+   - **Long-term** keys last until an expiry date and are the simplest to keep
+     in Settings, but they create a dedicated IAM user in your account with
+     `AmazonBedrockLimitedAccess`. AWS describes them as exploration-grade.
+   - **Short-term** keys last at most 12 hours and only work in the region that
+     minted them; they are the better production choice, at the cost of
+     refreshing them.
+2. In Settings, choose provider **BEDROCK**, then:
+   - **Model name** — the region-namespaced id, e.g.
+     `us.anthropic.claude-sonnet-4-6`.
+   - **Bedrock region** — e.g. `us-east-1` (the field only appears for Bedrock).
+3. Paste the key under **Provider API keys → BEDROCK**.
+
+Bedrock is available on the reasoning and flash tiers; the decision tier remains
+TypeSafe Jev only. Only text completion is wired — Bedrock tool use is not.
+
 Open `http://127.0.0.1:8000`. The server binds to loopback only. On non-macOS
 development hosts, set `BQ_HOME` to a dedicated local data directory before
 running `bq init`; macOS uses the BharatQuant Application Support directory by
 default.
+
+### AI Hedge Fund tab (optional)
+
+The **Build → AI Hedge Fund** tab drives [`aihf`](https://pypi.org/project/aihf/),
+which requires `pandas<3` and `numpy<2` and therefore cannot be installed into
+this project's environment. It runs from its own virtual environment:
+
+```sh
+just aihf-install     # creates bharatquant/.aihf-venv and installs aihf==2.7.2
+just aihf-status      # version, and a smoke `aihf paper list`
+```
+
+`bq` never imports it — it is invoked as a subprocess with an environment built
+from **Settings**, so configure the keys there, not in `~/.hedge-fund/.env`
+(which this app does not read or write):
+
+- **Settings → Models & keys → Data providers** — Financial Datasets API key.
+- **Settings → Models & keys → Provider API keys** — one LLM provider key
+  (Gemini, OpenAI, DeepSeek or TypeSafe). aihf's Anthropic/xAI/Kimi providers
+  are listed but cannot be run, because this app stores no key for them.
+
+Each run gets a private `HOME` under `BQ_HOME/aihf/`, so mandates, paper funds
+and backtest results are this installation's own. Without the sidecar the tab
+still renders and explains what is missing.
+
 
 While the server is running, its 30-second scheduler discovery loop records due
 wake decisions and durably enqueues `RUN` decisions as job occurrences. It does

@@ -6,6 +6,50 @@ task. History lives in git and
 
 ## Current state
 
+- **AWS Bedrock provider (28 Nov 2026):** `Provider.BEDROCK` is an **additive**
+  sixth provider — the five existing ones, their keys and the active selection
+  are untouched (asserted by test). Bedrock API keys are **bearer tokens**, not
+  AWS secret keys, so `BedrockClient` sends `Authorization: Bearer` and does no
+  SigV4. It speaks **`Converse`**, a third wire shape. Migration **041** widens
+  the `provider_api_keys` CHECK (verified incrementally: 40 → 41 with an
+  existing GEMINI key intact). New setting `bedrock_region` (validated as a bare
+  AWS region because it lands in a hostname; default `us-east-1`), saved via
+  `PUT /api/v1/settings/bedrock-region` and shown in Settings only when BEDROCK
+  is selected. `parse_usage` now reads `Converse`'s camelCase
+  `inputTokens`/`outputTokens` — without it every Bedrock call was recorded as
+  *unreported* usage. ADR-051.
+  - Model ids are region-namespaced (`us.anthropic.claude-sonnet-4-6`) and are
+    validated against `[A-Za-z0-9._:-]`, not path-escaped, because the id is a
+    URL path segment.
+  - Bedrock is a reasoning/flash provider; the decision tier still accepts only
+    TypeSafe Jev. **Not implemented:** Bedrock tool use (`Converse.toolUse`).
+  - Live-verified with a placeholder key: reached AWS, got 403, surfaced as 502
+    with no key echoed. A real key is needed for a successful completion.
+- **AI Hedge Fund tab (28 Nov 2026):** new **Build → AI Hedge Fund** tab
+  (`bq/aihf/`, `web/src/AiHedgeFundPanel.tsx`) over `aihf==2.7.2`
+  (`virattt/ai-hedge-fund` v2). It **cannot** share this environment: aihf
+  pins `pandas<3`/`numpy<2` and `uv` reports the lock unsatisfiable, its import
+  name is `hedge_fund` (not `aihf`), and it has no HTTP API. So it runs from a
+  sidecar venv (`just aihf-install` → `bharatquant/.aihf-venv`) as a
+  subprocess with a scoped env built from Settings and a private `HOME`. ADR-050.
+  - API: `/api/v1/aihf/{status,models,settings,mandates,backtest,backtests,
+    paper/*}`; reads need a session, writes need CSRF+origin; SSE progress on
+    `/backtest/{id}/stream`. `GET /aihf/settings` is the only projection of the
+    Financial Datasets key (masked).
+  - **Approval by adoption:** `aihf paper tick` has no dry run, so a preview
+    ticks a *copy* of the fund and approval copies aihf's ledger/broker/events
+    back. Nothing is re-serialised, so aihf's own hash check re-verifies it.
+    Kill switch is checked before preview state; head hash re-checked before
+    adoption. Verified: a failing preview left the live fund byte-identical.
+  - Key mapping is only what both sides share: `GEMINI→Google`,
+    `OPENAI→OpenAI`, `DEEPSEEK→DeepSeek`, `TYPESAFE_JEV→TypeSafe`. No
+    Anthropic/xAI/Kimi key exists in this app, so those models are listed but
+    not runnable. aihf's registry ids are placeholders — expect a first real
+    run to need an id the vendor actually serves.
+  - Sidecar is outside `uv.lock`, so `test_dependency_notices` is unaffected.
+    `.aihf-venv/` and `aihf/` are gitignored. **Not done:** scheduler job to
+    advance funds unattended (`aihf paper run` supervision), and the x402
+    keyless data path.
 - **Eval timeout 30 s (28 Nov 2026):** `defaultTest.options.timeout` in
   `evals/promptfooconfig.yaml` is now 30000, not 15000. At `num_predict: 512`
   an 8B model needs ~12.6 s here (40.6 tok/s) but a 14B reasoning model needs
@@ -211,16 +255,16 @@ task. History lives in git and
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
   execution/realism, memory, confidence, opportunities/shadows, scheduler,
   reports, backtests, research dossiers and runtime hardening.
-- **Verification:** 1021 backend tests pass (the same 2 pre-existing failures
-  unchanged), 146 frontend tests; ruff/format clean; frontend typecheck/build
+- **Verification:** 1096 backend tests collected, 1094 pass (the same 2 pre-existing failures
+  unchanged), 174 frontend tests; ruff/format clean; frontend typecheck/build
   clean; `bq/local_models.py` and `bq/evals` are mypy-clean; a fresh DB applies
-  **40 migrations** (`040` is the agent-runs migration). Three real local sweeps and a live promote completed
+  **41 migrations** (`041` is the Bedrock provider migration). Three real local sweeps and a live promote completed
   end to end (see Model Evals above).
 - **mypy:** pre-existing errors remain in `cli.py`, `triggers.py`, `campaign.py`,
   `campaign_feedback.py`, `catalysts.py`, `reports/engine.py`,
   `infra/scheduler.py` and some test fakes. Do not “fix” them as part of
   maintenance; the Model Evals change adds none.
-- **Next migration number:** `041` if a new migration is needed.
+- **Next migration number:** `042` if a new migration is needed.
 - **Known pre-existing test failures:** `test_logbook` (filename is hard-coded to a
   date, breaks off that day) and `test_phase5_acceptance` (produces no paper plan).
   Both fail without this change too; do not attribute them to Model Evals.
@@ -284,6 +328,7 @@ maintenance/optional breadth:
 | Logging | `bq/logbook.py`, `bq/infra/job_handlers.py` (`logs.flush`), `web/src/LoggingPanel.tsx`, `web/src/loggingContract.ts` |
 | Model Evals | `bq/evals/` (`config.py`, `store.py`, `scoring.py`, `runner.py`), `evals/*` (bundle), `web/src/ModelEvalsPanel.tsx`, `web/src/evalContract.ts` |
 | Local models | `bq/local_models.py` (registry, presence, pull), `bq/settings.py` (`local_models`), `web/src/modelsContract.ts`, Model Evals + `ModelsConfigPanel` |
+| AI Hedge Fund | `bq/aihf/` (`config`, `runtime_env`, `runner`, `service`, `routes`, `probe/`), `web/src/AiHedgeFundPanel.tsx`, `web/src/hedgeFundContract.ts`, `web/src/EquityCurve.tsx`, `justfile` (`aihf-install`) |
 
 ## Commands
 
@@ -303,6 +348,10 @@ BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq db ba
 
 # operational logs (Settings -> Logging flushes manually; the loop runs every 15 min)
 tail -n 5 "$HOME/Library/Application Support/BharatQuant/logs"/bq-*.jsonl
+
+# ai hedge fund (aihf sidecar: pandas<3, cannot share this venv)
+just aihf-install
+just aihf-status
 
 # campaign (first run creates paper-main, saves defaults, seeds schedules)
 uv run --locked bq campaign init

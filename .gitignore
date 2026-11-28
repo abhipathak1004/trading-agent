@@ -9,3 +9,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.py[cod]
+
+# aihf sidecar: its own venv (own pandas/numpy), provisioned by `just aihf-install`.
+# Only the runtime data dir is ignored — bq/aihf/ is source and must be committed.
+bharatquant/.aihf-venv/
+/bharatquant/aihf/

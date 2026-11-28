@@ -2262,6 +2262,400 @@ a.nav-item:hover,
   }
 }
 
+/* ---- ai hedge fund (aihf sidecar) ---------------------------------------- */
+
+.ahf {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ahf-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgb(22 16 34 / 78%);
+}
+
+.ahf-header__eyebrow {
+  margin: 0 0 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.ahf-header__runtime {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-strong);
+}
+
+.ahf-header__runtime strong {
+  color: var(--text);
+}
+
+.ahf-header__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.ahf-header__controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ahf-header__controls select {
+  max-width: 260px;
+}
+
+.ahf-header__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ahf-split {
+  display: grid;
+  grid-template-columns: minmax(200px, 300px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.ahf-split__rail,
+.ahf-split__main {
+  min-width: 0;
+}
+
+.ahf-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ahf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ahf-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.ahf-list__item:hover,
+.ahf-list__item:focus-visible {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+
+.ahf-list__item--active {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+
+.ahf-list__title {
+  font-weight: 600;
+}
+
+.ahf-list__meta,
+.ahf-halt-reason {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ahf-list__invalid {
+  color: var(--danger);
+}
+
+.ahf-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.ahf-actions,
+.ahf-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.ahf-row-actions {
+  gap: 8px;
+}
+
+.ahf-yaml {
+  width: 100%;
+  min-height: 260px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.ahf-secret {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ahf-secret input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ahf-fieldset {
+  margin: 0;
+  padding: 0 0 0 2px;
+  border: 0;
+}
+
+.ahf-fieldset legend {
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.ahf-pods {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ahf-pods li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ahf-pods span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ahf-details {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ahf-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted-strong);
+}
+
+.ahf-log {
+  max-height: 240px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  background: var(--bg);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted-strong);
+}
+
+.ahf-progress__phase {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted-strong);
+}
+
+.ahf-clamps,
+.ahf-signals {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ahf-signals li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.ahf-signals li p {
+  margin: 4px 0 0;
+  color: var(--muted-strong);
+  line-height: 1.5;
+}
+
+.ahf-signals__side {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ahf-signals__side--long {
+  color: var(--ok);
+}
+
+.ahf-signals__side--short {
+  color: var(--danger);
+}
+
+.ahf-signals__side--neutral {
+  color: var(--muted);
+}
+
+.ahf-hash {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ahf-curve {
+  margin: 0;
+}
+
+.ahf-curve__caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted-strong);
+}
+
+.ahf-curve__caption-text {
+  padding: 8px 0;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: start;
+}
+
+.ahf-curve__legend {
+  display: flex;
+  gap: 12px;
+}
+
+.ahf-curve__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ahf-curve__swatch {
+  width: 14px;
+  height: 2px;
+  background: var(--muted);
+}
+
+.ahf-curve__key--accent .ahf-curve__swatch {
+  background: var(--accent);
+}
+
+.ahf-curve__plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.ahf-curve__grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.ahf-curve__grid--faint {
+  stroke: rgb(42 31 64 / 45%);
+}
+
+.ahf-curve__tick {
+  fill: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.ahf-curve__line {
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ahf-curve__line--accent {
+  stroke: var(--accent-strong);
+}
+
+.ahf-curve__line--muted {
+  stroke: var(--muted-weak);
+  stroke-dasharray: 4 3;
+}
+
+.ahf-curve__data {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ahf-curve__data summary {
+  cursor: pointer;
+}
+
+.text-button--active {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.text-button--danger {
+  color: var(--danger);
+}
+
+.mode-banner--warn {
+  border-color: var(--warn);
+}
+
 /* ---------------------------------------------------------------------------
    Responsive overrides. These sit last on purpose: a media query does not add
    specificity, so an override declared before a base rule loses the cascade.
@@ -2827,5 +3221,32 @@ a.nav-item:hover,
     max-height: 100vh;
     max-height: 100dvh;
     border-radius: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .ahf-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 639px) {
+  .ahf-header {
+    padding: 12px;
+  }
+
+  .ahf-header__controls select {
+    max-width: none;
+    width: 100%;
+  }
+
+  .ahf-row-actions {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ahf-curve__tick {
+    font-size: 10px;
   }
 }

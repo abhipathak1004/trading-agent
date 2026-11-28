@@ -79,6 +79,9 @@ class ScriptedService:
         task_id: str = "research.agent",
         task_version: str = "v1",
         timeout: float | None = None,
+        tools=None,
+        tool_call=None,
+        tool_result=None,
     ) -> CompletionOutcome:
         assert agent_id == "research"
         self.last_system = system
@@ -169,6 +172,9 @@ def test_agent_uses_native_function_calls(tmp_path: Path) -> None:
             task_id: str = "research.agent",
             task_version: str = "v1",
             timeout: float | None = None,
+            tools=None,
+            tool_call=None,
+            tool_result=None,
         ) -> CompletionOutcome:
 
             self.calls += 1

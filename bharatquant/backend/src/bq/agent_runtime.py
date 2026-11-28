@@ -38,11 +38,20 @@ class AgentLoopError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ModelReply:
-    """What a model turn is allowed to return: a tool call or final text."""
+    """What a model turn is allowed to return: a tool call or final text.
+
+    ``tool_call_id`` and ``tool_result`` let a native tool protocol be replayed
+    on the next turn. Providers such as Bedrock's ``Converse`` require the
+    assistant's ``toolUse`` block *and* the matching ``toolResult`` to appear in
+    the conversation; without them the model has no record of its own call and
+    re-requests the same tool forever.
+    """
 
     text: str
     tool_name: str | None = None
     tool_args: Mapping[str, object] = field(default_factory=dict)
+    tool_call_id: str | None = None
+    tool_result: str | None = None
 
 
 ModelTurn = Callable[[str, Sequence["HistoryEntry"]], ModelReply]
@@ -128,6 +137,34 @@ def _preview(value: object) -> str:
     return text[:STEP_PREVIEW_CHARS].rstrip() + "…"
 
 
+def _stage_tool_exchange(
+    model_turn: ModelTurn,
+    reply: ModelReply,
+    name: str,
+    args: Mapping[str, object],
+    output: str,
+) -> None:
+    """Offer a just-executed tool call to the closure for native replay.
+
+    Purely optional: a provider without a native tool protocol simply has no
+    ``pending`` slot, and the loop keeps working from the text history. A
+    provider that has one receives the assistant request and its result, which
+    is what stops it re-requesting the same tool on the following turn.
+    """
+    pending = getattr(model_turn, "pending", None)
+    if not isinstance(pending, dict):
+        return
+    call_id = reply.tool_call_id
+    if not call_id:
+        # No id means the call came from parsed prose, not a native block, so
+        # there is no protocol to replay.
+        return
+    from bq.llm_client import ToolCallRequest, ToolResult
+
+    pending["call"] = ToolCallRequest(call_id=call_id, name=name, arguments=dict(args))
+    pending["result"] = ToolResult(call_id=call_id, name=name, content=output)
+
+
 def _resolve_reply(
     reply: ModelReply,
 ) -> tuple[str, Mapping[str, object]]:
@@ -194,6 +231,11 @@ def run_agent_loop(
         message = str(output["message"])
         history.add("assistant", f"call {name}")
         history.add("tool", message)
+        # Hand the executed call and its output to the model-turn closure, so a
+        # provider with a native tool protocol receives the assistant's request
+        # and the matching result on the next turn. Without this the model has
+        # no record of its own call and re-requests the same tool.
+        _stage_tool_exchange(model_turn, reply, name, args, message)
         steps.append(AgentStep(turn, "tool", name, dict(args), _preview(message)))
         if output["break_loop"]:
             return LoopOutcome(

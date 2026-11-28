@@ -35,6 +35,7 @@ import HowToUsePanel from "./HowToUsePanel";
 import TodayOverview from "./TodayOverview";
 import CampaignPanel from "./CampaignPanel";
 import ModelEvalsPanel from "./ModelEvalsPanel";
+import AiHedgeFundPanel from "./AiHedgeFundPanel";
 
 type WorkspaceView = NavView;
 
@@ -67,6 +68,7 @@ const NAV_GROUPS: {
       { view: "strategy", label: "Strategy", icon: "⬡" },
       { view: "agents", label: "Agent Lab", icon: "◈" },
       { view: "evals", label: "Model Evals", icon: "◍" },
+      { view: "hedgefund", label: "AI Hedge Fund", icon: "◭" },
     ],
   },
   {
@@ -96,6 +98,7 @@ const VIEW_LABELS: Record<WorkspaceView, string> = {
   strategy: "Strategy",
   agents: "Agent Lab",
   evals: "Model Evals",
+  hedgefund: "AI Hedge Fund",
   data: "Data",
   schedules: "Schedules",
   settings: "Settings",
@@ -807,6 +810,43 @@ export default function App() {
             </section>
 
             <ModelEvalsPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "hedgefund" && (
+          <section className="dashboard" id="hedgefund" aria-labelledby="hedgefund-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">AI HEDGE FUND</p>
+                <h1 id="hedgefund-page-title">AI Hedge Fund</h1>
+                <p className="intro">
+                  Mandates, point-in-time backtests and a paper trading desk, run by
+                  {" "}
+                  <code>aihf</code> — virattt&apos;s multi-agent fund engine — from its own
+                  isolated install. LLM personas generate views; deterministic code sizes,
+                  clamps and settles every order.
+                </p>
+              </div>
+              <span className="status-badge status-badge--warn">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="AI Hedge Fund scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Keys come from Settings, never from aihf&apos;s .env</strong>
+                <p>
+                  Each run gets a scoped environment built from this application&apos;s
+                  Settings and a private HOME, so nothing outside this install is read
+                  or written. A paper session is computed against a copy and only
+                  committed once you approve it.
+                </p>
+              </div>
+            </section>
+
+            <AiHedgeFundPanel
+              csrfToken={session.csrfToken}
+              onOpenSettings={() => setView("settings")}
+            />
           </section>
         )}
 

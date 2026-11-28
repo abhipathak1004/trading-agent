@@ -84,3 +84,11 @@ ignore_errors = true
 [[tool.mypy.overrides]]
 module = ["kiteconnect", "kiteconnect.*"]
 ignore_missing_imports = true
+
+# The aihf probe scripts import ``hedge_fund`` and run in the aihf sidecar
+# interpreter (see bq/aihf/config.py), which has its own pandas/pydantic. That
+# package is not installed in this environment by design, so mypy cannot
+# resolve it here and must not try: the probes report JSON, never raise.
+[[tool.mypy.overrides]]
+module = ["bq.aihf.probe.*"]
+ignore_errors = true

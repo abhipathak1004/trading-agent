@@ -140,5 +140,7 @@ def map_finish_reason(raw: object) -> str:
         "TOOL_CALLS": "tool_calls",
         "FUNCTION_CALL": "tool_calls",
         "END_TURN": "stop",
+        # Bedrock's Converse and Claude's native API both say TOOL_USE.
+        "TOOL_USE": "tool_calls",
     }
     return mapping.get(value, value.lower())

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseConfig, parseOverview } from "../src/settingsContract.ts";
+import {
+  ALL_PROVIDERS,
+  PROVIDERS,
+  parseConfig,
+  parseOverview,
+} from "../src/settingsContract.ts";
 
 const validConfig = {
   provider: "GEMINI",
@@ -122,4 +127,36 @@ test("configuration rejects bad providers, retention and key states", () => {
   ]) {
     assert.throws(() => parseConfig({ ...validConfig, ...override }));
   }
+});
+
+// ---------------------------------------------------------------------------
+// AWS Bedrock is additive: every existing provider is still accepted, and the
+// new one carries a region.
+// ---------------------------------------------------------------------------
+
+test("bedrock is offered alongside every existing provider", () => {
+  for (const name of ["GEMINI", "DEEPSEEK", "OPENAI", "CUSTOM", "BEDROCK"]) {
+    assert.ok(PROVIDERS.includes(name), `${name} must remain selectable`);
+  }
+  assert.ok(ALL_PROVIDERS.includes("TYPESAFE_JEV"));
+  assert.ok(ALL_PROVIDERS.includes("BEDROCK"));
+});
+
+test("a bedrock config carries its region", () => {
+  const parsed = parseConfig({
+    ...validConfig,
+    provider: "BEDROCK",
+    model_name: "us.anthropic.claude-sonnet-4-6",
+    bedrock_region: "us-west-2",
+  });
+  assert.equal(parsed.provider, "BEDROCK");
+  assert.equal(parsed.bedrock_region, "us-west-2");
+});
+
+test("a missing region reads as null, not a guess", () => {
+  assert.equal(parseConfig({ ...validConfig }).bedrock_region, null);
+  assert.equal(
+    parseConfig({ ...validConfig, bedrock_region: "" }).bedrock_region,
+    null,
+  );
 });

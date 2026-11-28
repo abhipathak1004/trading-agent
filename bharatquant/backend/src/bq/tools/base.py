@@ -23,6 +23,9 @@ MAX_RESULT_CHARS = 24_000
 MAX_ARGUMENT_CHARS = 8_000
 MAX_ARGUMENTS = 32
 
+# ToolArgument.kind -> JSON Schema type, for providers that take a schema.
+_JSON_TYPES: dict[type, str] = {str: "string", int: "integer", bool: "boolean"}
+
 
 class ToolError(ValueError):
     """A tool could not be run for a reason the caller can act on."""
@@ -96,6 +99,42 @@ class ToolSpec:
         return frozenset(
             argument.name for argument in self.arguments if argument.required
         )
+
+    def input_schema(self) -> dict[str, object]:
+        """This tool's arguments as JSON Schema.
+
+        One provider-neutral shape (the OpenAI ``function.parameters`` layout),
+        which each client translates into its own wording. Built here rather
+        than in a client so a tool declares its surface exactly once and every
+        provider sees the same contract.
+
+        ``additionalProperties: false`` is deliberate: the model must pick from
+        the declared names, because the runner validates arguments against the
+        same spec and would reject anything else.
+        """
+        properties: dict[str, object] = {}
+        for argument in self.arguments:
+            properties[argument.name] = {
+                "type": _JSON_TYPES[argument.kind],
+                "description": argument.description,
+            }
+        schema: dict[str, object] = {
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": False,
+        }
+        required = [argument.name for argument in self.arguments if argument.required]
+        if required:
+            schema["required"] = required
+        return schema
+
+    def as_function_schema(self) -> dict[str, object]:
+        """``{"name","description","parameters"}`` — the OpenAI function shape."""
+        return {
+            "name": self.name,
+            "description": self.summary,
+            "parameters": self.input_schema(),
+        }
 
     def render(self) -> str:
         lines = [f"### {self.name}", self.summary]

@@ -48,6 +48,9 @@ class FakeModelClient:
         system: str,
         prompt: str,
         timeout: float = 60.0,
+        tools=None,
+        tool_call=None,
+        tool_result=None,
     ) -> LLMResult:
         self.calls += 1
         if self.error is not None:
