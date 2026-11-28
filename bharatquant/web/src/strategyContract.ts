@@ -140,11 +140,13 @@ export function parsePlan(value: unknown): StrategyPlan {
   };
 }
 
+const MAX_TRACE_STEPS = 24;
+
 function parseAgents(value: unknown): StrategyAgent[] {
   if (value === undefined) {
     return [];
   }
-  if (!Array.isArray(value) || value.length > 12) {
+  if (!Array.isArray(value) || value.length > MAX_TRACE_STEPS) {
     throw new Error("Invalid strategy agents");
   }
   return value.map((item) => {

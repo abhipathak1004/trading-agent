@@ -21,6 +21,7 @@ const decision = {
     timeframe: "swing",
     last_close: 1351,
     composite: 0.25,
+    has_plan: false,
     data_freshness: "delayed_yfinance",
   },
   judgments: [
@@ -70,6 +71,7 @@ test("a valid decision preview is accepted", () => {
   assert.equal(parsed.judgments[0].choice, "long");
   assert.equal(parsed.route.decision_source, "heuristic");
   assert.equal(parsed.screener.verdict, "research");
+  assert.equal(parsed.state.has_plan, false);
 });
 
 test("malformed decision previews are rejected", () => {

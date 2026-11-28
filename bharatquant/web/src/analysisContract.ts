@@ -491,14 +491,19 @@ export function parseVendorChains(value: unknown): VendorChains {
   if (
     !isRecord(value) ||
     typeof value.kite_enabled !== "boolean" ||
-    !isRecord(value.chains)
+    !Array.isArray(value.chains)
   ) {
     throw new Error("Invalid vendor chains");
   }
-  const chains = Object.entries(value.chains).map(([domain, vendors]) => ({
-    domain,
-    vendors: parseStringArray(vendors, "vendor chain"),
-  }));
+  const chains = value.chains.map((item) => {
+    if (!isRecord(item) || typeof item.domain !== "string") {
+      throw new Error("Invalid vendor chain");
+    }
+    return {
+      domain: item.domain,
+      vendors: parseStringArray(item.vendors, "vendor chain"),
+    };
+  });
   return { kite_enabled: value.kite_enabled, chains };
 }
 

@@ -117,16 +117,23 @@ test("malformed runs are rejected", () => {
 test("vendor chains parse and report kite status", () => {
   const parsed = parseVendorChains({
     kite_enabled: false,
-    chains: { "bars.daily": ["yahoo"], "quotes.live": ["yahoo"] },
+    chains: [
+      { domain: "bars.daily", vendors: ["yahoo"] },
+      { domain: "quotes.live", vendors: ["yahoo"] },
+    ],
   });
   assert.equal(parsed.kite_enabled, false);
+  assert.equal(parsed.chains[0].domain, "bars.daily");
   assert.equal(parsed.chains[0].vendors[0], "yahoo");
 });
 
 test("malformed vendor chains are rejected", () => {
-  assert.throws(() => parseVendorChains({ kite_enabled: "yes", chains: {} }));
+  assert.throws(() => parseVendorChains({ kite_enabled: "yes", chains: [] }));
   assert.throws(() =>
-    parseVendorChains({ kite_enabled: false, chains: { "bars.daily": [1] } }),
+    parseVendorChains({ kite_enabled: false, chains: [{ domain: "bars.daily", vendors: [1] }] }),
+  );
+  assert.throws(() =>
+    parseVendorChains({ kite_enabled: false, chains: { "bars.daily": ["yahoo"] } }),
   );
 });
 

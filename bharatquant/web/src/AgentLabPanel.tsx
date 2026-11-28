@@ -27,9 +27,12 @@ type CatalogueLoad =
   | { state: "loading" | "error" }
   | { state: "ready"; agents: AgentCatalogueItem[] };
 
-function formatValue(value: string | number): string {
+function formatValue(value: string | number | boolean): string {
   if (typeof value === "number") {
     return Number.isInteger(value) ? String(value) : value.toFixed(4);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
   }
   return value;
 }

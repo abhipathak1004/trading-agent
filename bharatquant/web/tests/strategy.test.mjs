@@ -116,6 +116,36 @@ test("malformed strategy runs are rejected", () => {
   }
 });
 
+test("a full pipeline trace longer than 12 steps is accepted", () => {
+  const nodes = [
+    "gather_data",
+    "news_context",
+    "market_regime",
+    "fundamental_events",
+    "evidence_verifier",
+    "technical",
+    "bull",
+    "bear",
+    "judge",
+    "risk_team",
+    "size",
+    "decision",
+    "final_gate",
+    "confidence",
+  ];
+  const agents = nodes.map((node) => ({
+    node,
+    role: node,
+    status: "ok",
+    summary: "ran",
+  }));
+  const parsed = parseStrategyRun({
+    ...run,
+    symbols: [{ ...run.symbols[0], agents }],
+  });
+  assert.equal(parsed.symbols[0].agents.length, 14);
+});
+
 test("the selected playbook is parsed when present", () => {
   assert.equal(parseStrategyRun(run).spec.playbook, null);
   const parsed = parseStrategyRun({

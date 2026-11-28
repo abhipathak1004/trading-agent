@@ -43,7 +43,7 @@ export type DecisionPreview = {
   as_of: string;
   decision_preview: string;
   data_provenance: DecisionProvenance;
-  state: Record<string, string | number>;
+  state: Record<string, string | number | boolean>;
   judgments: DecisionJudgment[];
   screener: DecisionScreener;
   route: DecisionRoute;
@@ -149,18 +149,18 @@ function parseProvenance(value: unknown): DecisionProvenance {
   };
 }
 
-function parseState(value: unknown): Record<string, string | number> {
+function parseState(value: unknown): Record<string, string | number | boolean> {
   if (!isRecord(value)) {
     throw new Error("Invalid decision state");
   }
-  const state: Record<string, string | number> = {};
+  const state: Record<string, string | number | boolean> = {};
   for (const [key, item] of Object.entries(value)) {
     if (typeof item === "number") {
       if (!Number.isFinite(item)) {
         throw new Error("Invalid decision state");
       }
       state[key] = item;
-    } else if (typeof item === "string") {
+    } else if (typeof item === "string" || typeof item === "boolean") {
       state[key] = item;
     } else {
       throw new Error("Invalid decision state");

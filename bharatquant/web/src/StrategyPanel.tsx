@@ -122,10 +122,13 @@ export default function StrategyPanel({
         return;
       }
       setRun({ state: "ready", run: parseStrategyRun(await response.json()) });
-    } catch {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "";
       setRun({
         state: "error",
-        message: "The strategy run failed. Check the local service.",
+        message: detail
+          ? `The strategy run failed: ${detail}`
+          : "The strategy run failed. Check the local service.",
       });
     }
   }
