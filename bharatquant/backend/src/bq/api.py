@@ -70,6 +70,22 @@ from bq.data.vendors import BarInterval, DataDomain
 from bq.data.yahoo import YahooDataClient, YahooError
 from bq.decision.battery import SCREENER
 from bq.decision.state import build_decision_state
+from bq.evals.config import (
+    EvalConfigError,
+    parse_promptfoo_config,
+    read_categories,
+    resolve_paths,
+    tool_availability,
+)
+from bq.evals.runner import EvalLaunch, EvalRunner
+from bq.evals.scoring import ScoringError
+from bq.evals.store import (
+    EvalModelScore,
+    EvalRun,
+    EvalRunActive,
+    EvalRunNotFound,
+    EvalStore,
+)
 from bq.execution import (
     ExecutionAdapter,
     ExecutionContextError,
@@ -1462,6 +1478,7 @@ class AppConfigStatus(BaseModel):
     decision_route: DecisionRoute
     configured_tiers: list[str]
     decision_preview: str
+    custom_endpoint: str | None = None
 
 
 class TierConfigUpdate(BaseModel):
@@ -1520,6 +1537,97 @@ class AppConfigUpdate(BaseModel):
     model_name: str = Field(max_length=MAX_SETTING_CHARS, strict=True)
     news_feed_url: str = Field(max_length=MAX_SETTING_CHARS, strict=True)
     news_memory_ttl_days: int = Field(strict=True)
+
+
+class EvalProviderStatus(BaseModel):
+    id: str
+    label: str
+    model: str
+
+
+class EvalConfigStatus(BaseModel):
+    providers: list[EvalProviderStatus]
+    categories: list[str]
+    tools: dict[str, bool]
+    config_path: str
+    dataset_path: str
+    active_run_id: str | None
+    custom_endpoint: str | None
+
+
+class EvalModelScoreStatus(BaseModel):
+    model: str
+    total_cases: int
+    overall_pass_rate: float
+    accuracy_pass_rate: float
+    json_parse_rate: float | None
+    p50_ms: float | None
+    p95_ms: float | None
+    max_ms: float | None
+    brier_score: float | None
+    ece_5bin: float | None
+    brier_n: int
+    category_rates: dict[str, float | None]
+
+
+class EvalRunStatus(BaseModel):
+    id: str
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    status: str
+    models: list[str]
+    categories: list[str]
+    config_path: str
+    results_json_path: str | None
+    error_message: str | None
+    scores: list[EvalModelScoreStatus] = Field(default_factory=list)
+
+
+class EvalRunList(BaseModel):
+    runs: list[EvalRunStatus]
+
+
+class EvalCaseStatus(BaseModel):
+    description: str
+    model: str
+    category: str
+    passed: bool
+    input: str
+    raw_output: str
+    confidence: float | None
+    latency_ms: float | None
+    failure_reasons: list[str]
+
+
+class EvalCaseList(BaseModel):
+    run_id: str
+    model: str | None
+    category: str | None
+    status: str
+    total: int
+    cases: list[EvalCaseStatus]
+
+
+class EvalRunCreate(BaseModel):
+    providers: list[str] = Field(default_factory=list, max_length=32)
+    categories: list[str] = Field(default_factory=list, max_length=32)
+    no_cache: bool = False
+
+
+class EvalPromoteRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200, strict=True)
+    provider: Provider = Provider.CUSTOM
+    agent_id: str = Field(min_length=1, max_length=64, strict=True)
+    endpoint: str | None = Field(default=None, max_length=2048)
+
+
+class EvalPromoteDiff(BaseModel):
+    agent_id: str
+    before: dict[str, str | None]
+    after: dict[str, str | None]
+    yaml_before: str
+    yaml_after: str
 
 
 class LogFileStatus(BaseModel):
@@ -1846,7 +1954,58 @@ def _app_config_status(config: AppConfig) -> AppConfigStatus:
         decision_route=config.decision_route,
         configured_tiers=[name.value for name in config.configured_tiers],
         decision_preview=config.decision_preview,
+        custom_endpoint=config.custom_endpoint,
     )
+
+
+def _eval_score_status(score: EvalModelScore) -> EvalModelScoreStatus:
+    return EvalModelScoreStatus(
+        model=score.model,
+        total_cases=score.total_cases,
+        overall_pass_rate=score.overall_pass_rate,
+        accuracy_pass_rate=score.accuracy_pass_rate,
+        json_parse_rate=score.json_parse_rate,
+        p50_ms=score.p50_ms,
+        p95_ms=score.p95_ms,
+        max_ms=score.max_ms,
+        brier_score=score.brier_score,
+        ece_5bin=score.ece_5bin,
+        brier_n=score.brier_n,
+        category_rates=score.category_rates,
+    )
+
+
+def _eval_run_status(run: EvalRun, scores: list[EvalModelScore]) -> EvalRunStatus:
+    return EvalRunStatus(
+        id=run.id,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        status=run.status,
+        models=list(run.models),
+        categories=list(run.categories),
+        config_path=run.config_path,
+        results_json_path=run.results_json_path,
+        error_message=run.error_message,
+        scores=[_eval_score_status(score) for score in scores],
+    )
+
+
+def _agent_settings_yaml(config: AppConfig) -> str:
+    """A readable projection of the SQLite routing; never read back as truth."""
+    lines = [
+        "# Projection of the SQLite agent routing (SettingsStore).",
+        "# Editing this file does not change runtime behaviour.",
+        "agents:",
+    ]
+    for agent_id, route in config.agent_routing:
+        lines.append(f"  {agent_id}:")
+        lines.append(f"    tier: {route.tier.value}")
+        if route.provider is not None:
+            lines.append(f"    provider: {route.provider.value}")
+        if route.model is not None:
+            lines.append(f"    model: {route.model}")
+    return "\n".join(lines) + "\n"
 
 
 def _technical_report_for(
@@ -2082,6 +2241,7 @@ def create_app(
     scheduler: SchedulerLoop | None = None
     worker_loop: JobWorkerLoop | None = None
     settings_store: SettingsStore | None = None
+    eval_runner: EvalRunner | None = None
     flush_task: asyncio.Task[None] | None = None
     tunnel = tunnel_manager
     if tunnel is None and database_path is not None:
@@ -2105,6 +2265,8 @@ def create_app(
                 flush_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await flush_task
+            if eval_runner is not None:
+                await eval_runner.stop()
             if tunnel is not None:
                 await tunnel.stop()
             if worker_loop is not None:
@@ -2148,6 +2310,7 @@ def create_app(
                 "/api/v1/agent/",
                 "/api/v1/analysis/",
                 "/api/v1/decision/",
+                "/api/v1/evals/",
                 "/api/v1/strategy/",
                 "/api/v1/research/",
                 "/api/v1/strategies",
@@ -2229,6 +2392,8 @@ def create_app(
         worker_loop = JobWorkerLoop(
             JobWorker(job_store, build_job_handlers(database_path, settings))
         )
+        evals = EvalStore(database_path)
+        eval_runner = EvalRunner(evals, resolve_paths())
 
         def verify_origin(request: Request) -> None:
             origin = request.headers.get("origin")
@@ -3627,6 +3792,246 @@ def create_app(
             except PromptError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             return PromptStatus.model_validate(prompt.to_dict())
+
+        @app.get("/api/v1/evals/config")
+        def eval_config(request: Request) -> EvalConfigStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            paths = resolve_paths()
+            try:
+                providers = parse_promptfoo_config(
+                    paths.config.read_text(encoding="utf-8")
+                )
+                categories = read_categories(paths.dataset)
+            except (EvalConfigError, OSError) as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            active = evals.active_run()
+            return EvalConfigStatus(
+                providers=[
+                    EvalProviderStatus(id=p.id, label=p.label, model=p.model)
+                    for p in providers
+                ],
+                categories=categories,
+                tools=tool_availability(),
+                config_path=str(paths.config),
+                dataset_path=str(paths.dataset),
+                active_run_id=None if active is None else active.id,
+                custom_endpoint=settings.load().custom_endpoint,
+            )
+
+        @app.get("/api/v1/evals/runs")
+        def list_eval_runs(request: Request) -> EvalRunList:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            runs = [
+                _eval_run_status(run, evals.get_scores(run.id))
+                for run in evals.list_runs()
+            ]
+            return EvalRunList(runs=runs)
+
+        @app.post("/api/v1/evals/runs", status_code=201)
+        async def create_eval_run(
+            request: Request, body: EvalRunCreate
+        ) -> EvalRunStatus:
+            require_write(request)
+            paths = resolve_paths()
+            try:
+                known = {
+                    p.id: p
+                    for p in parse_promptfoo_config(
+                        paths.config.read_text(encoding="utf-8")
+                    )
+                }
+                categories = set(read_categories(paths.dataset))
+            except (EvalConfigError, OSError) as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+            selected = body.providers or list(known)
+            unknown = [item for item in selected if item not in known]
+            if unknown:
+                raise HTTPException(
+                    status_code=422, detail=f"Unknown provider(s): {', '.join(unknown)}"
+                )
+            bad_categories = [c for c in body.categories if c not in categories]
+            if bad_categories:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown category(ies): {', '.join(bad_categories)}",
+                )
+            labels = tuple(known[item].label for item in selected)
+            try:
+                run = evals.create_run(
+                    models=labels,
+                    categories=tuple(body.categories),
+                    config_path=str(paths.config),
+                )
+            except EvalRunActive as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            eval_runner.start(
+                EvalLaunch(
+                    run=run,
+                    providers=tuple(selected),
+                    no_cache=body.no_cache,
+                )
+            )
+            return _eval_run_status(run, [])
+
+        @app.get("/api/v1/evals/runs/{run_id}")
+        def get_eval_run(request: Request, run_id: str) -> EvalRunStatus:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                run = evals.get_run(run_id)
+            except EvalRunNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return _eval_run_status(run, evals.get_scores(run_id))
+
+        @app.get("/api/v1/evals/runs/{run_id}/cases")
+        def get_eval_cases(
+            request: Request,
+            run_id: str,
+            model: str | None = None,
+            category: str | None = None,
+            status: Literal["all", "failed", "passed"] = "all",
+        ) -> EvalCaseList:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                cases = evals.read_cases(
+                    run_id,
+                    scorer_path=resolve_paths().scorer,
+                    model=model,
+                    category=category,
+                    status=status,
+                )
+            except EvalRunNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (ScoringError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return EvalCaseList(
+                run_id=run_id,
+                model=model,
+                category=category,
+                status=status,
+                total=len(cases),
+                cases=[
+                    EvalCaseStatus(
+                        description=case.description,
+                        model=case.model,
+                        category=case.category,
+                        passed=case.passed,
+                        input=case.input,
+                        raw_output=case.raw_output,
+                        confidence=case.confidence,
+                        latency_ms=case.latency_ms,
+                        failure_reasons=list(case.failure_reasons),
+                    )
+                    for case in cases
+                ],
+            )
+
+        @app.post("/api/v1/evals/runs/{run_id}/cancel")
+        async def cancel_eval_run(request: Request, run_id: str) -> EvalRunStatus:
+            require_write(request)
+            try:
+                run = evals.get_run(run_id)
+            except EvalRunNotFound as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if not run.active:
+                raise HTTPException(
+                    status_code=409, detail=f"Eval run {run_id} is {run.status}."
+                )
+            cancelled = await eval_runner.cancel(run_id)
+            if not cancelled:
+                evals.mark_cancelled(run_id)
+            return _eval_run_status(evals.get_run(run_id), evals.get_scores(run_id))
+
+        @app.post("/api/v1/evals/promote")
+        def promote_eval_model(
+            request: Request, body: EvalPromoteRequest
+        ) -> EvalPromoteDiff:
+            require_write(request)
+            paths = resolve_paths()
+            try:
+                providers = {
+                    p.model: p
+                    for p in parse_promptfoo_config(
+                        paths.config.read_text(encoding="utf-8")
+                    )
+                }
+            except (EvalConfigError, OSError) as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            if body.model not in providers:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown model {body.model!r}; not in the eval config.",
+                )
+            before = _app_config_status(settings.load())
+            if body.agent_id not in before.agent_routing:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown agent role {body.agent_id!r}.",
+                )
+            try:
+                if body.endpoint is not None:
+                    settings.save_custom_endpoint(body.endpoint)
+                config = settings.save_agent_model(
+                    agent_id=body.agent_id,
+                    provider=body.provider,
+                    model=body.model,
+                )
+            except (SettingsError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            yaml_before = _agent_settings_yaml(
+                replace(
+                    settings.load(),
+                    agent_routing=tuple(before.agent_routing.items()),
+                )
+            )
+            yaml_after = _agent_settings_yaml(config)
+            mirror = paths.agent_settings_mirror
+            mirror.parent.mkdir(parents=True, exist_ok=True)
+            tmp = mirror.with_suffix(".yaml.tmp")
+            tmp.write_text(yaml_after, encoding="utf-8")
+            tmp.replace(mirror)
+
+            old_route = before.agent_routing[body.agent_id]
+            new_route = config.route_for(body.agent_id)
+            return EvalPromoteDiff(
+                agent_id=body.agent_id,
+                before={
+                    "tier": old_route.tier.value,
+                    "provider": (
+                        None if old_route.provider is None else old_route.provider.value
+                    ),
+                    "model": old_route.model,
+                },
+                after={
+                    "tier": new_route.tier.value,
+                    "provider": (
+                        None if new_route.provider is None else new_route.provider.value
+                    ),
+                    "model": new_route.model,
+                },
+                yaml_before=yaml_before,
+                yaml_after=yaml_after,
+            )
+
+        @app.get("/api/v1/evals/runs/{run_id}/scorecard.csv")
+        def download_eval_scorecard(request: Request, run_id: str) -> Response:
+            if auth.csrf_for_session(request.cookies.get(COOKIE_NAME)) is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            scorecard = evals.artifact_dir(run_id) / "scorecard.csv"
+            if not scorecard.is_file():
+                raise HTTPException(status_code=404, detail="Scorecard is not ready.")
+            return Response(
+                content=scorecard.read_bytes(),
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": f'attachment; filename="scorecard-{run_id}.csv"'
+                },
+            )
 
         @app.post("/api/v1/decision/preview")
         def decision_preview(

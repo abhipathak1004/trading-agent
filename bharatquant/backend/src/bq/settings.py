@@ -73,6 +73,7 @@ KEY_MODEL_NAME = "model_name"
 KEY_NEWS_FEED_URL = "news_feed_url"
 KEY_NEWS_MEMORY_TTL_DAYS = "news_memory_ttl_days"
 KEY_KITE_ENABLED = "kite_enabled"
+KEY_CUSTOM_ENDPOINT = "custom_endpoint"
 
 
 class SettingsError(ValueError):
@@ -227,6 +228,7 @@ class AppConfig:
     risk_limits: RiskLimits | None = None
     campaign: CampaignConfig = CampaignConfig()
     logging: LoggingConfig = LoggingConfig()
+    custom_endpoint: str | None = None
 
     def tier(self, name: TierName) -> TierConfig | None:
         for key, value in self.tiers:
@@ -330,6 +332,32 @@ def validate_news_feed_url(value: str) -> str:
     ):
         raise SettingsError("Feed URL must be HTTPS without embedded credentials.")
     return url
+
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def validate_custom_endpoint(value: str) -> str:
+    """A local model endpoint: https anywhere, plain http only on loopback."""
+    if not isinstance(value, str):
+        raise SettingsError("Custom endpoint must be text.")
+    url = value.strip()
+    if not url:
+        return ""
+    if len(url) > MAX_SETTING_CHARS or _CONTROL.search(url):
+        raise SettingsError("Custom endpoint is malformed.")
+    parts = urlsplit(url)
+    if parts.username or parts.password:
+        raise SettingsError("Custom endpoint must not embed credentials.")
+    if parts.scheme == "https":
+        if not parts.hostname:
+            raise SettingsError("Custom endpoint must name a host.")
+        return url
+    if parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS:
+        return url
+    raise SettingsError(
+        "Custom endpoint must use HTTPS, or HTTP only on a loopback host."
+    )
 
 
 def validate_memory_ttl_days(value: int) -> int:
@@ -959,6 +987,7 @@ class SettingsStore:
         # Absent means off: a fresh install must not attempt broker calls.
         kite_enabled = str(rows.get(KEY_KITE_ENABLED, "false")).lower() == "true"
         model_name = str(rows.get(KEY_MODEL_NAME, ""))
+        custom_endpoint = rows.get(KEY_CUSTOM_ENDPOINT) or None
         return AppConfig(
             provider=provider,
             model_name=model_name,
@@ -982,6 +1011,7 @@ class SettingsStore:
             risk_limits=_load_risk_limits(rows),
             campaign=_load_campaign(rows),
             logging=_load_logging(rows),
+            custom_endpoint=custom_endpoint,
         )
 
     def api_key(self, provider: Provider | str) -> str | None:
@@ -1349,6 +1379,61 @@ class SettingsStore:
                     },
                 )
         return self.load()
+
+    def save_custom_endpoint(self, endpoint: str) -> AppConfig:
+        """Store (or clear) the local OpenAI-compatible endpoint for CUSTOM."""
+        value = validate_custom_endpoint(endpoint)
+        updated_at = _utc(self.clock.now())
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                if value:
+                    connection.execute(
+                        "INSERT INTO app_settings "
+                        "(setting_key, setting_value, updated_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(setting_key) DO UPDATE SET "
+                        "setting_value = excluded.setting_value, "
+                        "updated_at = excluded.updated_at",
+                        (KEY_CUSTOM_ENDPOINT, value, _timestamp(updated_at)),
+                    )
+                else:
+                    connection.execute(
+                        "DELETE FROM app_settings WHERE setting_key = ?",
+                        (KEY_CUSTOM_ENDPOINT,),
+                    )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.custom_endpoint.updated",
+                    object_type="app_settings",
+                    object_id=KEY_CUSTOM_ENDPOINT,
+                    payload={"custom_endpoint": value},
+                )
+        return self.load()
+
+    def save_agent_model(
+        self, *, agent_id: str, provider: Provider | str, model: str
+    ) -> AppConfig:
+        """Point one agent role at a specific provider/model, keeping the rest."""
+        target = _require_provider(provider)
+        if _AGENT_ID.fullmatch(agent_id) is None:
+            raise SettingsError("An agent id must be a short snake_case identifier.")
+        if target is Provider.TYPESAFE_JEV:
+            raise SettingsError("TypeSafe Jev is only valid for the decision tier.")
+        config = self.load()
+        routing = dict(config.agent_routing)
+        existing = routing.get(agent_id) or AgentRoute(TierName.REASONING)
+        routing[agent_id] = AgentRoute(
+            tier=existing.tier, provider=target, model=validate_model_name(model)
+        )
+        return self.save_models(
+            tiers=dict(config.tiers),
+            agent_routing=routing,
+            pipeline=config.pipeline,
+            decision_route=config.decision_route,
+            decision_policy=config.decision_policy,
+        )
 
 
 def _agent_routing_json(entries: Mapping[str, AgentRoute]) -> str:

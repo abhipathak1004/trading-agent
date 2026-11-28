@@ -13,6 +13,7 @@ export type NavView =
   | "reports"
   | "strategy"
   | "agents"
+  | "evals"
   | "data"
   | "schedules"
   | "settings"

@@ -1,0 +1,204 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# Promptfoo evaluation config for local trading LLMs on Apple Silicon (M4 Pro 24 GB)
+# Loads the 50-case golden CSV test set (trading_golden_eval_50.csv) in the same directory.
+#
+# Run sequentially so only one model loads into 24 GB unified memory at a time:
+#   PROMPTFOO_DISABLE_TELEMETRY=1 npx promptfoo@latest eval --max-concurrency 1
+#   npx promptfoo@latest view
+
+description: "Local Trading LLM 50-Case Golden Benchmark: Gemma 4 12B vs Qwen3.5-9B vs Granite 4.2 8B"
+
+x-trading-tools: &trading_tools
+  - type: function
+    function:
+      name: get_ohlcv_snapshot
+      description: "Fetch point-in-time OHLCV price, volume, and moving-average snapshot for an NSE/BSE ticker."
+      parameters:
+        type: object
+        properties:
+          symbol:
+            type: string
+            description: "Exchange ticker symbol (e.g., INFY, HDFCBANK, RELIANCE)."
+          timeframe:
+            type: string
+            enum: ["5m", "15m", "1h", "1d"]
+          as_of:
+            type: string
+            description: "ISO-8601 timestamp cutoff for point-in-time retrieval."
+        required: ["symbol", "timeframe", "as_of"]
+        additionalProperties: false
+  - type: function
+    function:
+      name: get_corporate_filings
+      description: "Retrieve recent exchange filings (earnings, corporate actions, insider trades, regulatory) for a ticker."
+      parameters:
+        type: object
+        properties:
+          symbol:
+            type: string
+          category:
+            type: string
+            enum: ["earnings", "corporate_action", "insider_trade", "regulatory"]
+          limit:
+            type: integer
+            minimum: 1
+            maximum: 10
+        required: ["symbol", "category"]
+        additionalProperties: false
+
+prompts:
+  - id: trading-agent-prompt
+    raw: |
+      [
+        {
+          "role": "system",
+          "content": "{{system_prompt}}"
+        },
+        {
+          "role": "user",
+          "content": "{{user_input}}"
+        }
+      ]
+
+providers:
+  # --- Option A: Ollama (sequential multi-model sweeps on M4 Pro 24 GB) ---
+  # Pull models first:
+  #   ollama pull gemma4:12b-mlx
+  #   ollama pull qwen3.5:9b
+  #   ollama pull granite4.2:8b
+  - id: ollama:chat:gemma4:12b-mlx
+    label: "Gemma 4 12B (MLX)"
+    config:
+      temperature: 0
+      num_ctx: 16384
+      tools: *trading_tools
+
+  - id: ollama:chat:qwen3.5:9b
+    label: "Qwen3.5-9B"
+    config:
+      temperature: 0
+      num_ctx: 16384
+      tools: *trading_tools
+
+  - id: ollama:chat:granite4.2:8b
+    label: "Granite 4.2 8B"
+    config:
+      temperature: 0
+      num_ctx: 16384
+      tools: *trading_tools
+
+  # --- Option B: Direct mlx_lm.server (OpenAI-compatible endpoint) ---
+  # Uncomment when benchmarking a raw mlx-lm server on port 8080:
+  #   mlx_lm.server --model mlx-community/Qwen3.5-9B-MLX-4bit --port 8080
+  #
+  # - id: openai:chat:mlx-community/Qwen3.5-9B-MLX-4bit
+  #   label: "Qwen3.5-9B (mlx_lm.server)"
+  #   config:
+  #     apiBaseUrl: "http://127.0.0.1:8080/v1"
+  #     apiKeyRequired: false
+  #     apiKey: "not-needed"
+  #     temperature: 0
+  #     max_tokens: 1024
+  #     tools: *trading_tools
+
+defaultTest:
+  options:
+    timeout: 15000
+  assert:
+    - type: latency
+      metric: latency_under_10s
+      threshold: 10000
+    - type: javascript
+      metric: golden_task_accuracy
+      value: |
+        const vars = context.vars;
+        const raw = typeof output === 'string' ? output.trim() : JSON.stringify(output);
+
+        if (vars.task_type === 'news_extraction') {
+          let data;
+          try {
+            data = JSON.parse(raw);
+          } catch (e) {
+            return { pass: false, score: 0, reason: 'Output is not valid raw JSON: ' + e.message };
+          }
+
+          const requiredKeys = ['ticker', 'event_type', 'sentiment', 'confidence', 'extracted_numbers', 'summary'];
+          const keys = Object.keys(data);
+          const missing = requiredKeys.filter((k) => !(k in data));
+          const extra = keys.filter((k) => !requiredKeys.includes(k));
+          if (missing.length || extra.length) {
+            return { pass: false, score: 0, reason: `Schema mismatch. Missing: [${missing}], Extra: [${extra}]` };
+          }
+
+          const validEvents = ['earnings', 'guidance', 'macro_policy', 'regulatory', 'corporate_action', 'm_and_a', 'noise'];
+          const validSentiments = ['bullish', 'bearish', 'neutral', 'mixed'];
+          if (!validEvents.includes(data.event_type) || !validSentiments.includes(data.sentiment)) {
+            return { pass: false, score: 0, reason: `Invalid enum: event_type=${data.event_type}, sentiment=${data.sentiment}` };
+          }
+          if (typeof data.confidence !== 'number' || data.confidence < 0 || data.confidence > 1) {
+            return { pass: false, score: 0, reason: `Invalid confidence: ${data.confidence}` };
+          }
+          if (!Array.isArray(data.extracted_numbers) || typeof data.summary !== 'string' || data.summary.length > 240) {
+            return { pass: false, score: 0, reason: 'Invalid extracted_numbers array or summary exceeds 240 chars' };
+          }
+
+          const expTickers = (vars.expected_ticker || '').split('|').filter(Boolean);
+          const tickerOk = expTickers.some((t) => String(data.ticker).toUpperCase().includes(t.toUpperCase()));
+          const expEvents = (vars.expected_event_type || '').split('|').filter(Boolean);
+          const eventOk = expEvents.includes(data.event_type);
+          const expSents = (vars.expected_sentiment || '').split('|').filter(Boolean);
+          const sentOk = expSents.includes(data.sentiment);
+
+          let numOk = true;
+          if (vars.expected_number === 'NONE') {
+            numOk = data.extracted_numbers.length === 0;
+          } else if (vars.expected_number) {
+            const numsJson = JSON.stringify(data.extracted_numbers);
+            const expNums = vars.expected_number.split('|').filter(Boolean);
+            numOk = expNums.some((n) => numsJson.includes(n));
+          }
+
+          const maxConf = parseFloat(vars.max_confidence || '1.0');
+          const confOk = data.confidence <= maxConf;
+
+          const pass = tickerOk && eventOk && sentOk && numOk && confOk;
+          return {
+            pass,
+            score: pass ? 1 : 0,
+            reason: pass
+              ? 'All JSON schema, entity, sentiment, grounding, and confidence checks passed.'
+              : `Failed checks -> ticker:${tickerOk} event:${eventOk} sentiment:${sentOk} numbers:${numOk} conf<=${maxConf}:${confOk}`,
+          };
+        }
+
+        if (vars.task_type === 'tool_call') {
+          const calledOhlcv = raw.includes('get_ohlcv_snapshot');
+          const calledFilings = raw.includes('get_corporate_filings');
+
+          if (vars.expected_tool === 'NONE') {
+            const abstained = !calledOhlcv && !calledFilings;
+            return {
+              pass: abstained,
+              score: abstained ? 1 : 0,
+              reason: abstained
+                ? 'Correctly abstained from calling a tool on underspecified/unsupported request.'
+                : 'Hallucinated a tool call when expected_tool is NONE.',
+            };
+          }
+
+          const toolOk = raw.includes(vars.expected_tool);
+          const reqArgs = (vars.expected_args || '').split('|').filter(Boolean);
+          const argsOk = reqArgs.every((arg) => raw.includes(arg));
+          const pass = toolOk && argsOk;
+          return {
+            pass,
+            score: pass ? 1 : 0,
+            reason: pass
+              ? `Matched tool ${vars.expected_tool} with all required arguments.`
+              : `Expected tool=${vars.expected_tool} (ok:${toolOk}) and args=[${reqArgs.join(', ')}] (ok:${argsOk}).`,
+          };
+        }
+
+        return { pass: false, score: 0, reason: `Unknown task_type: ${vars.task_type}` };
+
+tests: file://trading_golden_eval_50.csv

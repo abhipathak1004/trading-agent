@@ -6,6 +6,63 @@ task. History lives in git and
 
 ## Current state
 
+- **Model Evals tab (28 Nov 2026):** a new **Build → Model Evals** page benchmarks
+  local Apple Silicon LLMs (Gemma 4 12B, Qwen3.5-9B, Granite 4.2 8B) against the
+  50-case trading golden set via Promptfoo. Migration **039** adds `eval_runs` +
+  `eval_model_scores`; the partial unique index `eval_runs_single_active` is the
+  single-run lock (a second `POST` is a 409). `bq/evals/` holds `config.py`
+  (stdlib parser for our `evals/promptfooconfig.yaml` + CSV categories),
+  `store.py`, `scoring.py` (imports the repo-root `evals/score_promptfoo_results.py`
+  by path), and `runner.py` (one sequential `npx promptfoo@latest eval
+  --max-concurrency 1` process, `PROMPTFOO_DISABLE_TELEMETRY=1`, SIGTERM cancel,
+  scorecard.csv export). API: `/api/v1/evals/{config,runs,runs/{id},
+  runs/{id}/cases,runs/{id}/cancel,runs/{id}/scorecard.csv,promote}`.
+  The bundle files live in `evals/` at the repo root. Promoting a winning model
+  writes `agent_routing` in SQLite and mirrors a readable `config/agent_settings.yaml`
+  (projection only; SQLite is truth). A real local endpoint now works:
+  `Provider.CUSTOM` may be keyless and `OpenAICompatClient` accepts loopback HTTP.
+  - **Live sweep verified (28 Nov 2026):** Node **26.13.1** (Homebrew;
+    `/opt/homebrew/bin` prepended in `~/.zshrc` because a root-owned
+    `/usr/local/bin/node` v22.17 shadowed it) and **Ollama 0.40.19** (Homebrew).
+    `POST /api/v1/evals/runs` → Promptfoo → Ollama generated for real; the run
+    `completed` with 20 cases and a persisted scorecard. Three bugs were found
+    and fixed only by running it:
+    1. `categories` were stored but never passed to Promptfoo → now
+       `--filter-metadata category=a,b` (10+10 cases, not 50).
+    2. Models rambled past 2,400 tokens per case → `num_predict: 512` on every
+       provider (and `failOnError: false` so a slow case aborts, not hangs).
+    3. **Exit code 100 means "some tests failed", not a crash** — the runner
+       discarded a perfectly good `results.json`. It now scores whenever the
+       file exists and only marks `failed` when there is no output.
+  - **Full three-model sweep (28 Nov 2026).** All three models pulled (~17 GB in
+    `~/.ollama/models`, 30 GB total) and scored through the app, one at a time,
+    `earnings` + `noise_filtering` (20 cases each). Two more fixes came only
+    from running it:
+    - **`think: false` on every provider.** Reasoning generation was most of
+      granite's latency *and* the source of the prose. With it off granite went
+      **0/20 → 12/20**, p50 **15.3 s → 2.9 s**, JSON parse 0% → 85%.
+    - **CUSTOM endpoint path bug.** `OpenAICompatClient` POSTed to `self.endpoint`
+      verbatim, so the documented Ollama base `http://127.0.0.1:11434/v1` 404'd
+      (needs `/v1/chat/completions`). Promote therefore *looked* fine but could
+      never actually call the model. The client now accepts either a base or the
+      full completions URL.
+  - **Results (20 cases, 10 earnings + 10 noise):**
+
+    | Model | Overall | Task acc | JSON parse | p50 | p95 | Brier ↓ | ECE-5 ↓ | Calib N |
+    |---|---|---|---|---|---|---|---|---|
+    | Gemma 4 12B (MLX) | 65% | 65% | 100% | 2255 ms | 4262 ms | 0.311 | 0.330 | 20 |
+    | Qwen3.5-9B | 60% | 65% | 100% | 2301 ms | 6049 ms | 0.372 | 0.378 | 20 |
+    | Granite 4.2 8B | 60% | 60% | 85% | 2942 ms | 13538 ms | 0.375 | 0.456 | 17 |
+
+    Gemma wins on latency, calibration and consistency; it is also the only model
+    at **10/10 on `earnings`**. All three score **0.3 on `noise_filtering`**:
+    they read the rumour/explainer text correctly (ticker, `event_type: noise`,
+    `extracted_numbers: []`) but answer with confidence 0.9–0.95 against the
+    0.65 cap — i.e. the filter works and the models are over-confident, which is
+    exactly what the Brier/ECE columns exist to show.
+  - **Promote verified live:** gemma promoted to `news_research` wrote the SQLite
+    route + the `config/agent_settings.yaml` mirror, and the role then resolved
+    to `CUSTOM`/`gemma4:12b-mlx` and returned a real completion from Ollama.
 - **Operational logging (26 Nov 2026):** `bq/logbook.py` records every LLM call
   (full system/prompt/response, provider/model/tokens/latency/outcome) and every
   model, final-gate, campaign and trigger decision. Entries buffer in
@@ -102,13 +159,18 @@ task. History lives in git and
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
   execution/realism, memory, confidence, opportunities/shadows, scheduler,
   reports, backtests, research dossiers and runtime hardening.
-- **Verification:** 945 backend tests, 131 frontend tests; ruff/format clean;
-  frontend typecheck/build clean; fresh DB applies **37 migrations**.
+- **Verification:** 986 backend tests, 139 frontend tests; ruff/format clean;
+  frontend typecheck/build clean; new `bq/evals` is mypy-clean; a fresh DB applies
+  **39 migrations** (`039` is the Model Evals migration). Three real local sweeps
+  and a live promote completed end to end (see Model Evals above).
 - **mypy:** pre-existing errors remain in `cli.py`, `triggers.py`, `campaign.py`,
   `campaign_feedback.py`, `catalysts.py`, `reports/engine.py`,
   `infra/scheduler.py` and some test fakes. Do not “fix” them as part of
-  maintenance; the logging change adds none.
-- **Next migration number:** `039` if a new migration is needed.
+  maintenance; the Model Evals change adds none.
+- **Next migration number:** `040` if a new migration is needed.
+- **Known pre-existing test failures:** `test_logbook` (filename is hard-coded to a
+  date, breaks off that day) and `test_phase5_acceptance` (produces no paper plan).
+  Both fail without this change too; do not attribute them to Model Evals.
 
 ## Phase 19 delivered
 
@@ -167,6 +229,7 @@ maintenance/optional breadth:
 | Execution | `bq/paper_trading.py`, `bq/execution/` |
 | Campaign | `bq/campaign.py`, `bq/catalysts.py`, `bq/shortlist.py`, `bq/triggers.py`, `bq/campaign_feedback.py`, `bq/data/equity_master.py`, `web/src/CampaignPanel.tsx` |
 | Logging | `bq/logbook.py`, `bq/infra/job_handlers.py` (`logs.flush`), `web/src/LoggingPanel.tsx`, `web/src/loggingContract.ts` |
+| Model Evals | `bq/evals/` (`config.py`, `store.py`, `scoring.py`, `runner.py`), `evals/*` (bundle), `web/src/ModelEvalsPanel.tsx`, `web/src/evalContract.ts` |
 
 ## Commands
 

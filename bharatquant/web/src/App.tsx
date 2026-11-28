@@ -34,6 +34,7 @@ import ModelsConfigPanel from "./ModelsConfigPanel";
 import HowToUsePanel from "./HowToUsePanel";
 import TodayOverview from "./TodayOverview";
 import CampaignPanel from "./CampaignPanel";
+import ModelEvalsPanel from "./ModelEvalsPanel";
 
 type WorkspaceView = NavView;
 
@@ -65,6 +66,7 @@ const NAV_GROUPS: {
     items: [
       { view: "strategy", label: "Strategy", icon: "⬡" },
       { view: "agents", label: "Agent Lab", icon: "◈" },
+      { view: "evals", label: "Model Evals", icon: "◍" },
     ],
   },
   {
@@ -93,6 +95,7 @@ const VIEW_LABELS: Record<WorkspaceView, string> = {
   reports: "Reports",
   strategy: "Strategy",
   agents: "Agent Lab",
+  evals: "Model Evals",
   data: "Data",
   schedules: "Schedules",
   settings: "Settings",
@@ -772,6 +775,38 @@ export default function App() {
             <SemanticMemoryPanel csrfToken={session.csrfToken} />
             <MemoryCalibrationPanel csrfToken={session.csrfToken} />
             <PlaybookPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "evals" && (
+          <section className="dashboard" id="evals" aria-labelledby="evals-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">MODEL EVALS</p>
+                <h1 id="evals-page-title">Model Evals</h1>
+                <p className="intro">
+                  Benchmark local Apple Silicon models on the trading golden set.
+                  Scores are computed in code; a promoted model only changes which
+                  endpoint an agent role calls.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">LOCAL ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Model evals scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>One model at a time, 24 GB safe</strong>
+                <p>
+                  Each benchmark loads a single local model into unified memory, so
+                  only one run may be active and Promptfoo runs with
+                  max-concurrency: 1. This page never trades and never calls a
+                  cloud provider.
+                </p>
+              </div>
+            </section>
+
+            <ModelEvalsPanel csrfToken={session.csrfToken} />
           </section>
         )}
 

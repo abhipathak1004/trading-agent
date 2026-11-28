@@ -1,0 +1,116 @@
+{
+  "results": [
+    {
+      "provider": {"id": "ollama:chat:gemma4:12b-mlx", "label": "Gemma 4 12B (MLX)"},
+      "testCase": {
+        "description": "Earnings 01: INFY Q2 beat",
+        "vars": {
+          "__description": "Earnings 01: INFY Q2 beat",
+          "__metadata:category": "earnings",
+          "task_type": "news_extraction",
+          "user_input": "As of 2026-10-15 — Infosys posted Q2 net profit of 6890 crore."
+        }
+      },
+      "response": {
+        "output": "{\"ticker\":\"INFY\",\"event_type\":\"earnings\",\"sentiment\":\"bullish\",\"confidence\":0.9,\"extracted_numbers\":[{\"metric\":\"net_profit\",\"value\":6890}],\"summary\":\"INFY Q2 beat.\"}"
+      },
+      "latencyMs": 4200,
+      "success": true,
+      "gradingResult": {
+        "componentResults": [
+          {"pass": true, "reason": "All checks passed.", "assertion": {"metric": "golden_task_accuracy"}},
+          {"pass": true, "reason": "under threshold", "assertion": {"metric": "latency_under_10s"}}
+        ]
+      }
+    },
+    {
+      "provider": {"id": "ollama:chat:gemma4:12b-mlx", "label": "Gemma 4 12B (MLX)"},
+      "testCase": {
+        "description": "Noise 01: unconfirmed rumour",
+        "vars": {
+          "__description": "Noise 01: unconfirmed rumour",
+          "__metadata:category": "noise_filtering",
+          "task_type": "news_extraction",
+          "user_input": "Unconfirmed social media chatter claims RELIANCE may announce a partnership."
+        }
+      },
+      "response": {
+        "output": "{\"ticker\":\"RELIANCE\",\"event_type\":\"noise\",\"sentiment\":\"neutral\",\"confidence\":0.55,\"extracted_numbers\":[],\"summary\":\"Rumour only.\"}"
+      },
+      "latencyMs": 8000,
+      "success": false,
+      "gradingResult": {
+        "componentResults": [
+          {"pass": false, "reason": "Failed checks -> numbers:true conf<=0.65:true ticker:true event:true sentiment:true", "assertion": {"metric": "golden_task_accuracy"}},
+          {"pass": true, "reason": "under threshold", "assertion": {"metric": "latency_under_10s"}}
+        ]
+      }
+    },
+    {
+      "provider": {"id": "ollama:chat:qwen3.5:9b", "label": "Qwen3.5-9B"},
+      "testCase": {
+        "description": "Earnings 01: INFY Q2 beat",
+        "vars": {
+          "__description": "Earnings 01: INFY Q2 beat",
+          "__metadata:category": "earnings",
+          "task_type": "news_extraction",
+          "user_input": "As of 2026-10-15 — Infosys posted Q2 net profit of 6890 crore."
+        }
+      },
+      "response": {
+        "output": "{\"ticker\":\"INFY\",\"event_type\":\"earnings\",\"sentiment\":\"bullish\",\"confidence\":0.7,\"extracted_numbers\":[{\"metric\":\"net_profit\",\"value\":6890}],\"summary\":\"INFY beat.\"}"
+      },
+      "latencyMs": 2600,
+      "success": true,
+      "gradingResult": {
+        "componentResults": [
+          {"pass": true, "reason": "All checks passed.", "assertion": {"metric": "golden_task_accuracy"}},
+          {"pass": true, "reason": "under threshold", "assertion": {"metric": "latency_under_10s"}}
+        ]
+      }
+    },
+    {
+      "provider": {"id": "ollama:chat:qwen3.5:9b", "label": "Qwen3.5-9B"},
+      "testCase": {
+        "description": "Noise 01: unconfirmed rumour",
+        "vars": {
+          "__description": "Noise 01: unconfirmed rumour",
+          "__metadata:category": "noise_filtering",
+          "task_type": "news_extraction",
+          "user_input": "Unconfirmed social media chatter claims RELIANCE may announce a partnership."
+        }
+      },
+      "response": {
+        "output": "{\"ticker\":\"RELIANCE\",\"event_type\":\"noise\",\"sentiment\":\"neutral\",\"confidence\":0.6,\"extracted_numbers\":[],\"summary\":\"Rumour only.\"}"
+      },
+      "latencyMs": 9100,
+      "success": true,
+      "gradingResult": {
+        "componentResults": [
+          {"pass": true, "reason": "All checks passed.", "assertion": {"metric": "golden_task_accuracy"}},
+          {"pass": true, "reason": "under threshold", "assertion": {"metric": "latency_under_10s"}}
+        ]
+      }
+    },
+    {
+      "provider": {"id": "ollama:chat:qwen3.5:9b", "label": "Qwen3.5-9B"},
+      "testCase": {
+        "description": "Tool Edge 03: missing as_of",
+        "vars": {
+          "__description": "Tool Edge 03: missing as_of",
+          "__metadata:category": "edge_tool_calls",
+          "task_type": "tool_call",
+          "user_input": "Get the 5m OHLCV snapshot for RELIANCE right now."
+        }
+      },
+      "response": {"output": "I need an as_of timestamp before I can call get_ohlcv_snapshot."},
+      "latencyMs": 1500,
+      "success": true,
+      "gradingResult": {
+        "componentResults": [
+          {"pass": true, "reason": "Correctly abstained.", "assertion": {"metric": "golden_task_accuracy"}}
+        ]
+      }
+    }
+  ]
+}

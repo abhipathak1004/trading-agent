@@ -191,9 +191,25 @@ class OpenAICompatClient:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         parts = urlsplit(endpoint)
-        if parts.scheme != "https" or not parts.hostname:
-            raise LLMClientError("Chat endpoint must be an HTTPS URL.")
-        self.endpoint = endpoint
+        loopback_http = parts.scheme == "http" and parts.hostname in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }
+        if parts.scheme != "https" and not loopback_http:
+            raise LLMClientError(
+                "Chat endpoint must be HTTPS, or HTTP only on a loopback host."
+            )
+        if not parts.hostname:
+            raise LLMClientError("Chat endpoint must name a host.")
+        # Accept either an OpenAI-compatible base (``.../v1``) or the full
+        # completions URL. Without this, a loopback endpoint configured the way
+        # every OpenAI SDK documents POSTs to ``/v1`` and gets a 404.
+        self.endpoint = (
+            endpoint
+            if endpoint.rstrip("/").endswith("/chat/completions")
+            else f"{endpoint.rstrip('/')}/chat/completions"
+        )
         self.transport = transport
 
     def complete(
@@ -256,7 +272,10 @@ class OpenAICompatClient:
 
 
 def client_for(
-    provider: Provider, *, transport: httpx.BaseTransport | None = None
+    provider: Provider,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    custom_endpoint: str | None = None,
 ) -> ModelClient:
     """Pick the wire format for a configured provider."""
     if provider is Provider.GEMINI:
@@ -269,7 +288,9 @@ def client_for(
         raise LLMNotConfigured(
             "TypeSafe Jev is a decision provider; use the decision router."
         )
-    # CUSTOM defaults to an OpenAI-compatible wire format.
+    # CUSTOM defaults to an OpenAI-compatible wire format (e.g. a local model).
+    if custom_endpoint:
+        return OpenAICompatClient(custom_endpoint, transport=transport)
     return OpenAICompatClient(transport=transport)
 
 

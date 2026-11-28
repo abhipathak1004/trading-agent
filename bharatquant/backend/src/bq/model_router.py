@@ -493,6 +493,10 @@ class ModelRouter:
     def _key(self, provider: Provider) -> str:
         key = self.store.api_key(provider)
         if key is None:
+            if provider is Provider.CUSTOM:
+                # A local OpenAI-compatible endpoint (e.g. Ollama) is keyless;
+                # the wire client sends this placeholder in the auth header.
+                return "local"
             raise LLMNotConfigured(
                 f"No API key is configured for provider {provider.value}."
             )
@@ -502,6 +506,12 @@ class ModelRouter:
         client = self._clients.get(provider)
         if client is not None:
             return client
+        if provider is Provider.CUSTOM:
+            endpoint = self.store.load().custom_endpoint
+            if endpoint:
+                return client_for(
+                    provider, transport=self._transport, custom_endpoint=endpoint
+                )
         return client_for(provider, transport=self._transport)
 
     def _complete_route(
