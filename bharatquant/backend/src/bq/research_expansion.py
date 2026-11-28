@@ -313,16 +313,17 @@ class ResearchExpansionStore:
             with connection:
                 connection.execute(
                     "INSERT INTO fundamental_snapshots "
-                    "(snapshot_id, instrument_id, source, period_end, known_at, "
-                    "revenue_paise, ebitda_paise, net_income_paise, total_debt_paise, "
-                    "cash_paise, shares_outstanding, book_value_paise, fcf_paise, "
-                    "snapshot_hash, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(snapshot_id, instrument_id, source, period_end, period_label, "
+                    "known_at, revenue_paise, ebitda_paise, net_income_paise, "
+                    "total_debt_paise, cash_paise, shares_outstanding, book_value_paise, "
+                    "fcf_paise, snapshot_hash, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         snapshot_id,
                         snapshot.instrument_id,
                         snapshot.source.value,
                         timestamp(snapshot.period_end),
+                        snapshot.period_label,
                         timestamp(snapshot.known_at),
                         snapshot.revenue_paise,
                         snapshot.ebitda_paise,
@@ -350,10 +351,10 @@ class ResearchExpansionStore:
     def get_fundamentals(self, snapshot_id: str) -> FundamentalRecord:
         with closing(self._connect()) as connection:
             row = connection.execute(
-                "SELECT snapshot_id, instrument_id, source, period_end, known_at, "
-                "revenue_paise, ebitda_paise, net_income_paise, total_debt_paise, "
-                "cash_paise, shares_outstanding, book_value_paise, fcf_paise, "
-                "snapshot_hash, created_at FROM fundamental_snapshots "
+                "SELECT snapshot_id, instrument_id, source, period_end, period_label, "
+                "known_at, revenue_paise, ebitda_paise, net_income_paise, "
+                "total_debt_paise, cash_paise, shares_outstanding, book_value_paise, "
+                "fcf_paise, snapshot_hash, created_at FROM fundamental_snapshots "
                 "WHERE snapshot_id = ?",
                 (snapshot_id,),
             ).fetchone()
@@ -727,21 +728,22 @@ class ResearchExpansionStore:
             instrument_id=str(row[1]),
             source=FundamentalSource(str(row[2])),
             period_end=parse_timestamp(str(row[3])),
-            known_at=parse_timestamp(str(row[4])),
-            revenue_paise=int(str(row[5])),
-            ebitda_paise=int(str(row[6])),
-            net_income_paise=int(str(row[7])),
-            total_debt_paise=int(str(row[8])),
-            cash_paise=int(str(row[9])),
-            shares_outstanding=int(str(row[10])),
-            book_value_paise=int(str(row[11])),
-            fcf_paise=int(str(row[12])),
+            period_label=str(row[4]) if row[4] is not None else None,
+            known_at=parse_timestamp(str(row[5])),
+            revenue_paise=int(str(row[6])),
+            ebitda_paise=int(str(row[7])),
+            net_income_paise=int(str(row[8])),
+            total_debt_paise=int(str(row[9])),
+            cash_paise=int(str(row[10])),
+            shares_outstanding=int(str(row[11])),
+            book_value_paise=int(str(row[12])),
+            fcf_paise=int(str(row[13])),
         )
         return FundamentalRecord(
             snapshot_id=str(row[0]),
             snapshot=snapshot,
-            snapshot_hash=str(row[13]),
-            created_at=parse_timestamp(str(row[14])),
+            snapshot_hash=str(row[14]),
+            created_at=parse_timestamp(str(row[15])),
         )
 
 

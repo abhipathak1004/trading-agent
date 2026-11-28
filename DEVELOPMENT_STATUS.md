@@ -6,6 +6,27 @@ task. History lives in git and
 
 ## Current state
 
+- **Native tool calling (28 Nov 2026):** agents now get a real tool protocol
+  instead of prose. `ToolSpec.input_schema()` renders one JSON Schema;
+  `complete()` takes `tools`/`tool_call`/`tool_result`; Bedrock nests them under
+  `toolSpec.inputSchema.json`, OpenAI uses `tools`/`tool_calls`, Gemini uses
+  `functionDeclarations`. **The round trip was missing for every provider** —
+  a native call's result went to text history only, so turn 2 had no record of
+  the call and re-requested the same tool. `run_agent_loop` now stages the
+  executed call and result for the closure to replay exactly once. Verified
+  against a capturing mock: 9 tool specs reach `converse`, and turn 2 sends
+  `assistant[toolUse]` → `user[toolResult]` → prompt with no repeat call.
+  `map_finish_reason` learned `TOOL_USE`. ADR-052.
+  - Agents are configured in one step: `POST /api/v1/settings/bedrock/apply`
+    (UI: **Use Bedrock for all text agents**) points the reasoning and flash
+    tiers at a Bedrock model — **11 of 15 agent roles**. The 4 decision agents
+    stay on TypeSafe Jev by design. Verified live: `/api/v1/agents` resolves
+    7 text roles to BEDROCK, 4 to TYPESAFE_JEV.
+  - The prose `tools_prompt()` stays in the prompt as the fallback path, so a
+    provider without native tool use keeps working.
+  - Test doubles for `ModelClient`/`ModelRouter` must accept the new optional
+    kwargs; `tests/test_bedrock_tools.py` covers schemas, both wire shapes and
+    the loop.
 - **AWS Bedrock provider (28 Nov 2026):** `Provider.BEDROCK` is an **additive**
   sixth provider — the five existing ones, their keys and the active selection
   are untouched (asserted by test). Bedrock API keys are **bearer tokens**, not
@@ -255,7 +276,7 @@ task. History lives in git and
 - Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
   execution/realism, memory, confidence, opportunities/shadows, scheduler,
   reports, backtests, research dossiers and runtime hardening.
-- **Verification:** 1096 backend tests collected, 1094 pass (the same 2 pre-existing failures
+- **Verification:** 1110 backend tests collected, 1108 pass (the same 2 pre-existing failures
   unchanged), 174 frontend tests; ruff/format clean; frontend typecheck/build
   clean; `bq/local_models.py` and `bq/evals` are mypy-clean; a fresh DB applies
   **41 migrations** (`041` is the Bedrock provider migration). Three real local sweeps and a live promote completed

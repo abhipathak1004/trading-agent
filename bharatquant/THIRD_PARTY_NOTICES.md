@@ -21,6 +21,7 @@ attribution in the file header.
 | Component | Source | License | Location |
 | --- | --- | --- | --- |
 | dirty-JSON parser | [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) `helpers/dirty_json.py` | MIT (Copyright (c) 2025 Agent Zero, s.r.o) | `backend/src/bq/dirty_json.py` |
+| AI Hedge Fund engine (v2) | [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), distribution `aihf==2.7.2`, import name `hedge_fund` | MIT (Copyright (c) 2024 Virat Singh) | `backend/src/bq/aihf/engine/` |
 
 Other Agent Zero LLM helpers were **adapted, not copied**: their structure
 informed `bq/llm_result.py`, `bq/llm_extract.py`, `bq/llm_retry.py` and
@@ -78,6 +79,7 @@ dependencies are included because they are part of the lock.
 | Transitive | [Pygments](https://pypi.org/project/pygments/2.21.0/) | 2.21.0 | BSD-2-Clause |
 | Transitive | [pyOpenSSL](https://pypi.org/project/pyopenssl/26.4.0/) | 26.4.0 | Apache-2.0 |
 | Transitive | [pywin32](https://pypi.org/project/pywin32/312/) | 312 | PSF-2.0 (Windows only) |
+| Runtime | [PyYAML](https://pypi.org/project/PyYAML/6.0.4/) | 6.0.4 | MIT |
 | Development | [pytest](https://pypi.org/project/pytest/9.2.0/) | 9.2.0 | MIT |
 | Transitive | [python-dateutil](https://pypi.org/project/python-dateutil/4.0.0/) | 4.0.0 | Apache-2.0 OR BSD-3-Clause |
 | Runtime | [referencing](https://pypi.org/project/referencing/0.37.0/) | 0.37.0 | MIT |

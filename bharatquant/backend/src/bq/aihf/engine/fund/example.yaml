@@ -1,0 +1,59 @@
+# An example mandate, in BharatQuant's AI Hedge Fund tab.
+#
+# There are no tickers here. A mandate is the DESK — its strategies, staff,
+# risk, capital, and cadence — and is pointed at NSE names when a fund is
+# created or a backtest is run (Settings or the tab's ticker field).
+#
+# Strategies staff LLM personas (graham, buffett, munger, lynch,
+# druckenmiller) and/or the deterministic pead model. A persona reasons over
+# point-in-time fundamentals; pead fires on a filed earnings surprise.
+#
+# The model behind a persona is NOT chosen here: it comes from Settings ->
+# Models & keys, so swapping a model is a settings change, not a mandate edit.
+#
+# A self-screening `universe:` rule and `rebalance: minute` are supported by
+# the engine but not yet enabled in this tab; a mandate that uses either is
+# refused when it is saved.
+#
+# Costs below are NOT the US defaults: BharatQuant charges Indian delivery
+# fees (STT, exchange, SEBI, stamp, GST) from its own schedule, and only the
+# half-spread and the no-trade band are read from this block. They are shown
+# for reference; edit the app's charge schedule, not these numbers.
+#
+schema_version: 2
+name: example-fund
+strategies:
+  - name: deep-value          # discretionary pod: Graham-led, long-only
+    blend: {mode: long_only}
+    weight: 0.6               # capital slice, relative to sibling strategies
+    models:
+      - name: graham
+        weight: 2.0
+      - name: buffett
+      - name: munger
+  - name: earnings-drift      # systematic pod: post-earnings drift
+    blend: {mode: long_short}
+    weight: 0.4
+    models:
+      - name: pead
+risk:
+  max_position_pct: 0.25      # master risk: no single name above 25% of equity
+  max_gross_exposure: 1.0     # unlevered, across the netted book
+  halve_drawdown_pct: 0.10    # 10% off the NAV peak: the book runs at half size until it recovers
+  max_drawdown_pct: 0.20      # 20% off the NAV peak: sold to cash and kept there
+  # max_net_exposure: 0.3     # |longs - shorts| band, for a long/short book
+  # max_adv_pct: 0.05         # no order above 5% of 20-day average daily volume
+  # max_beta: 0.5             # |book beta| to the benchmark; betas from a year of daily returns
+  # max_sector_pct: 0.3       # |net weight| in any one sector
+  # max_volatility: 0.15      # modelled annualized vol of the book (single-index model)
+costs:                        # reference only; delivery fees come from the app
+  spread_bps: 5               # half the bid-ask spread, paid on every side
+  min_trade_pct: 0.005        # an add under 0.5% of equity waits; trims and closes always trade
+allocation:                   # the scorecard moves the weights above; remove the block to keep them as written
+  min_evidence: 20            # graded dates (analyst) or periods (strategy) before a weight moves
+  slope: 0.25                 # weight = mandate x clip(1 + slope x t-stat, floor, cap)
+  floor: 0.25                 # a cut analyst keeps a quarter, so it can earn its way back
+  cap: 2.0
+capital: 100000
+rebalance: weekly             # daily | weekly | monthly — how often the fund trades
+benchmark: NIFTY 50           # measured against; also the backtest's trading-day grid

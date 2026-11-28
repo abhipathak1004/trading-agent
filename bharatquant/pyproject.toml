@@ -22,6 +22,11 @@ dependencies = [
     # Imported directly, so declared directly rather than relied on as
     # transitive dependencies of fastapi.
     "pydantic>=2.14,<3",
+    # The ported fund engine (ADR-052) reads and writes mandate files as YAML.
+    # That format is part of the AI Hedge Fund tab's wire contract, so it is
+    # kept rather than replaced with JSON; PyYAML is the reader it has always
+    # used. Only safe_load/safe_dump are called.
+    "pyyaml>=6.0,<7",
     "referencing>=0.37,<1",
     "starlette>=1.10,<2",
     "tzdata",
@@ -58,9 +63,14 @@ pythonpath = ["backend/src"]
 [tool.ruff]
 target-version = "py313"
 
-# Vendored verbatim from Agent Zero (MIT); keep it a faithful copy, so do not
-# reformat or lint it as our own source.
-extend-exclude = ["backend/src/bq/dirty_json.py"]
+# Vendored third-party sources, kept as faithful copies rather than restyled as
+# our own: Agent Zero's dirty-JSON parser (MIT) and the AI Hedge Fund engine
+# (MIT, ADR-052). Their diffs from upstream are recorded in
+# backend/src/bq/aihf/engine/PATCHES.md.
+extend-exclude = [
+    "backend/src/bq/dirty_json.py",
+    "backend/src/bq/aihf/engine",
+]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
@@ -85,10 +95,10 @@ ignore_errors = true
 module = ["kiteconnect", "kiteconnect.*"]
 ignore_missing_imports = true
 
-# The aihf probe scripts import ``hedge_fund`` and run in the aihf sidecar
-# interpreter (see bq/aihf/config.py), which has its own pandas/pydantic. That
-# package is not installed in this environment by design, so mypy cannot
-# resolve it here and must not try: the probes report JSON, never raise.
+# The ported AI Hedge Fund engine (ADR-052) is vendored upstream source: it is
+# duck-typed in places and typed against its own protocols. Keep it a faithful
+# copy and relax strict mode for it rather than restyling it into our codebase.
+# `bq/aihf/bridge/` and the rest of `bq.aihf` stay fully strict.
 [[tool.mypy.overrides]]
-module = ["bq.aihf.probe.*"]
+module = ["bq.aihf.engine.*"]
 ignore_errors = true

@@ -21,6 +21,10 @@ class FundamentalError(ValueError):
 class FundamentalSource(StrEnum):
     XBRL = "XBRL"
     OWNER = "OWNER"
+    # Yahoo's quoteSummary. Labelling these rows XBRL would misstate where the
+    # numbers came from, and a reader needs to know: XBRL is a filing, Yahoo is
+    # a vendor's restatement of one (ADR-052).
+    YAHOO = "YAHOO"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +41,11 @@ class FundamentalSnapshot:
     shares_outstanding: int
     book_value_paise: int
     fcf_paise: int
+    # Which kind of reporting period this row is. The fund engine asks for
+    # trailing-twelve-month rows specifically; without a label a reader cannot
+    # tell a TTM row from a single quarter. None means "unlabelled" (every row
+    # written before migration 042).
+    period_label: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.instrument_id, str) or not IDENTIFIER.fullmatch(
@@ -45,6 +54,8 @@ class FundamentalSnapshot:
             raise FundamentalError("Invalid instrument identifier.")
         if not isinstance(self.source, FundamentalSource):
             raise FundamentalError("Invalid fundamental source.")
+        if self.period_label not in (None, "ttm", "quarter", "annual"):
+            raise FundamentalError("Invalid fundamental period label.")
         if self.period_end.utcoffset() is None or self.known_at.utcoffset() is None:
             raise FundamentalError("Fundamental timestamps must be timezone-aware.")
         if self.known_at < self.period_end:
@@ -87,6 +98,7 @@ class FundamentalSnapshot:
             "shares_outstanding": self.shares_outstanding,
             "book_value_paise": str(self.book_value_paise),
             "fcf_paise": str(self.fcf_paise),
+            "period_label": self.period_label,
         }
 
     @property

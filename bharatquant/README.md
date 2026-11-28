@@ -79,7 +79,20 @@ happens in this app.
 3. Paste the key under **Provider API keys → BEDROCK**.
 
 Bedrock is available on the reasoning and flash tiers; the decision tier remains
-TypeSafe Jev only. Only text completion is wired — Bedrock tool use is not.
+TypeSafe Jev only.
+
+**Tool use is supported.** Agents send their permitted tools to Bedrock as a
+native `toolConfig` (JSON Schema per tool) and the returned `toolUse` blocks
+execute in the agent loop; the assistant's request and the tool result are
+replayed on the next turn, which is what stops a model re-requesting the same
+tool. The OpenAI-compatible and Gemini clients take the same schemas in their
+own shapes.
+
+To point every text agent at Bedrock in one step, use
+**Settings → Models & keys → Use Bedrock for all text agents** (or
+`POST /api/v1/settings/bedrock/apply`). That moves the reasoning and flash
+tiers, i.e. 11 of the 15 agent roles; the four decision agents stay on TypeSafe
+Jev.
 
 Open `http://127.0.0.1:8000`. The server binds to loopback only. On non-macOS
 development hosts, set `BQ_HOME` to a dedicated local data directory before

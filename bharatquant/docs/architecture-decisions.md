@@ -1741,3 +1741,59 @@ selection are untouched (asserted by test).
   moves credentials outside Settings and adds a heavy dependency.
 - *Reusing `OpenAICompatClient`* — `Converse` is not OpenAI-shaped; the request
   and response differ structurally.
+
+## ADR-052: Agents get a native tool protocol; the round trip is mandatory
+
+**Status:** accepted (28 Nov 2026). Extends ADR-051.
+
+**Context.** Bedrock's `Converse` exposes real tool use (`toolConfig` with
+`toolSpec.inputSchema.json`, returning `toolUse` blocks). Adding it exposed two
+pre-existing gaps that were not Bedrock-specific:
+
+1. **No client accepted a tool schema.** `ModelClient.complete()` had no
+   `tools` parameter, so every agent injected `tools_prompt()` as prose and
+   parsed calls back out of the text. The model never saw a schema; it guessed
+   argument names from a description.
+2. **The tool round trip was missing for every provider.** A native call's
+   result was appended to the text history only. Providers with a native
+   protocol require the assistant's request *and* the matching result in the
+   conversation, so on the next turn the model had no record of its own call
+   and re-requested the same tool.
+
+**Decision.**
+
+1. **`ToolSpec.input_schema()`** renders one provider-neutral JSON Schema
+   (the OpenAI `parameters` shape). A tool declares its surface once;
+   `as_function_schema()` is the `{name, description, parameters}` envelope.
+   `additionalProperties: false` matches the runner's own validation, so the
+   schema cannot advertise an argument the runner would reject.
+2. **`complete()` takes `tools`, `tool_call`, `tool_result`**, all optional.
+   Each client translates them: Bedrock nests the schema under
+   `toolSpec.inputSchema.json` and needs a `toolResult` in a *user* message;
+   OpenAI uses `tools`/`tool_calls` keyed by id; Gemini uses
+   `functionDeclarations` and `functionResponse`.
+3. **The loop stages the exchange.** `run_agent_loop` hands the executed call
+   and its output to the model-turn closure, which replays them on the next
+   turn exactly once. It is opt-in: a closure without a `pending` slot behaves
+   as before, and a call recovered from prose has no `call_id`, so there is no
+   protocol to replay and it is skipped.
+4. **Tool schemas go to native providers only.** The prose listing stays in
+   the prompt as the fallback path and a backstop, which is what keeps every
+   provider working during the transition.
+
+**Consequences.**
+
+- The research agent now sends **9 tool specs** to `converse` and executes the
+  returned `toolUse`. Verified against a capturing mock: turn 2 sends
+  `assistant[toolUse]` → `user[toolResult]` → prompt, and the same tool is not
+  requested twice.
+- `map_finish_reason` learned `TOOL_USE`; without it a Bedrock tool call was
+  reported as `tool_use` instead of `tool_calls`.
+- `parse_usage` handles `Converse`'s camelCase token fields (ADR-051), so a
+  tool-using run still reports real token counts.
+- Configuring the agents is one call: `POST /api/v1/settings/bedrock/apply`
+  points the reasoning and flash tiers at a Bedrock model, which is **11 of 15
+  agent roles**. The four decision agents stay on TypeSafe Jev, because the
+  decision tier accepts only that provider.
+- Test doubles standing in for `ModelClient`/`ModelRouter` must accept the new
+  keyword arguments. They are optional, so existing fakes only needed widening.
