@@ -25,6 +25,7 @@ PAPER_STOPS_JOB = "paper.stops"
 PAPER_SQUARE_OFF_JOB = "paper.square_off"
 CAMPAIGN_RESEARCH_JOB = "campaign.research"
 CAMPAIGN_TRIGGERS_JOB = "campaign.triggers"
+AIHF_FUNDAMENTALS_JOB = "aihf.fundamentals.ingest"
 LOGS_FLUSH_JOB = "logs.flush"
 DEFAULT_RESOLVE_HORIZON_DAYS = 5
 DEFAULT_RESOLVE_MAX_EPISODES = 50
@@ -125,6 +126,19 @@ def build_job_handlers(
             "notes": list(result.notes),
         }
 
+    def ingest_fund_fundamentals(_run: JobRun) -> dict[str, object]:
+        """Refresh the fundamentals the AI Hedge Fund reads, for its own names.
+
+        One network request per symbol, which is why the job is disabled by
+        default: enabling it is the owner saying "spend that".
+        """
+        from bq.aihf.config import resolve_paths
+        from bq.aihf.ingest import ingest_fund_universes
+
+        paths = resolve_paths(database_path=database_path)
+        summary = ingest_fund_universes(database_path, paths)
+        return summary.to_dict()
+
     return {
         MEMORY_RESOLVE_JOB: resolve_memory,
         NEWS_INGEST_JOB: ingest_news,
@@ -134,11 +148,13 @@ def build_job_handlers(
         PAPER_SQUARE_OFF_JOB: square_off,
         CAMPAIGN_RESEARCH_JOB: campaign_research,
         CAMPAIGN_TRIGGERS_JOB: campaign_triggers,
+        AIHF_FUNDAMENTALS_JOB: ingest_fund_fundamentals,
         LOGS_FLUSH_JOB: flush_logs,
     }
 
 
 __all__ = [
+    "AIHF_FUNDAMENTALS_JOB",
     "DEFAULT_RESOLVE_HORIZON_DAYS",
     "DEFAULT_RESOLVE_MAX_EPISODES",
     "LOGS_FLUSH_JOB",

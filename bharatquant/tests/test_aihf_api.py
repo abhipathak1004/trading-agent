@@ -1,8 +1,9 @@
 """``/api/v1/aihf/*``: auth, wire shapes, and the approval gate.
 
-The gate tests run against the real aihf sidecar because the whole point is
-that aihf's own ledger decides what is adoptable. They skip when the sidecar
-is not provisioned, so the suite stays honest on a machine without it.
+The engine is vendored now (ADR-053), so the gate tests no longer skip on a
+missing sidecar — they run everywhere. The property under test is the one that
+must never regress: **a halted fund refuses both a preview and an execute**, and
+an approved preview leaves a ledger whose chain verifies.
 """
 
 import json
@@ -11,7 +12,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bq.aihf.config import resolve_paths
 from bq.api import ALLOWED_ORIGIN, create_app
 from bq.auth import OwnerAuth
 from bq.infra.database import migrate
@@ -21,12 +21,10 @@ MANDATE_YAML = """\
 schema_version: 2
 name: test-fund
 strategies:
-  - name: deep-value
+  - name: earnings-drift
     blend: {mode: long_only}
     models:
-      - name: graham
-        weight: 2.0
-      - name: buffett
+      - name: pead
 risk:
   max_position_pct: 0.25
   max_gross_exposure: 1.0
@@ -34,27 +32,12 @@ risk:
   max_drawdown_pct: 0.2
 capital: 100000
 rebalance: weekly
-benchmark: SPY
+benchmark: NIFTY 50
 """
 
 
-def _sidecar() -> bool:
-    return resolve_paths(database_path=Path("/tmp/probe/bq.db")).available
-
-
-def _run(awaitable) -> None:
-    import asyncio
-
-    asyncio.run(awaitable)
-
-
 def _run_case(app, case) -> None:
-    """One signed-in session per case.
-
-    httpx opens a client on its first request, so the client is created here
-    and closed in ``finally`` rather than used as a context manager — the
-    login request has already opened it.
-    """
+    """One signed-in session per case."""
     import asyncio
 
     async def run() -> None:
@@ -88,6 +71,13 @@ def app(tmp_path: Path):
     return application
 
 
+async def _create_mandate(client, csrf) -> None:
+    response = await client.post(
+        "/api/v1/aihf/mandates", headers=_write(csrf), json={"yaml": MANDATE_YAML}
+    )
+    assert response.status_code == 201, response.text
+
+
 def test_aihf_reads_require_a_session(app) -> None:
     async def unauth() -> None:
         async with httpx.AsyncClient(
@@ -98,7 +88,6 @@ def test_aihf_reads_require_a_session(app) -> None:
                 "/api/v1/aihf/mandates",
                 "/api/v1/aihf/backtests",
                 "/api/v1/aihf/paper/funds",
-                "/api/v1/aihf/settings",
             ):
                 assert (await client.get(path)).status_code == 401
 
@@ -116,7 +105,6 @@ def test_aihf_writes_require_csrf_and_origin(app) -> None:
                 json={"yaml": MANDATE_YAML},
             )
         ).status_code == 403
-        # Authenticated but no CSRF token.
         assert (
             await client.post(
                 "/api/v1/aihf/mandates",
@@ -124,7 +112,6 @@ def test_aihf_writes_require_csrf_and_origin(app) -> None:
                 json={"yaml": MANDATE_YAML},
             )
         ).status_code == 403
-        # CSRF but a foreign origin.
         assert (
             await client.post(
                 "/api/v1/aihf/mandates",
@@ -136,7 +123,7 @@ def test_aihf_writes_require_csrf_and_origin(app) -> None:
     _run_case(app, check)
 
 
-def test_status_and_models_are_key_free(app) -> None:
+def test_status_is_key_free_and_reports_the_vendored_engine(app) -> None:
     async def check(client, _csrf):
         status = await client.get("/api/v1/aihf/status")
         assert status.status_code == 200
@@ -145,61 +132,33 @@ def test_status_and_models_are_key_free(app) -> None:
             "installed",
             "version",
             "has_llm_key",
-            "has_financial_datasets_key",
             "active_provider",
-            "active_model",
             "models",
             "can_run",
         }
-        # The variables are named; their values must never appear.
+        # The engine is vendored: it is always installed, on every machine.
+        assert body["installed"] is True
+        assert body["version"] == "in-process"
+        # No key at all is configured on a fresh database.
+        assert body["has_llm_key"] is False
+        assert body["can_run"] is False
+        # Never a secret in the projection.
         rendered = json.dumps(body)
         assert "********" not in rendered
         assert "secret" not in rendered.lower()
-        assert body["has_financial_datasets_key"] is False
-        assert body["has_llm_key"] is False
-        assert body["can_run"] is False
-
-        models = (await client.get("/api/v1/aihf/models")).json()["models"]
-        assert all(isinstance(model["runnable"], bool) for model in models)
 
     _run_case(app, check)
 
 
-def test_data_key_round_trips_masked(app) -> None:
-    async def check(client, csrf):
-        denied = await client.put(
-            "/api/v1/aihf/settings",
-            headers={"Origin": ALLOWED_ORIGIN},
-            json={"financial_datasets_api_key": "fd-secret-key-1234"},
-        )
-        assert denied.status_code == 403
-
-        saved = await client.put(
-            "/api/v1/aihf/settings",
-            headers=_write(csrf),
-            json={"financial_datasets_api_key": "fd-secret-key-1234"},
-        )
-        assert saved.status_code == 200
-        assert saved.json() == {
-            "financial_datasets": {"configured": True, "masked": "********1234"}
-        }
-        assert "fd-secret" not in saved.text
-
-        # The projection is the only shape the key leaves in.
-        current = await client.get("/api/v1/aihf/settings")
-        assert current.json() == saved.json()
-
-        status = (await client.get("/api/v1/aihf/status")).json()
-        assert status["has_financial_datasets_key"] is True
-
-        cleared = await client.put(
-            "/api/v1/aihf/settings",
-            headers=_write(csrf),
-            json={"financial_datasets_api_key": ""},
-        )
-        assert cleared.json() == {
-            "financial_datasets": {"configured": False, "masked": None}
-        }
+def test_models_come_from_the_engine_registry(app) -> None:
+    async def check(client, _csrf):
+        models = (await client.get("/api/v1/aihf/models")).json()["models"]
+        names = {model["model_name"] for model in models}
+        # Both persona and deterministic analysts are listed, from one registry.
+        assert "buffett" in names
+        assert "pead" in names
+        for model in models:
+            assert model["runnable"] is True
 
     _run_case(app, check)
 
@@ -214,12 +173,11 @@ def test_mandate_rejects_invalid_yaml(app) -> None:
             response = await client.post(
                 "/api/v1/aihf/mandates", headers=_write(csrf), json=body
             )
-            assert response.status_code in (422, 503), response.text
+            assert response.status_code == 422, response.text
 
     _run_case(app, check)
 
 
-@pytest.mark.skipif(not _sidecar(), reason="aihf sidecar not installed")
 def test_mandate_round_trip_through_the_schema(app) -> None:
     async def check(client, csrf):
         created = await client.post(
@@ -229,7 +187,8 @@ def test_mandate_round_trip_through_the_schema(app) -> None:
         body = created.json()
         assert body["name"] == "test-fund"
         assert body["valid"] is True
-        assert [s["title"] for s in body["summary"]["strategies"]] == ["Deep Value"]
+        assert body["summary"]["benchmark"] == "NIFTY 50"
+        assert [s["name"] for s in body["summary"]["strategies"]] == ["earnings-drift"]
 
         listed = (await client.get("/api/v1/aihf/mandates")).json()
         assert "test-fund" in {entry["name"] for entry in listed["mandates"]}
@@ -251,45 +210,80 @@ def test_mandate_round_trip_through_the_schema(app) -> None:
     _run_case(app, check)
 
 
-@pytest.mark.skipif(not _sidecar(), reason="aihf sidecar not installed")
-def test_backtest_refuses_without_credentials(app) -> None:
-    """A run without keys is a clear 409, not a confusing subprocess failure."""
+def test_a_minute_mandate_is_refused_by_the_api(app) -> None:
+    """The engine supports intraday; this tab does not yet. The refusal is a
+    422 at save time, not a mid-run failure."""
+    minute = MANDATE_YAML.replace("rebalance: weekly", "rebalance: minute").replace(
+        "benchmark: NIFTY 50", "benchmark: NIFTY 50\ninterval: 5.0"
+    )
 
     async def check(client, csrf):
-        await client.post(
-            "/api/v1/aihf/mandates", headers=_write(csrf), json={"yaml": MANDATE_YAML}
+        response = await client.post(
+            "/api/v1/aihf/mandates", headers=_write(csrf), json={"yaml": minute}
         )
+        assert response.status_code == 422
+        assert "minute" in response.json()["detail"]
+
+    _run_case(app, check)
+
+
+def test_backtest_rejects_a_model_override(app) -> None:
+    """Model choice is Settings; a per-run override would be silently ignored,
+    so it is refused instead of accepted and dropped."""
+
+    async def check(client, csrf):
+        await _create_mandate(client, csrf)
         response = await client.post(
             "/api/v1/aihf/backtest",
             headers=_write(csrf),
             json={
                 "mandate": "test-fund",
-                "tickers": ["AAPL"],
+                "tickers": ["RELIANCE"],
                 "start_date": "2025-01-02",
                 "end_date": "2025-02-02",
+                "model_override": "claude-opus-5-5",
             },
         )
-        assert response.status_code == 409
+        assert response.status_code == 422
         assert "Settings" in response.json()["detail"]
 
     _run_case(app, check)
 
 
-@pytest.mark.skipif(not _sidecar(), reason="aihf sidecar not installed")
+def test_backtest_needs_a_stored_mandate(app) -> None:
+    async def check(client, csrf):
+        response = await client.post(
+            "/api/v1/aihf/backtest",
+            headers=_write(csrf),
+            json={
+                "mandate": "absent",
+                "tickers": ["RELIANCE"],
+                "start_date": "2025-01-02",
+                "end_date": "2025-02-02",
+            },
+        )
+        assert response.status_code == 404
+
+    _run_case(app, check)
+
+
 def test_kill_switch_then_execute_is_409(app) -> None:
     """The one safety property that must never regress."""
 
     async def check(client, csrf):
-        await client.post(
-            "/api/v1/aihf/mandates", headers=_write(csrf), json={"yaml": MANDATE_YAML}
-        )
+        await _create_mandate(client, csrf)
         created = await client.post(
             "/api/v1/aihf/paper/funds",
             headers=_write(csrf),
-            json={"name": "alpha", "mandate": "test-fund", "tickers": ["AAPL", "MSFT"]},
+            json={
+                "name": "alpha",
+                "mandate": "test-fund",
+                "tickers": ["RELIANCE", "TCS"],
+            },
         )
         assert created.status_code == 201, created.text
-        assert created.json()["universe"] == ["AAPL", "MSFT"]
+        assert created.json()["universe"] == ["RELIANCE", "TCS"]
+        assert created.json()["status"] == "ACTIVE"
 
         halted = await client.post(
             "/api/v1/aihf/paper/alpha/kill-switch",
@@ -323,15 +317,56 @@ def test_kill_switch_then_execute_is_409(app) -> None:
     _run_case(app, check)
 
 
+def test_a_fund_refuses_a_name_it_already_has(app) -> None:
+    async def check(client, csrf):
+        await _create_mandate(client, csrf)
+        body = {"name": "alpha", "mandate": "test-fund", "tickers": ["RELIANCE"]}
+        assert (
+            await client.post(
+                "/api/v1/aihf/paper/funds", headers=_write(csrf), json=body
+            )
+        ).status_code == 201
+        assert (
+            await client.post(
+                "/api/v1/aihf/paper/funds", headers=_write(csrf), json=body
+            )
+        ).status_code == 409
+
+    _run_case(app, check)
+
+
 def test_fund_names_reject_traversal(app) -> None:
     async def check(client, csrf):
+        # The mandate must exist so the failure is the *name*, not the mandate.
+        await _create_mandate(client, csrf)
         for name in ("../escape", "a/b", "."):
             response = await client.post(
                 "/api/v1/aihf/paper/funds",
                 headers=_write(csrf),
-                json={"name": name, "mandate": "example", "tickers": ["AAPL"]},
+                json={"name": name, "mandate": "test-fund", "tickers": ["RELIANCE"]},
             )
-            assert response.status_code in (404, 422), (name, response.text)
+            assert response.status_code == 422, (name, response.text)
+
+    _run_case(app, check)
+
+
+def test_a_preview_without_a_due_session_is_a_conflict(app) -> None:
+    """A fresh fund's first due session depends on the vendor; with no network
+    and no bars it is a 409, and nothing extra is written."""
+
+    async def check(client, csrf):
+        await _create_mandate(client, csrf)
+        created = await client.post(
+            "/api/v1/aihf/paper/funds",
+            headers=_write(csrf),
+            json={"name": "alpha", "mandate": "test-fund", "tickers": ["RELIANCE"]},
+        )
+        assert created.status_code == 201
+        response = await client.post(
+            "/api/v1/aihf/paper/alpha/preview", headers=_write(csrf)
+        )
+        # Either it computed (network available) or nothing is due — never a 500.
+        assert response.status_code in (200, 409, 502), response.text
 
     _run_case(app, check)
 
@@ -339,7 +374,6 @@ def test_fund_names_reject_traversal(app) -> None:
 def test_sse_stream_terminates_when_the_run_finishes(tmp_path) -> None:
     """The stream must end on ``done``; a stuck socket is a hung browser tab."""
     import asyncio
-    import json
 
     from bq.aihf.config import resolve_paths
     from bq.aihf.routes import _event_stream
@@ -373,7 +407,6 @@ def test_sse_stream_terminates_when_the_run_finishes(tmp_path) -> None:
 
 def test_sse_stream_reports_an_unknown_run(tmp_path) -> None:
     import asyncio
-    import json
 
     from bq.aihf.config import resolve_paths
     from bq.aihf.routes import _event_stream

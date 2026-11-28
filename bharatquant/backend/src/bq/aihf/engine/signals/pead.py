@@ -13,13 +13,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from bq.aihf.engine.data.protocol import DataClient
 from bq.aihf.engine.data.models import EarningsRecord
+from bq.aihf.engine.data.protocol import DataClient
 from bq.aihf.engine.models import Signal
 from bq.aihf.engine.signals.base import QuantModel
 
 _RETROSPECTIVE_CUTOFF_DAYS = 45   # drop filings whose data is stale vs report period
-_SOURCE_PRIORITY = {"8-K": 0, "10-Q": 1, "10-K": 2, "20-F": 3}  # 8-K = earliest announcement
+# `8-K` is the earliest US announcement; `RESULT` is the NSE equivalent this app
+# stores (a filed quarterly result). Both are treated as announcements, so
+# `announcement_only` accepts either.
+_ANNOUNCEMENT_SOURCES = frozenset({"8-K", "RESULT"})
+_SOURCE_PRIORITY = {"8-K": 0, "RESULT": 0, "10-Q": 1, "10-K": 2, "20-F": 3}
 
 
 class PEADModel(QuantModel):
@@ -131,7 +135,7 @@ class PEADModel(QuantModel):
             surprise = r.quarterly.eps_surprise
             if surprise not in ("BEAT", "MISS"):
                 continue
-            if self._announcement_only and r.source_type != "8-K":
+            if self._announcement_only and r.source_type not in _ANNOUNCEMENT_SOURCES:
                 continue
 
             # 45-day retrospective filter

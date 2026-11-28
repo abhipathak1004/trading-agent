@@ -388,46 +388,29 @@ def test_read_ledger_pages_from_the_newest_end(tmp_path) -> None:
 
 
 def test_failure_detail_never_leaks_a_traceback() -> None:
-    from bq.aihf.runner import AiHfResult
+    """A failure surfaced to the UI is a sentence, not a traceback.
 
-    traceback_stdout = (
-        "Traceback (most recent call last):\n"
-        '  File "/tmp/x/lib/python3.13/site-packages/hedge_fund/data/client.py", line 425\n'
-        "    raise FDClientError(message)\n"
-        "hedge_fund.data.client.FDClientError: GET /prices/ returned 401"
+    The engine runs in-process now, so the value is the exception's own message,
+    capped. A traceback and a filesystem path are what the old subprocess
+    scraper had to strip; the rule survives even though the mechanism changed.
+    """
+    from bq.aihf.runner import _failure_detail
+
+    class EngineFailure(RuntimeError):
+        pass
+
+    detail = _failure_detail(
+        EngineFailure("RELIANCE: no close on 2026-11-25; cannot value the book")
     )
-    result = AiHfResult(
-        argv=("aihf",),
-        returncode=1,
-        stdout=traceback_stdout,
-        stderr="",
-        duration_ms=5,
-    )
-    detail = result.failure_detail()
-    assert "site-packages" not in detail
-    assert "/tmp/x" not in detail
-    assert "FDClientError" in detail
+    assert detail.startswith("RELIANCE:")
+    assert "Traceback" not in detail
     assert len(detail) <= 400
 
 
-def test_failure_detail_prefers_a_status_line() -> None:
-    from bq.aihf.runner import AiHfResult
+def test_failure_detail_reports_a_silent_failure_as_its_type() -> None:
+    from bq.aihf.runner import _failure_detail
 
-    result = AiHfResult(
-        argv=("aihf",),
-        returncode=1,
-        stdout="",
-        stderr="alpha halted: operator test",
-        duration_ms=5,
-    )
-    assert result.failure_detail() == "alpha halted: operator test"
+    class NothingDue(RuntimeError):
+        pass
 
-
-def test_failure_detail_reports_a_silent_failure() -> None:
-    from bq.aihf.runner import AiHfResult
-
-    result = AiHfResult(
-        argv=("aihf",), returncode=3, stdout="", stderr="", duration_ms=1
-    )
-    assert result.failure_detail() == "aihf exited with code 3."
-    assert result.ok is False
+    assert _failure_detail(NothingDue()) == "NothingDue"

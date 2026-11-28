@@ -121,8 +121,7 @@ class BharatQuantDataClient:
         ticker: str,
         start_date: str,
         end_date: str,
-        interval: str = "day",
-        interval_multiplier: int = 1,
+        **kwargs: object,
     ) -> list[Price]:
         """Daily bars in [start, end], inclusive, oldest first.
 
@@ -130,7 +129,14 @@ class BharatQuantDataClient:
         in one replay (a mark, then liquidity, then the factor model all ask for
         the same 30 days), so results are memoised per exact window — that is the
         difference between one vendor call and three per session.
+
+        Signature mirrors the protocol (``**kwargs``) so the class structurally
+        satisfies `DataClient`; the two recognised keywords are validated here
+        because a narrower signature would be rejected by mypy as an
+        incompatible override.
         """
+        interval = kwargs.get("interval", "day")
+        interval_multiplier = kwargs.get("interval_multiplier", 1)
         if interval != "day":
             raise BridgeError(
                 f"only daily bars are supported (asked for {interval!r}); "

@@ -18,19 +18,19 @@ research/.
 """
 
 from bq.aihf.engine.paper.deployed import (
-    deploy,
-    DeployedFund,
     FUND_FILE,
+    DeployedFund,
+    deploy,
     list_deployed,
     load_deployed,
     validate_fund_name,
 )
 from bq.aihf.engine.paper.ledger import Ledger, LedgerError
 from bq.aihf.engine.paper.tick import (
+    NothingDue,
     assessment_dates,
     following_session,
     next_session,
-    NothingDue,
     redo,
     tick,
 )

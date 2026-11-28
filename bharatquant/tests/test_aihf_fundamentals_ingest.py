@@ -31,9 +31,7 @@ FIXTURE = {
                     "industry": "Oil & Gas Refining & Marketing",
                 },
                 "price": {"longName": "Reliance Industries Limited"},
-                "defaultKeyStatistics": {
-                    "sharesOutstanding": {"raw": 6_766_000_000}
-                },
+                "defaultKeyStatistics": {"sharesOutstanding": {"raw": 6_766_000_000}},
                 "earningsHistory": {
                     "history": [
                         {
@@ -84,12 +82,16 @@ FIXTURE = {
                     "cashflowStatements": [
                         {
                             "endDate": {"raw": 1_722_470_400},
-                            "totalCashFromOperatingActivities": {"raw": 200_000_000_000},
+                            "totalCashFromOperatingActivities": {
+                                "raw": 200_000_000_000
+                            },
                             "capitalExpenditures": {"raw": -60_000_000_000},
                         },
                         {
                             "endDate": {"raw": 1_711_929_600},
-                            "totalCashFromOperatingActivities": {"raw": 180_000_000_000},
+                            "totalCashFromOperatingActivities": {
+                                "raw": 180_000_000_000
+                            },
                             "capitalExpenditures": {"raw": -55_000_000_000},
                         },
                     ]
@@ -136,7 +138,9 @@ def test_a_malformed_envelope_is_rejected() -> None:
 
 def test_an_error_envelope_is_rejected() -> None:
     with pytest.raises(YahooFundamentalsError):
-        parse_quote_summary(json.dumps({"quoteSummary": {"error": {"code": "x"}}}).encode())
+        parse_quote_summary(
+            json.dumps({"quoteSummary": {"error": {"code": "x"}}}).encode()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +185,10 @@ def test_free_cash_flow_is_operating_cash_less_capex(db) -> None:
 def test_snapshots_are_labelled_as_the_vendors_not_a_filing(db) -> None:
     _ingest(db)
     with sqlite3.connect(db) as connection:
-        sources = {row[0] for row in connection.execute("SELECT source FROM fundamental_snapshots")}
+        sources = {
+            row[0]
+            for row in connection.execute("SELECT source FROM fundamental_snapshots")
+        }
     assert sources == {"YAHOO"}
 
 
@@ -268,8 +275,12 @@ def test_a_quarter_without_revenue_is_skipped_not_guessed(db) -> None:
 def test_an_error_response_becomes_a_reason_not_an_exception(db) -> None:
     """An ingest is a batch over many names; one name Yahoo does not carry must
     not abort the rest."""
-    ingestor = YahooFundamentalsIngest(db, clock=_Clock(datetime(2025, 6, 1, tzinfo=UTC)))
-    ingestor._fetch = lambda _symbol: b'{"quoteSummary": {"error": {"code": "Not Found"}}}'  # noqa: SLF001
+    ingestor = YahooFundamentalsIngest(
+        db, clock=_Clock(datetime(2025, 6, 1, tzinfo=UTC))
+    )
+    ingestor._fetch = lambda _symbol: (
+        b'{"quoteSummary": {"error": {"code": "Not Found"}}}'
+    )  # noqa: SLF001
     report = ingestor.ingest("RELIANCE")
     assert report.reason is not None
     assert report.snapshots == 0

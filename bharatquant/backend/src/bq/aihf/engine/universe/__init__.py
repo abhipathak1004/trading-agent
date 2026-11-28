@@ -5,6 +5,11 @@ the mandate (``hedge_fund.fund.spec``), which itself reads these models, so
 import it by its full path.
 """
 
-from bq.aihf.engine.universe.models import CoverageRecord, Factor, PodCoverage, UniverseSpec
+from bq.aihf.engine.universe.models import (
+    CoverageRecord,
+    Factor,
+    PodCoverage,
+    UniverseSpec,
+)
 
 __all__ = ["CoverageRecord", "Factor", "PodCoverage", "UniverseSpec"]

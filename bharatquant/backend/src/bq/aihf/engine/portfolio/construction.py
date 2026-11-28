@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from math import isfinite
-from typing import Literal, Mapping, TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Literal, Mapping, TypeAlias
 
 from pydantic import BaseModel, Field
 

@@ -20,6 +20,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -108,11 +109,14 @@ KEY_CAMPAIGN = "campaign"
 KEY_LOGGING = "logging"
 KEY_LOCAL_MODELS = "local_models"
 KEY_AIHF_SECRETS = "aihf_secrets"
+KEY_RESEARCH_LAB = "research_lab"
 
 # Financial Datasets keys are ~40 chars; this is a ceiling, not a format check.
 MAX_DATA_KEY_CHARS = 256
 
-MAX_AGENT_ROUTING_ENTRIES = 32
+# 20 defaults ship (15 + 5 AI Hedge Fund personas), leaving room for an owner's
+# own additions; 32 was reached by that growth and would have capped them out.
+MAX_AGENT_ROUTING_ENTRIES = 48
 MAX_AGENT_ID_CHARS = 64
 MAX_TEMPERATURE = 2.0
 MAX_TOKENS_LIMIT = 32768
@@ -196,6 +200,125 @@ class PipelineConfig:
     )
 
 
+class EvidenceAuditorMode(StrEnum):
+    """How a candidate report is audited before release.
+
+    ``deterministic`` is the default and the only mode that can *admit* or
+    *reject* evidence: the gate is code, so a model cannot validate its own
+    numbers (arXiv:2611.24845 §3.2.3). ``llm`` additionally lets a model
+    propose a repair to a failing draft, but that proposal still has to pass
+    the same deterministic check.
+    """
+
+    DETERMINISTIC = "deterministic"
+    LLM = "llm"
+
+
+MAX_RESEARCH_ITERATIONS = 50
+MAX_RESEARCH_RETRIES = 5
+MIN_COMPACTION_TOKENS = 1000
+MAX_COMPACTION_TOKENS = 200000
+MAX_ALPHA_HORIZON_BARS = 250
+MAX_ALPHA_UNIVERSE = 2000
+MAX_ALPHA_HORIZONS = 6
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchModelSlot:
+    """One configurable model slot in the research harness."""
+
+    tier: TierName
+    max_output_tokens: int = 4096
+    temperature: float = 0.2
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchTriageConfig:
+    """The atomic decision battery used to triage research requests.
+
+    ``tier`` is pinned to ``decision`` because TypeSafe Jev is only valid there
+    (see :func:`validate_tier_config`); the owner can disable the battery but
+    cannot point it at a text model.
+    """
+
+    enabled: bool = True
+    tier: TierName = TierName.DECISION
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchBudgets:
+    """Loop budgets. All four are bounded in :func:`validate_research_lab_config`."""
+
+    max_iterations: int = 12
+    max_recovery_retries: int = 2
+    max_revision_retries: int = 2
+    compaction_token_threshold: int = 24000
+
+
+@dataclass(frozen=True, slots=True)
+class IndiaCosts:
+    """Effective NSE/BSE assumptions recorded in each run's ``theta``.
+
+    Rates are exact ``Decimal`` fractions of notional, never floats: a run's
+    recorded cost model must reproduce to the paise. Brokerage defaults to zero
+    because this project has no brokerage component today and a guessed
+    per-order rate would silently change every backtest; the owner confirms it.
+    """
+
+    brokerage_bps: Decimal = Decimal("0")
+    brokerage_flat_paise: int = 0
+    brokerage_cap_paise: int = 0
+    exchange_rate: Decimal = Decimal("0.0000297")
+    sebi_rate: Decimal = Decimal("0.000001")
+    ipft_rate: Decimal = Decimal("0")
+    stt_delivery: Decimal = Decimal("0.001")
+    stt_intraday_sell: Decimal = Decimal("0.00025")
+    stamp_delivery_buy: Decimal = Decimal("0.00015")
+    stamp_intraday_buy: Decimal = Decimal("0.00003")
+    gst: Decimal = Decimal("0.18")
+
+
+@dataclass(frozen=True, slots=True)
+class AlphaBenchSettings:
+    horizons: tuple[int, ...] = (1, 5, 20)
+    max_universe: int = 500
+    min_names_per_date: int = 5
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchLabConfig:
+    """The Research Lab's four agent slots, budgets and run assumptions.
+
+    Tiers live here; per-agent provider/model overrides live in
+    ``agent_routing`` so the existing Settings save path stays the only writer
+    of routes. Nothing in this block names a model.
+    """
+
+    planner: ResearchModelSlot = ResearchModelSlot(TierName.REASONING, 8192, 0.1)
+    synthesizer: ResearchModelSlot = ResearchModelSlot(TierName.REASONING, 8192, 0.1)
+    evidence_auditor: ResearchModelSlot = ResearchModelSlot(TierName.FLASH, 2048, 0.0)
+    evidence_auditor_mode: EvidenceAuditorMode = EvidenceAuditorMode.DETERMINISTIC
+    triage_scorer: ResearchTriageConfig = ResearchTriageConfig()
+    budgets: ResearchBudgets = ResearchBudgets()
+    costs: IndiaCosts = IndiaCosts()
+    alpha_bench: AlphaBenchSettings = AlphaBenchSettings()
+
+
+DEFAULT_RESEARCH_LAB = ResearchLabConfig()
+
+# The slot key in `research_lab` -> the agent id used for routing, prompts and
+# the UI. Kept as one table so all three surfaces cannot drift apart.
+RESEARCH_LAB_SLOTS: tuple[tuple[str, str], ...] = (
+    ("planner", "research_lab_planner"),
+    ("synthesizer", "research_lab_synthesizer"),
+    ("evidence_auditor", "research_lab_evidence_auditor"),
+    ("triage_scorer", "research_lab_triage_scorer"),
+)
+RESEARCH_LAB_AGENT_IDS: tuple[str, ...] = tuple(
+    agent_id for _, agent_id in RESEARCH_LAB_SLOTS
+)
+
+
 DEFAULT_AGENT_ROUTING: tuple[tuple[str, AgentRoute], ...] = tuple(
     sorted(
         {
@@ -214,6 +337,21 @@ DEFAULT_AGENT_ROUTING: tuple[tuple[str, AgentRoute], ...] = tuple(
             "market_regime": AgentRoute(TierName.FLASH),
             "technical_analyst": AgentRoute(TierName.FLASH),
             "risk_analyst": AgentRoute(TierName.FLASH),
+            # AI Hedge Fund personas (ADR-053). Each is its own agent id so the
+            # owner can point one persona at a different tier or model from
+            # Settings without touching the others.
+            "aihf_buffett": AgentRoute(TierName.REASONING),
+            "aihf_munger": AgentRoute(TierName.REASONING),
+            "aihf_graham": AgentRoute(TierName.REASONING),
+            "aihf_lynch": AgentRoute(TierName.REASONING),
+            "aihf_druckenmiller": AgentRoute(TierName.REASONING),
+            # Research Lab slots (ADR-054). The tier here is only the routing
+            # default; `research_lab` owns the authoritative tier for each slot
+            # and the provider/model override is the usual per-agent one.
+            "research_lab_planner": AgentRoute(TierName.REASONING),
+            "research_lab_synthesizer": AgentRoute(TierName.REASONING),
+            "research_lab_evidence_auditor": AgentRoute(TierName.FLASH),
+            "research_lab_triage_scorer": AgentRoute(TierName.DECISION),
         }.items()
     )
 )
@@ -238,6 +376,7 @@ class AppConfig:
     tiers: tuple[tuple[TierName, TierConfig], ...] = ()
     agent_routing: tuple[tuple[str, AgentRoute], ...] = ()
     pipeline: PipelineConfig = PipelineConfig()
+    research_lab: ResearchLabConfig = DEFAULT_RESEARCH_LAB
     decision_route: DecisionRoute = DecisionRoute.AUTO
     decision_policy: DecisionPolicyConfig = DecisionPolicyConfig()
     risk_limits: RiskLimits | None = None
@@ -703,6 +842,149 @@ def validate_pipeline(config: PipelineConfig) -> PipelineConfig:
     )
 
 
+def _bounded_int(value: object, name: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SettingsError(f"{name} must be an integer.")
+    if not low <= value <= high:
+        raise SettingsError(f"{name} must be between {low} and {high}.")
+    return value
+
+
+def _bounded_rate(value: object, name: str, *, high: Decimal = Decimal("1")) -> Decimal:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise SettingsError(f"{name} must be a finite Decimal rate.")
+    if not Decimal("0") <= value <= high:
+        raise SettingsError(f"{name} must be between 0 and {high}.")
+    return value
+
+
+def validate_research_slot(name: str, slot: ResearchModelSlot) -> ResearchModelSlot:
+    if not isinstance(slot, ResearchModelSlot):
+        raise SettingsError(f"The {name} research slot is required.")
+    tier = validate_tier_name(slot.tier)
+    if tier is TierName.DECISION:
+        raise SettingsError(
+            f"The {name} research slot makes text calls and cannot use the decision tier."
+        )
+    return ResearchModelSlot(
+        tier=tier,
+        max_output_tokens=_bounded_int(
+            slot.max_output_tokens, f"{name} max output tokens", 1, MAX_TOKENS_LIMIT
+        ),
+        temperature=validate_temperature(slot.temperature),
+    )
+
+
+def validate_india_costs(costs: IndiaCosts) -> IndiaCosts:
+    if not isinstance(costs, IndiaCosts):
+        raise SettingsError("India cost rates are required.")
+    return IndiaCosts(
+        brokerage_bps=_bounded_rate(
+            costs.brokerage_bps, "Brokerage bps", high=Decimal("1000")
+        ),
+        brokerage_flat_paise=_bounded_int(
+            costs.brokerage_flat_paise,
+            "Brokerage flat paise",
+            0,
+            MAX_ALPHA_HORIZON_BARS * 100000,
+        ),
+        brokerage_cap_paise=_bounded_int(
+            costs.brokerage_cap_paise,
+            "Brokerage cap paise",
+            0,
+            MAX_ALPHA_HORIZON_BARS * 100000,
+        ),
+        exchange_rate=_bounded_rate(costs.exchange_rate, "Exchange rate"),
+        sebi_rate=_bounded_rate(costs.sebi_rate, "SEBI rate"),
+        ipft_rate=_bounded_rate(costs.ipft_rate, "IPFT rate"),
+        stt_delivery=_bounded_rate(costs.stt_delivery, "STT delivery rate"),
+        stt_intraday_sell=_bounded_rate(costs.stt_intraday_sell, "STT intraday rate"),
+        stamp_delivery_buy=_bounded_rate(
+            costs.stamp_delivery_buy, "Delivery stamp duty"
+        ),
+        stamp_intraday_buy=_bounded_rate(
+            costs.stamp_intraday_buy, "Intraday stamp duty"
+        ),
+        gst=_bounded_rate(costs.gst, "GST rate"),
+    )
+
+
+def validate_alpha_bench(config: AlphaBenchSettings) -> AlphaBenchSettings:
+    if not isinstance(config, AlphaBenchSettings):
+        raise SettingsError("The alpha bench settings are required.")
+    horizons = config.horizons
+    if not isinstance(horizons, tuple) or not 1 <= len(horizons) <= MAX_ALPHA_HORIZONS:
+        raise SettingsError(
+            f"The alpha bench needs 1 to {MAX_ALPHA_HORIZONS} horizons."
+        )
+    ordered: list[int] = []
+    for horizon in horizons:
+        value = _bounded_int(horizon, "An alpha horizon", 1, MAX_ALPHA_HORIZON_BARS)
+        if value in ordered:
+            raise SettingsError("Alpha horizons must be distinct.")
+        ordered.append(value)
+    return AlphaBenchSettings(
+        horizons=tuple(ordered),
+        max_universe=_bounded_int(
+            config.max_universe, "Alpha bench universe size", 2, MAX_ALPHA_UNIVERSE
+        ),
+        min_names_per_date=_bounded_int(
+            config.min_names_per_date, "Minimum names per date", 2, MAX_ALPHA_UNIVERSE
+        ),
+    )
+
+
+def validate_research_lab_config(config: ResearchLabConfig) -> ResearchLabConfig:
+    if not isinstance(config, ResearchLabConfig):
+        raise SettingsError("A research lab configuration is required.")
+    if not isinstance(config.evidence_auditor_mode, EvidenceAuditorMode):
+        raise SettingsError("The evidence auditor mode must be deterministic or llm.")
+    triage = config.triage_scorer
+    if not isinstance(triage, ResearchTriageConfig):
+        raise SettingsError("The research triage configuration is required.")
+    if validate_tier_name(triage.tier) is not TierName.DECISION:
+        raise SettingsError("Research triage runs on the decision tier only.")
+    budgets = config.budgets
+    if not isinstance(budgets, ResearchBudgets):
+        raise SettingsError("The research budgets are required.")
+    return ResearchLabConfig(
+        planner=validate_research_slot("planner", config.planner),
+        synthesizer=validate_research_slot("synthesizer", config.synthesizer),
+        evidence_auditor=validate_research_slot(
+            "evidence auditor", config.evidence_auditor
+        ),
+        evidence_auditor_mode=config.evidence_auditor_mode,
+        triage_scorer=ResearchTriageConfig(
+            enabled=bool(triage.enabled), tier=TierName.DECISION
+        ),
+        budgets=ResearchBudgets(
+            max_iterations=_bounded_int(
+                budgets.max_iterations, "Max iterations", 1, MAX_RESEARCH_ITERATIONS
+            ),
+            max_recovery_retries=_bounded_int(
+                budgets.max_recovery_retries,
+                "Max recovery retries",
+                0,
+                MAX_RESEARCH_RETRIES,
+            ),
+            max_revision_retries=_bounded_int(
+                budgets.max_revision_retries,
+                "Max revision retries",
+                0,
+                MAX_RESEARCH_RETRIES,
+            ),
+            compaction_token_threshold=_bounded_int(
+                budgets.compaction_token_threshold,
+                "Compaction token threshold",
+                MIN_COMPACTION_TOKENS,
+                MAX_COMPACTION_TOKENS,
+            ),
+        ),
+        costs=validate_india_costs(config.costs),
+        alpha_bench=validate_alpha_bench(config.alpha_bench),
+    )
+
+
 def _safe_model(value: object, default: str) -> str:
     if not isinstance(value, str):
         return default
@@ -864,9 +1146,27 @@ def _load_agent_routing(
             if model is not None and not isinstance(model, str):
                 return DEFAULT_AGENT_ROUTING
             entries[agent_id] = AgentRoute(tier=tier, provider=provider, model=model)
-        return validate_agent_routing(entries)
+        return validate_agent_routing(_with_default_agents(entries))
     except (ValueError, TypeError):
         return DEFAULT_AGENT_ROUTING
+
+
+def _with_default_agents(
+    stored: dict[str, "AgentRoute"],
+) -> dict[str, "AgentRoute"]:
+    """The owner's routes, plus any default agent a stored map predates.
+
+    A settings row written before a new agent existed holds only the ids that
+    existed then. Without this merge, `route_for("aihf_buffett")` would silently
+    fall back to the reasoning tier for every existing owner — a default that
+    looks configured but is not the one the code declares, and invisible in the
+    UI. Only *missing* ids are added; a stored entry is never overwritten, so an
+    owner's tier or model override survives every upgrade.
+    """
+    merged = dict(stored)
+    for agent_id, route in DEFAULT_AGENT_ROUTING:
+        merged.setdefault(agent_id, route)
+    return merged
 
 
 def _load_decision_route(rows: Mapping[str, str]) -> DecisionRoute:
@@ -1110,6 +1410,7 @@ class SettingsStore:
             tiers=_load_tiers(rows, provider, model_name),
             agent_routing=_load_agent_routing(rows),
             pipeline=_load_pipeline(rows),
+            research_lab=_load_research_lab(rows),
             decision_route=_load_decision_route(rows),
             decision_policy=_load_decision_policy(rows),
             risk_limits=_load_risk_limits(rows),
@@ -1487,6 +1788,64 @@ class SettingsStore:
                 )
         return self.load()
 
+    def save_research_lab(
+        self,
+        config: ResearchLabConfig,
+        *,
+        agent_routing: Mapping[str, AgentRoute] | None = None,
+    ) -> AppConfig:
+        """Store the Research Lab block and, optionally, its agent routes.
+
+        Only the four Research Lab agent ids may be routed here: every other
+        route stays owned by ``save_models`` so this method cannot become a
+        second way to reconfigure the whole agent fleet.
+        """
+        validated = validate_research_lab_config(config)
+        current = self.load()
+        routing = dict(current.agent_routing)
+        if agent_routing is not None:
+            unknown = set(agent_routing) - set(RESEARCH_LAB_AGENT_IDS)
+            if unknown:
+                raise SettingsError(
+                    "Only Research Lab agents can be routed from the Research Lab "
+                    "settings."
+                )
+            routing.update(agent_routing)
+        validated_routing = validate_agent_routing(routing)
+        updated_at = _utc(self.clock.now())
+        stamp = _timestamp(updated_at)
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            with connection:
+                for key, value in (
+                    (KEY_RESEARCH_LAB, _research_lab_json(validated)),
+                    (KEY_AGENT_ROUTING, _agent_routing_json(dict(validated_routing))),
+                ):
+                    connection.execute(
+                        "INSERT INTO app_settings (setting_key, setting_value, updated_at) "
+                        "VALUES (?, ?, ?) "
+                        "ON CONFLICT(setting_key) DO UPDATE SET "
+                        "setting_value = excluded.setting_value, "
+                        "updated_at = excluded.updated_at",
+                        (key, value, stamp),
+                    )
+                append_event(
+                    connection,
+                    occurred_at=updated_at,
+                    actor="owner",
+                    action="settings.research_lab.updated",
+                    object_type="app_settings",
+                    object_id=KEY_RESEARCH_LAB,
+                    payload={
+                        "evidence_auditor_mode": validated.evidence_auditor_mode.value,
+                        "planner_tier": validated.planner.tier.value,
+                        "synthesizer_tier": validated.synthesizer.tier.value,
+                        "evidence_auditor_tier": validated.evidence_auditor.tier.value,
+                        "triage_enabled": validated.triage_scorer.enabled,
+                    },
+                )
+        return self.load()
+
     def save_custom_endpoint(self, endpoint: str) -> AppConfig:
         """Store (or clear) the local OpenAI-compatible endpoint for CUSTOM."""
         value = validate_custom_endpoint(endpoint)
@@ -1689,3 +2048,396 @@ def _agent_routing_json(entries: Mapping[str, AgentRoute]) -> str:
             item["model"] = route.model
         payload[agent_id] = item
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _slot_json(slot: ResearchModelSlot) -> dict[str, object]:
+    return {
+        "tier": slot.tier.value,
+        "max_output_tokens": slot.max_output_tokens,
+        "temperature": slot.temperature,
+    }
+
+
+def _research_lab_json(config: ResearchLabConfig) -> str:
+    """Serialise the Research Lab block. Decimal rates stay exact as strings."""
+    payload: dict[str, object] = {
+        "planner": _slot_json(config.planner),
+        "synthesizer": _slot_json(config.synthesizer),
+        "evidence_auditor": _slot_json(config.evidence_auditor),
+        "evidence_auditor_mode": config.evidence_auditor_mode.value,
+        "triage_scorer": {
+            "enabled": config.triage_scorer.enabled,
+            "tier": config.triage_scorer.tier.value,
+        },
+        "budgets": {
+            "max_iterations": config.budgets.max_iterations,
+            "max_recovery_retries": config.budgets.max_recovery_retries,
+            "max_revision_retries": config.budgets.max_revision_retries,
+            "compaction_token_threshold": config.budgets.compaction_token_threshold,
+        },
+        "costs": {
+            "brokerage_bps": str(config.costs.brokerage_bps),
+            "brokerage_flat_paise": config.costs.brokerage_flat_paise,
+            "brokerage_cap_paise": config.costs.brokerage_cap_paise,
+            "exchange_rate": str(config.costs.exchange_rate),
+            "sebi_rate": str(config.costs.sebi_rate),
+            "ipft_rate": str(config.costs.ipft_rate),
+            "stt_delivery": str(config.costs.stt_delivery),
+            "stt_intraday_sell": str(config.costs.stt_intraday_sell),
+            "stamp_delivery_buy": str(config.costs.stamp_delivery_buy),
+            "stamp_intraday_buy": str(config.costs.stamp_intraday_buy),
+            "gst": str(config.costs.gst),
+        },
+        "alpha_bench": {
+            "horizons": list(config.alpha_bench.horizons),
+            "max_universe": config.alpha_bench.max_universe,
+            "min_names_per_date": config.alpha_bench.min_names_per_date,
+        },
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _str_or(value: object, default: str) -> str:
+    return value if isinstance(value, str) else default
+
+
+def _num_or(value: object, default: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def _count_or(value: object, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value
+
+
+def _decimal_or(value: object, default: Decimal) -> Decimal:
+    if value is None:
+        return default
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise SettingsError("A stored cost rate is not a decimal number.") from exc
+    if not parsed.is_finite():
+        raise SettingsError("A stored cost rate must be finite.")
+    return parsed
+
+
+def _slot_from(
+    value: object, default: ResearchModelSlot, name: str
+) -> ResearchModelSlot:
+    if not isinstance(value, dict):
+        return default
+    try:
+        tier = TierName(str(value.get("tier", default.tier.value)))
+    except ValueError as exc:
+        raise SettingsError(f"The stored {name} tier is not a known tier.") from exc
+    return ResearchModelSlot(
+        tier=tier,
+        max_output_tokens=_count_or(
+            value.get("max_output_tokens"), default.max_output_tokens
+        ),
+        temperature=_num_or(value.get("temperature"), default.temperature),
+    )
+
+
+def _load_research_lab(rows: Mapping[str, str]) -> ResearchLabConfig:
+    """Read the Research Lab block, falling back to defaults on any bad row."""
+    raw = rows.get(KEY_RESEARCH_LAB)
+    if raw is None:
+        return DEFAULT_RESEARCH_LAB
+    defaults = DEFAULT_RESEARCH_LAB
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            return DEFAULT_RESEARCH_LAB
+        budgets = _mapping(payload.get("budgets"))
+        costs = _mapping(payload.get("costs"))
+        bench = _mapping(payload.get("alpha_bench"))
+        triage = _mapping(payload.get("triage_scorer"))
+        horizons = bench.get("horizons")
+        parsed_horizons = (
+            tuple(
+                item
+                for item in horizons
+                if isinstance(item, int) and not isinstance(item, bool)
+            )
+            if isinstance(horizons, list)
+            else defaults.alpha_bench.horizons
+        )
+        try:
+            mode = EvidenceAuditorMode(
+                str(
+                    payload.get(
+                        "evidence_auditor_mode", defaults.evidence_auditor_mode.value
+                    )
+                )
+            )
+        except ValueError:
+            mode = defaults.evidence_auditor_mode
+        config = ResearchLabConfig(
+            planner=_slot_from(payload.get("planner"), defaults.planner, "planner"),
+            synthesizer=_slot_from(
+                payload.get("synthesizer"), defaults.synthesizer, "synthesizer"
+            ),
+            evidence_auditor=_slot_from(
+                payload.get("evidence_auditor"),
+                defaults.evidence_auditor,
+                "evidence auditor",
+            ),
+            evidence_auditor_mode=mode,
+            triage_scorer=ResearchTriageConfig(
+                enabled=bool(triage.get("enabled", defaults.triage_scorer.enabled)),
+                tier=TierName.DECISION,
+            ),
+            budgets=ResearchBudgets(
+                max_iterations=_count_or(
+                    budgets.get("max_iterations"), defaults.budgets.max_iterations
+                ),
+                max_recovery_retries=_count_or(
+                    budgets.get("max_recovery_retries"),
+                    defaults.budgets.max_recovery_retries,
+                ),
+                max_revision_retries=_count_or(
+                    budgets.get("max_revision_retries"),
+                    defaults.budgets.max_revision_retries,
+                ),
+                compaction_token_threshold=_count_or(
+                    budgets.get("compaction_token_threshold"),
+                    defaults.budgets.compaction_token_threshold,
+                ),
+            ),
+            costs=IndiaCosts(
+                brokerage_bps=_decimal_or(
+                    costs.get("brokerage_bps"), defaults.costs.brokerage_bps
+                ),
+                brokerage_flat_paise=_count_or(
+                    costs.get("brokerage_flat_paise"),
+                    defaults.costs.brokerage_flat_paise,
+                ),
+                brokerage_cap_paise=_count_or(
+                    costs.get("brokerage_cap_paise"), defaults.costs.brokerage_cap_paise
+                ),
+                exchange_rate=_decimal_or(
+                    costs.get("exchange_rate"), defaults.costs.exchange_rate
+                ),
+                sebi_rate=_decimal_or(costs.get("sebi_rate"), defaults.costs.sebi_rate),
+                ipft_rate=_decimal_or(costs.get("ipft_rate"), defaults.costs.ipft_rate),
+                stt_delivery=_decimal_or(
+                    costs.get("stt_delivery"), defaults.costs.stt_delivery
+                ),
+                stt_intraday_sell=_decimal_or(
+                    costs.get("stt_intraday_sell"), defaults.costs.stt_intraday_sell
+                ),
+                stamp_delivery_buy=_decimal_or(
+                    costs.get("stamp_delivery_buy"), defaults.costs.stamp_delivery_buy
+                ),
+                stamp_intraday_buy=_decimal_or(
+                    costs.get("stamp_intraday_buy"), defaults.costs.stamp_intraday_buy
+                ),
+                gst=_decimal_or(costs.get("gst"), defaults.costs.gst),
+            ),
+            alpha_bench=AlphaBenchSettings(
+                horizons=parsed_horizons,
+                max_universe=_count_or(
+                    bench.get("max_universe"), defaults.alpha_bench.max_universe
+                ),
+                min_names_per_date=_count_or(
+                    bench.get("min_names_per_date"),
+                    defaults.alpha_bench.min_names_per_date,
+                ),
+            ),
+        )
+        return validate_research_lab_config(config)
+    except (SettingsError, ValueError, TypeError, KeyError):
+        return DEFAULT_RESEARCH_LAB
+
+
+def _require_lab_provider(value: object) -> Provider | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Provider(str(value))
+    except ValueError as exc:
+        raise SettingsError(
+            "A Research Lab provider override is not a provider."
+        ) from exc
+
+
+def resolve_research_lab_models(
+    config: AppConfig,
+    session_overrides: Mapping[str, Mapping[str, object]] | None = None,
+) -> dict[str, AgentRoute]:
+    """Resolve the four Research Lab slots, merging in-memory overrides.
+
+    Tiers come from ``research_lab``; provider/model overrides come from the
+    stored ``agent_routing`` row; ``session_overrides`` is applied last and is
+    never written. Keys may be either a slot name (``planner``) or an agent id
+    (``research_lab_planner``).
+    """
+    lab = config.research_lab
+    slot_tiers = {
+        "research_lab_planner": lab.planner.tier,
+        "research_lab_synthesizer": lab.synthesizer.tier,
+        "research_lab_evidence_auditor": lab.evidence_auditor.tier,
+        "research_lab_triage_scorer": lab.triage_scorer.tier,
+    }
+    resolved: dict[str, AgentRoute] = {}
+    for agent_id, tier in slot_tiers.items():
+        stored = config.route_for(agent_id)
+        resolved[agent_id] = AgentRoute(
+            tier=tier, provider=stored.provider, model=stored.model
+        )
+    if not session_overrides:
+        return resolved
+    slots = dict(RESEARCH_LAB_SLOTS)
+    for key, override in session_overrides.items():
+        agent_id = key if key in slot_tiers else slots.get(key)
+        if agent_id is None:
+            raise SettingsError(f"Unknown Research Lab slot: {key}.")
+        if not isinstance(override, Mapping):
+            raise SettingsError("A Research Lab override must be a mapping.")
+        base = resolved[agent_id]
+        tier = base.tier
+        if override.get("tier") is not None:
+            tier = validate_tier_name(str(override["tier"]))
+        if agent_id == "research_lab_triage_scorer" and tier is not TierName.DECISION:
+            raise SettingsError("Research triage runs on the decision tier only.")
+        provider = (
+            _require_lab_provider(override["provider"])
+            if "provider" in override
+            else base.provider
+        )
+        model = base.model
+        if "model" in override:
+            raw_model = override["model"]
+            model = None if raw_model is None else validate_model_name(str(raw_model))
+        resolved[agent_id] = AgentRoute(tier=tier, provider=provider, model=model)
+    return resolved
+
+
+def research_lab_payload(config: AppConfig) -> dict[str, object]:
+    """The Research Lab block as the API and UI read it."""
+    payload = json.loads(_research_lab_json(config.research_lab))
+    return payload if isinstance(payload, dict) else {}
+
+
+def parse_research_lab(payload: object) -> ResearchLabConfig:
+    """Strictly build the block from a request payload.
+
+    Unlike :func:`_load_research_lab`, a bad value raises instead of falling back
+    to a default: an API write that silently changed one field would be worse
+    than a 422.
+    """
+    if not isinstance(payload, Mapping):
+        raise SettingsError("A research lab payload must be an object.")
+    defaults = DEFAULT_RESEARCH_LAB
+
+    def slot(name: str, default: ResearchModelSlot) -> ResearchModelSlot:
+        raw = payload.get(name, {})
+        if not isinstance(raw, Mapping):
+            raise SettingsError(f"The {name} slot must be an object.")
+        try:
+            tier = TierName(str(raw.get("tier", default.tier.value)))
+        except ValueError as exc:
+            raise SettingsError(f"The {name} tier is not a known tier.") from exc
+        return ResearchModelSlot(
+            tier=tier,
+            max_output_tokens=raw.get("max_output_tokens", default.max_output_tokens),
+            temperature=raw.get("temperature", default.temperature),
+        )
+
+    def numbers(section: str) -> Mapping[str, object]:
+        raw = payload.get(section, {})
+        if not isinstance(raw, Mapping):
+            raise SettingsError(f"The {section} section must be an object.")
+        return raw
+
+    budgets = numbers("budgets")
+    costs = numbers("costs")
+    bench = numbers("alpha_bench")
+    triage = numbers("triage_scorer")
+    try:
+        mode = EvidenceAuditorMode(
+            str(
+                payload.get(
+                    "evidence_auditor_mode", defaults.evidence_auditor_mode.value
+                )
+            )
+        )
+    except ValueError as exc:
+        raise SettingsError("The evidence auditor mode is unknown.") from exc
+    horizons = bench.get("horizons", list(defaults.alpha_bench.horizons))
+    if not isinstance(horizons, list):
+        raise SettingsError("Alpha horizons must be a list.")
+    return validate_research_lab_config(
+        ResearchLabConfig(
+            planner=slot("planner", defaults.planner),
+            synthesizer=slot("synthesizer", defaults.synthesizer),
+            evidence_auditor=slot("evidence_auditor", defaults.evidence_auditor),
+            evidence_auditor_mode=mode,
+            triage_scorer=ResearchTriageConfig(
+                enabled=bool(triage.get("enabled", defaults.triage_scorer.enabled)),
+                tier=TierName.DECISION,
+            ),
+            budgets=ResearchBudgets(
+                max_iterations=budgets.get(
+                    "max_iterations", defaults.budgets.max_iterations
+                ),
+                max_recovery_retries=budgets.get(
+                    "max_recovery_retries", defaults.budgets.max_recovery_retries
+                ),
+                max_revision_retries=budgets.get(
+                    "max_revision_retries", defaults.budgets.max_revision_retries
+                ),
+                compaction_token_threshold=budgets.get(
+                    "compaction_token_threshold",
+                    defaults.budgets.compaction_token_threshold,
+                ),
+            ),
+            costs=IndiaCosts(
+                brokerage_bps=_decimal_or(
+                    costs.get("brokerage_bps"), defaults.costs.brokerage_bps
+                ),
+                brokerage_flat_paise=costs.get(
+                    "brokerage_flat_paise", defaults.costs.brokerage_flat_paise
+                ),
+                brokerage_cap_paise=costs.get(
+                    "brokerage_cap_paise", defaults.costs.brokerage_cap_paise
+                ),
+                exchange_rate=_decimal_or(
+                    costs.get("exchange_rate"), defaults.costs.exchange_rate
+                ),
+                sebi_rate=_decimal_or(costs.get("sebi_rate"), defaults.costs.sebi_rate),
+                ipft_rate=_decimal_or(costs.get("ipft_rate"), defaults.costs.ipft_rate),
+                stt_delivery=_decimal_or(
+                    costs.get("stt_delivery"), defaults.costs.stt_delivery
+                ),
+                stt_intraday_sell=_decimal_or(
+                    costs.get("stt_intraday_sell"), defaults.costs.stt_intraday_sell
+                ),
+                stamp_delivery_buy=_decimal_or(
+                    costs.get("stamp_delivery_buy"), defaults.costs.stamp_delivery_buy
+                ),
+                stamp_intraday_buy=_decimal_or(
+                    costs.get("stamp_intraday_buy"), defaults.costs.stamp_intraday_buy
+                ),
+                gst=_decimal_or(costs.get("gst"), defaults.costs.gst),
+            ),
+            alpha_bench=AlphaBenchSettings(
+                horizons=tuple(horizons),
+                max_universe=bench.get(
+                    "max_universe", defaults.alpha_bench.max_universe
+                ),
+                min_names_per_date=bench.get(
+                    "min_names_per_date", defaults.alpha_bench.min_names_per_date
+                ),
+            ),
+        )
+    )

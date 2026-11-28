@@ -20,9 +20,15 @@ wired up; the bar clocks are left in the vendored code for a later phase.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
 from bq.aihf.bridge import calendar as market
 from bq.aihf.engine.data.protocol import DataClient
 from bq.aihf.engine.pipeline.clock import Marked
+
+if TYPE_CHECKING:
+    from bq.aihf.engine.fund.spec import FundSpec
 
 # A session's mark is the close of the last daily bar on or before it. A fund
 # values its book daily, so this is the only price the engine needs from the
@@ -37,7 +43,9 @@ class NseDailyClock:
     engine's own protocol is what matters.
     """
 
-    def __init__(self, data: DataClient, *, gate=None) -> None:  # noqa: ANN001
+    def __init__(
+        self, data: DataClient, *, gate: Callable[[str], bool] | None = None
+    ) -> None:
         self._data = data
         self._gate = gate
 
@@ -107,12 +115,16 @@ class NseDailyClock:
         return max(matches, key=lambda bar: bar.time).close
 
 
-def clock_for_daily(data: DataClient, *, gate=None) -> NseDailyClock:  # noqa: ANN001
+def clock_for_daily(
+    data: DataClient, *, gate: Callable[[str], bool] | None = None
+) -> NseDailyClock:
     """The clock a daily/weekly/monthly NSE mandate runs on."""
     return NseDailyClock(data, gate=gate)
 
 
-def nse_clock_factory(*, gate=None):  # noqa: ANN001, ANN201
+def nse_clock_factory(
+    *, gate: Callable[[str], bool] | None = None
+) -> Callable[["FundSpec", DataClient, bool], "NseDailyClock"]:
     """A ``(spec, data, live) -> Clock`` factory for the engine's `clock_for`.
 
     Installed once by `bq/aihf/service.py`. It honours the mandate's cadence: a
@@ -121,7 +133,7 @@ def nse_clock_factory(*, gate=None):  # noqa: ANN001, ANN201
     hand-built spec cannot be silently valued at daily closes.
     """
 
-    def factory(spec, data, live):  # noqa: ANN001, ANN202
+    def factory(spec: "FundSpec", data: DataClient, live: bool) -> NseDailyClock:  # noqa: ARG001
         if spec.is_intraday:
             raise market.MarketError(
                 "intraday mandates are not supported by the NSE daily clock"

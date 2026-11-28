@@ -7,6 +7,8 @@ identical output on the same fixture, which is the parity gate for later engines
 
 from __future__ import annotations
 
+import math
+import statistics
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -15,7 +17,7 @@ from typing import Mapping
 
 from bq.core import paise_from_price
 from bq.data.vendors import Bar
-from bq.paper_charges import ChargeSchedule, compute_charges
+from bq.paper_charges import ChargeSchedule, compute_charges, product_for_timeframe
 from bq.strategy_dsl import EntryRule, ExitRule, StrategyDefinition
 
 
@@ -68,6 +70,13 @@ class BacktestMetrics:
     return_bps: int
     win_rate: float | None
     max_drawdown_paise: int
+    # Per-trade ratios. ``None`` means *undefined*, not zero: a run with no losing
+    # trade has no profit factor, and a run with no return dispersion has no
+    # Sharpe or Sortino. Emitting NaN or Infinity would put a value in JSON no
+    # consumer can order or filter.
+    sharpe: float | None = None
+    sortino: float | None = None
+    profit_factor: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -81,6 +90,9 @@ class BacktestMetrics:
             "return_bps": self.return_bps,
             "win_rate": self.win_rate,
             "max_drawdown_paise": str(self.max_drawdown_paise),
+            "sharpe": self.sharpe,
+            "sortino": self.sortino,
+            "profit_factor": self.profit_factor,
         }
 
 
@@ -274,7 +286,7 @@ def _simulate(
                 entry_charge = int(str(position["entry_charge"]))
                 sell_charge = compute_charges(
                     side="SELL",
-                    product="MIS",
+                    product=product_for_timeframe(definition.timeframe),
                     quantity=quantity,
                     price_paise=exit_price,
                     schedule=charge_schedule,
@@ -317,7 +329,7 @@ def _simulate(
                 if quantity > 0:
                     entry_charge = compute_charges(
                         side="BUY",
-                        product="MIS",
+                        product=product_for_timeframe(definition.timeframe),
                         quantity=quantity,
                         price_paise=entry_price,
                         schedule=charge_schedule,
@@ -349,7 +361,7 @@ def _simulate(
             entry_charge = int(str(position["entry_charge"]))
             sell_charge = compute_charges(
                 side="SELL",
-                product="MIS",
+                product=product_for_timeframe(definition.timeframe),
                 quantity=quantity,
                 price_paise=exit_price,
                 schedule=charge_schedule,
@@ -373,6 +385,35 @@ def _simulate(
     return tuple(trades)
 
 
+def _finite(value: float) -> float | None:
+    """A ratio is either a real number or undefined; never NaN or infinity."""
+    if value != value or value in (float("inf"), float("-inf")):
+        return None
+    return value
+
+
+def _ratios(
+    trades: tuple[BacktestTrade, ...], *, initial_capital_paise: int
+) -> tuple[float | None, float | None, float | None]:
+    returns = [item.net_pnl_paise / initial_capital_paise for item in trades]
+    sharpe: float | None = None
+    sortino: float | None = None
+    if len(returns) >= 2:
+        mean = statistics.fmean(returns)
+        dispersion = statistics.pstdev(returns)
+        if dispersion > 0:
+            sharpe = _finite(mean / dispersion)
+        downside = math.sqrt(
+            sum(min(0.0, item) ** 2 for item in returns) / len(returns)
+        )
+        if downside > 0:
+            sortino = _finite(mean / downside)
+    gross_profit = sum(item for item in returns if item > 0)
+    gross_loss = -sum(item for item in returns if item < 0)
+    profit_factor = _finite(gross_profit / gross_loss) if gross_loss > 0 else None
+    return sharpe, sortino, profit_factor
+
+
 def _metrics(
     trades: tuple[BacktestTrade, ...], *, initial_capital_paise: int
 ) -> tuple[BacktestMetrics, tuple[int, ...]]:
@@ -390,6 +431,9 @@ def _metrics(
         curve.append(equity)
         peak = max(peak, equity)
         max_drawdown = max(max_drawdown, peak - equity)
+    sharpe, sortino, profit_factor = _ratios(
+        trades, initial_capital_paise=initial_capital_paise
+    )
     return (
         BacktestMetrics(
             trades=len(trades),
@@ -402,6 +446,9 @@ def _metrics(
             return_bps=net * 10_000 // initial_capital_paise,
             win_rate=(wins / len(trades)) if trades else None,
             max_drawdown_paise=max_drawdown,
+            sharpe=sharpe,
+            sortino=sortino,
+            profit_factor=profit_factor,
         ),
         tuple(curve),
     )

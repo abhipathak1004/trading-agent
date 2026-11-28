@@ -1,22 +1,23 @@
 """The AI Hedge Fund service: mandates, backtests, and the paper desk.
 
-Everything here is a projection of what ``aihf`` wrote, plus the two places
-BharatQuant adds control: the mandate file the owner edits, and the approval
-gate in front of a paper session.
+Everything here is a projection of what the ported engine wrote, plus the two
+places BharatQuant adds control: the mandate file the owner edits, and the
+approval gate in front of a paper session.
 
-The invariant this module exists to keep: **no paper session executes without
-an explicit owner approval.** ``aihf paper tick`` decides *and* executes in one
-call, so a preview runs that call against a *copy* of the fund, and approval
-adopts the copy's aihf-written state back over the live fund. Because every
-byte adopted was written by aihf itself (ledger record, broker book,
-events), aihf's own hash-chain check re-verifies it on the next read — we
-never re-serialise or hand-build a record.
+The invariant this module exists to keep: **no paper session executes without an
+explicit owner approval.** ADR-050 kept it by copying the fund, ticking the copy,
+and adopting what it wrote. The engine runs in-process now (ADR-053), so the gate
+is stronger *and* simpler: ``advance`` is a pure function of
+(fund, state, session, broker, data), so a preview computes the exact record
+against a broker rebuilt in memory and writes **nothing**. Approval appends that
+record, and ``Ledger.append`` re-verifies its hash and that it chains to the
+head — a preview file edited by hand cannot be admitted. No sandbox directories,
+no directory digests, one LLM spend per session instead of two.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import time
 import uuid
 from collections.abc import Sequence
@@ -26,6 +27,16 @@ from pathlib import Path
 from typing import Any
 
 from bq.aihf.config import AiHfConfigError, AiHfPaths, installed_version, validate_name
+from bq.aihf.engine import api as engine
+from bq.aihf.engine.brokers.paper import PaperBroker
+from bq.aihf.engine.data.protocol import DataClient
+from bq.aihf.engine.fund.spec import FundSpec, load_spec
+from bq.aihf.engine.llm import PromptCache
+from bq.aihf.engine.paper.deployed import BROKER_FILE, load_deployed
+from bq.aihf.engine.paper.ledger import Ledger
+from bq.aihf.engine.paper.tick import NothingDue
+from bq.aihf.engine.pipeline.clock import set_clock_factory
+from bq.aihf.engine.pipeline.session import FundHalted, SessionRecord
 from bq.aihf.ledger import (
     LedgerReadError,
     control_state,
@@ -41,34 +52,14 @@ from bq.aihf.parsing import (
     parse_backtest_detail,
     parse_backtest_summary,
     parse_session,
-    parse_session_document,
     trade_rows,
 )
-from bq.aihf.registry import (
-    PROBE_DIR,
-    AiHfModel,
-    AiHfRegistryError,
-    registry,
-    run_probe,
-)
-from bq.aihf.runner import (
-    AiHfResult,
-    copy_tree,
-    directory_digest,
-    fund_names,
-    read_json,
-    remove_tree,
-    run_aihf,
-)
-from bq.aihf.runtime_env import AIHF_ENV_VARS, DATA_KEY_ENV, build_runtime
+from bq.aihf.runner import read_json
+from bq.aihf.runtime_env import build_runtime
+from bq.model_router import ModelRouter
 from bq.settings import SettingsStore
 
-VALIDATE_MANDATE_PROBE = PROBE_DIR / "validate_mandate.py"
-VERIFY_LEDGER_PROBE = PROBE_DIR / "verify_ledger.py"
-FUNDS_PROBE = PROBE_DIR / "funds.py"
-
 BACKTEST_TIMEOUT_SECONDS = 60 * 60 * 3
-TICK_TIMEOUT_SECONDS = 60 * 30
 MAX_PREVIEW_AGE_SECONDS = 60 * 30
 MAX_TICKERS = 25
 MAX_DATE_SPAN_DAYS = 365 * 6
@@ -97,7 +88,7 @@ class AiHfInvalid(AiHfServiceError):
 
 
 def normalize_tickers(values: Sequence[str]) -> tuple[str, ...]:
-    """Uppercase, deduplicate, bound — aihf's ``normalize_universe``, bounded."""
+    """Uppercase, deduplicate, bound — the engine's ``normalize_universe``, bounded."""
     cleaned: list[str] = []
     for value in values:
         ticker = value.strip().upper()
@@ -134,52 +125,56 @@ def validate_dates(start: str, end: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def model_descriptor(model: AiHfModel, configured: set[str]) -> dict[str, object]:
-    var = AIHF_ENV_VARS.get(model.provider)
-    return {
-        "display_name": model.display_name,
-        "model_name": model.model_name,
-        "provider": model.provider,
-        "env_var": var,
-        "runnable": bool(var and var in configured),
-    }
+def _models_list() -> list[dict[str, object]]:
+    """Every analyst the engine can staff, read from the engine's own registry.
+
+    One list, so a persona or quant model added to the vendored code appears here
+    with no second registry to keep in step.
+    """
+    from bq.aihf.bridge.llm import PERSONA_AGENTS
+    from bq.aihf.engine.signals import ALPHA_MODEL_REGISTRY
+
+    models: list[dict[str, object]] = []
+    for name in sorted(ALPHA_MODEL_REGISTRY):
+        agent_id = PERSONA_AGENTS.get(name)
+        models.append(
+            {
+                "display_name": name.replace("_", " ").title(),
+                "model_name": name,
+                "provider": "persona" if agent_id else "deterministic",
+                "agent_id": agent_id,
+                "runnable": True,
+            }
+        )
+    return models
 
 
-def status(paths: AiHfPaths, settings: SettingsStore) -> dict[str, object]:
+def status(paths: AiHfPaths, settings: SettingsStore) -> dict[str, object]:  # noqa: ARG001
     """Everything the header bar needs, with no key material."""
-    runtime = build_runtime(settings, environ={}, paths=paths)
-    configured = set(runtime.configured_vars)
-    try:
-        models = registry(paths)
-        registry_error: str | None = None
-    except AiHfRegistryError as exc:
-        models = ()
-        registry_error = str(exc)
+    runtime = build_runtime(settings)
+    models = _models_list()
+    has_llm = bool(runtime.describe()["has_llm_key"])
     return {
-        "installed": paths.available,
-        "version": installed_version(paths),
+        # The engine is vendored, so it is always available. The field stays
+        # because the UI contract parses it and two tests assert on it.
+        "installed": True,
+        "version": installed_version(),
         "active_provider": runtime.provider,
         "active_model": runtime.model,
         "bq_provider": settings.load().provider.value,
-        "has_llm_key": runtime.describe()["has_llm_key"],
-        "has_financial_datasets_key": DATA_KEY_ENV in configured,
+        "has_llm_key": has_llm,
+        # There is no data key any more: the engine reads this app's own stores.
+        "has_financial_datasets_key": True,
         "configured_vars": list(runtime.configured_vars),
         "missing_vars": list(runtime.missing),
-        "models": [model_descriptor(model, configured) for model in models],
-        "registry_error": registry_error,
-        "can_run": bool(
-            paths.available
-            and runtime.describe()["has_llm_key"]
-            and DATA_KEY_ENV in configured
-            and models
-        ),
+        "models": models,
+        "registry_error": None,
+        "can_run": bool(has_llm and models),
     }
 
 
-def models(paths: AiHfPaths, settings: SettingsStore) -> list[dict[str, object]]:
-    runtime = build_runtime(settings, environ={}, paths=paths)
-    configured = set(runtime.configured_vars)
-    return [model_descriptor(model, configured) for model in registry(paths)]
+def models(paths: AiHfPaths, settings: SettingsStore) -> list[dict[str, object]]:  # noqa: ARG001
+    return _models_list()
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +195,14 @@ EXAMPLE_MANDATE: dict[str, Any] = {
                 {"name": "buffett"},
                 {"name": "munger"},
             ],
-        }
+        },
+        {
+            "name": "earnings-drift",
+            "display_name": "Earnings Drift",
+            "blend": {"mode": "long_short"},
+            "weight": 0.4,
+            "models": [{"name": "pead"}],
+        },
     ],
     "risk": {
         "max_position_pct": 0.25,
@@ -208,14 +210,14 @@ EXAMPLE_MANDATE: dict[str, Any] = {
         "halve_drawdown_pct": 0.1,
         "max_drawdown_pct": 0.2,
     },
-    "capital": 100000,
+    "capital": 1_000_000,
     "rebalance": "weekly",
-    "benchmark": "SPY",
+    "benchmark": "NIFTY 50",
 }
 
 
 class MandateStore:
-    """The owner's YAML mandates, validated by aihf's own ``FundSpec``."""
+    """The owner's YAML mandates, validated by the engine's own ``FundSpec``."""
 
     def __init__(self, paths: AiHfPaths) -> None:
         self.paths = paths
@@ -246,24 +248,17 @@ class MandateStore:
         )
 
     def validate(self, text: str) -> dict[str, object]:
-        """Validate and summarise in the sidecar, where ``FundSpec`` lives."""
+        """Validate in-process, where ``FundSpec`` lives, and summarise it."""
         if len(text) > MAX_YAML_CHARS:
             return {
                 "ok": False,
                 "error": f"The mandate YAML exceeds {MAX_YAML_CHARS} characters.",
             }
         try:
-            payload = run_probe(
-                self.paths, VALIDATE_MANDATE_PROBE, payload=text.encode("utf-8")
-            )
-        except AiHfRegistryError as exc:
-            raise AiHfServiceError(str(exc)) from exc
-        if not payload.get("ok"):
-            return {
-                "ok": False,
-                "error": str(payload.get("error") or "invalid mandate"),
-            }
-        return {"ok": True, "summary": payload.get("summary")}
+            spec = _load_spec_from_text(text)
+        except (ValueError, AiHfConfigError) as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "summary": _mandate_summary(spec)}
 
     def write(self, name: str, text: str, *, create: bool) -> dict[str, object]:
         target = validate_name(name, what="mandate")
@@ -290,30 +285,33 @@ class MandateStore:
     def template(self) -> str:
         return json.dumps(EXAMPLE_MANDATE, indent=2)
 
+    def load(self, name: str) -> FundSpec:
+        """The parsed spec of a stored mandate (raises ``AiHfNotFound``)."""
+        path = self.paths.mandate_path(name)
+        if not path.is_file():
+            raise AiHfNotFound(f"No mandate named {name!r}.")
+        try:
+            return load_spec(path)
+        except ValueError as exc:
+            raise AiHfInvalid(str(exc)) from exc
+
     def _ensure_seeded(self) -> None:
-        """Seed the mandates directory with aihf's example, exactly once.
+        """Seed the mandates directory with the engine's example, exactly once.
 
-        Mirrors ``hedge_fund.paths.ensure_mandates_dir``: the example ships
-        inside the package and is copied out, never read in place. Only an
-        *absent* directory is seeded, so an owner who deletes the example
+        Only an *absent* directory is seeded, so an owner who deletes the example
         keeps it deleted.
-
-        The directory must not be created before calling: aihf's own guard is
-        ``if not MANDATES_DIR.exists()``.
         """
-        from bq.aihf.runner import (
-            AiHfExecutionError,
-            run_aihf_sync,
-        )  # local: seeded once
-
         if self.paths.mandates.is_dir():
             return
-        try:
-            # Every aihf entry point seeds before it parses arguments.
-            run_aihf_sync(self.paths, ["paper", "list"])
-        except (AiHfExecutionError, OSError):
-            return
         self.paths.mandates.mkdir(parents=True, exist_ok=True)
+        example = self.paths.mandates / "example.yaml"
+        if not example.exists():
+            from bq.aihf.engine.paths import EXAMPLE_MANDATE as UPSTREAM_EXAMPLE
+
+            if UPSTREAM_EXAMPLE.is_file():
+                example.write_text(
+                    UPSTREAM_EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8"
+                )
 
     def _payload(self, name: str, text: str, path: Path) -> dict[str, object]:
         summary = self.validate(text)
@@ -327,13 +325,67 @@ class MandateStore:
         }
 
 
+def _load_spec_from_text(text: str) -> FundSpec:
+    """Validate YAML text without leaving a file behind (``load_spec`` reads a path).
+
+    ``load_spec`` prefixes every error with the path it read, which for in-memory
+    validation is a temporary file name the owner never sees. The prefix is
+    stripped so a validation error reads as the field problem it is.
+    """
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=True) as handle:
+        handle.write(text)
+        handle.flush()
+        try:
+            return load_spec(handle.name)
+        except ValueError as exc:
+            message = str(exc)
+            prefix = f"{handle.name}: "
+            if message.startswith(prefix):
+                message = message[len(prefix) :]
+            raise ValueError(message) from exc
+
+
+def _mandate_summary(spec: FundSpec) -> dict[str, object]:
+    """The mandate's shape, as the UI's mandate list shows it."""
+    return {
+        "name": spec.name,
+        "schema_version": 2,
+        "capital": spec.capital,
+        "rebalance": spec.rebalance,
+        "benchmark": spec.benchmark,
+        "is_intraday": spec.is_intraday,
+        "has_universe_rule": spec.universe is not None,
+        "risk": {
+            "max_position_pct": spec.risk.max_position_pct,
+            "max_gross_exposure": spec.risk.max_gross_exposure,
+            "halve_drawdown_pct": spec.risk.halve_drawdown_pct,
+            "max_drawdown_pct": spec.risk.max_drawdown_pct,
+        },
+        "strategies": [
+            {
+                "name": strategy.name,
+                "title": strategy.title,
+                "weight": strategy.weight,
+                "mode": strategy.blend.mode,
+                "models": [
+                    {"name": model.name, "weight": model.weight}
+                    for model in strategy.models
+                ],
+            }
+            for strategy in spec.strategies
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # backtests (saved results)
 # ---------------------------------------------------------------------------
 
 
 class ResearchStore:
-    """Saved backtest runs: ``research/<fund>-<start>-<end>-<stamp>.json``."""
+    """Saved backtest runs: ``research/<run-id>.json``."""
 
     def __init__(self, paths: AiHfPaths) -> None:
         self.paths = paths
@@ -391,6 +443,14 @@ class ResearchStore:
             "sessions": [session_payload(session) for session in sessions],
             "session_total": len(detail.sessions),
         }
+
+    def save(self, result: Any, run_id: str) -> Path:
+        """Persist an engine result under the run id the routes look up."""
+        name = validate_name(run_id, what="backtest run")
+        self.paths.research.mkdir(parents=True, exist_ok=True)
+        path = self.paths.research / f"{name}.json"
+        path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return path
 
 
 def summary_payload(summary: BacktestSummary, path: Path) -> dict[str, object]:
@@ -529,57 +589,56 @@ class Preview:
     fund: str
     head: str | None
     session_count: int
-    token: str
     record: SessionView
+    raw: dict[str, Any]
     created_at: float
-    digest_before: str
 
 
 class PaperStore:
     """Deployed funds, the approval gate, and the kill switch."""
 
-    def __init__(self, paths: AiHfPaths, settings: SettingsStore) -> None:
+    def __init__(
+        self,
+        paths: AiHfPaths,
+        settings: SettingsStore,
+        *,
+        data_client: DataClient | None = None,
+        router: ModelRouter | None = None,
+    ) -> None:
         self.paths = paths
         self.settings = settings
+        self._data_client = data_client
+        self._router = router
 
     # ---- listing ---------------------------------------------------------
 
     def funds(self) -> list[dict[str, object]]:
-        """Every deployed fund, with its mandate metadata read by aihf itself."""
-        self._funds_cache = self._read_fund_metadata()
-        return [self._fund_payload(name) for name in fund_names(self.paths)]
+        return [self._fund_payload(name) for name in self._fund_names()]
 
     def fund(self, name: str) -> dict[str, object]:
-        self._funds_cache = self._read_fund_metadata()
         return self._fund_payload(validate_name(name, what="paper fund"))
 
-    def _read_fund_metadata(self) -> dict[str, dict[str, Any]]:
-        """``name -> metadata``. ``fund.yaml`` is YAML, so aihf parses it."""
-        try:
-            payload = run_probe(
-                self.paths, FUNDS_PROBE, payload=str(self.paths.paper).encode("utf-8")
-            )
-        except AiHfRegistryError as exc:
-            raise AiHfServiceError(str(exc)) from exc
-        if not payload.get("ok"):
-            raise AiHfServiceError(
-                str(payload.get("error") or "cannot read the paper funds")
-            )
-        funds = payload.get("funds")
-        if not isinstance(funds, list):
-            return {}
-        return {
-            str(entry.get("name")): entry
-            for entry in funds
-            if isinstance(entry, dict) and entry.get("name")
-        }
+    def _fund_names(self) -> list[str]:
+        if not self.paths.paper.is_dir():
+            return []
+        names: list[str] = []
+        for entry in sorted(self.paths.paper.iterdir()):
+            if (entry / "fund.yaml").is_file():
+                try:
+                    names.append(validate_name(entry.name, what="paper fund"))
+                except AiHfConfigError:
+                    continue
+        return names
 
     def _fund_payload(self, name: str) -> dict[str, object]:
-        if not self.paths.fund_dir(name).is_dir():
+        directory = self.paths.fund_dir(name)
+        if not directory.is_dir():
             raise AiHfNotFound(f"No paper fund named {name!r}.")
-        meta: dict[str, Any] = getattr(self, "_funds_cache", {}).get(
-            name, {"error": "fund metadata unavailable"}
-        )
+        try:
+            deployed = load_deployed(directory)
+        except ValueError as exc:
+            raise AiHfServiceError(str(exc)) from exc
+        meta = self._fund_meta(name)
         control = control_state(self.paths, name)
         nav: float | None = None
         last_session: str | None = None
@@ -596,14 +655,8 @@ class PaperStore:
                 last_session = view.sessions[-1].session
         except (LedgerReadError, AiHfConfigError) as exc:
             problem = str(exc)
-        capital = meta.get("capital")
-        return_pct = None
-        if (
-            isinstance(nav, (int, float))
-            and isinstance(capital, (int, float))
-            and capital
-        ):
-            return_pct = nav / float(capital) - 1
+        capital = deployed.spec.capital
+        return_pct = nav / capital - 1 if nav is not None and capital else None
         drawdown_pct = None
         series = _nav_series(self.paths, name)
         if series and nav is not None:
@@ -612,15 +665,22 @@ class PaperStore:
                 drawdown_pct = max(0.0, 1 - nav / peak)
         return {
             "name": name,
-            "mandate": meta.get("mandate"),
-            "universe": meta.get("universe")
-            if isinstance(meta.get("universe"), list)
-            else [],
+            "mandate": deployed.spec.name,
+            "universe": list(deployed.universe),
             "capital": capital,
-            "rebalance": meta.get("rebalance"),
-            "benchmark": meta.get("benchmark"),
-            "cadence_label": meta.get("cadence_label"),
-            "strategies": meta.get("strategies", []),
+            "rebalance": deployed.spec.rebalance,
+            "benchmark": deployed.spec.benchmark,
+            "cadence_label": _cadence_label(deployed.spec.rebalance),
+            "strategies": [
+                {
+                    "name": strategy.name,
+                    "title": strategy.title,
+                    "weight": strategy.weight,
+                    "mode": strategy.blend.mode,
+                    "models": [model.name for model in strategy.models],
+                }
+                for strategy in deployed.spec.strategies
+            ],
             "nav": nav,
             "return_pct": return_pct,
             "drawdown_pct": drawdown_pct,
@@ -631,71 +691,57 @@ class PaperStore:
             "session_count": count,
             "chain_verified": chain_verified,
             "problem": problem,
-            "created": meta.get("created"),
+            "created": deployed.created or meta.get("created"),
         }
+
+    def _fund_meta(self, name: str) -> dict[str, Any]:
+        parsed = read_json(self.paths.fund_meta_path(name))
+        return parsed if isinstance(parsed, dict) else {}
 
     # ---- create / kill switch -------------------------------------------
 
     async def create(
         self, *, name: str, mandate: str, tickers: Sequence[str]
     ) -> dict[str, object]:
-        # aihf seeds its example stash on first use, so seed before resolving.
-        MandateStore(self.paths).list()
         fund = validate_name(name, what="paper fund")
-        target = validate_name(mandate, what="mandate")
-        mandate_path = self.paths.mandate_path(target)
-        if not mandate_path.is_file():
-            raise AiHfNotFound(f"No mandate named {target!r}.")
         if self.paths.fund_dir(fund).exists():
             raise AiHfConflict(f"A paper fund named {fund!r} already exists.")
+        spec = MandateStore(self.paths).load(mandate)
         universe = normalize_tickers(tickers)
-        result = await self._run(
-            [
-                "paper",
-                "create",
-                fund,
-                "--mandate",
-                str(mandate_path),
-                "--universe",
-                ",".join(universe),
-            ]
-        )
-        if not result.ok:
-            raise AiHfServiceError(result.failure_detail())
+        try:
+            engine.create_fund(fund, spec, list(universe), root=self.paths.paper)
+        except FileExistsError as exc:
+            raise AiHfConflict(str(exc)) from exc
         return self.fund(fund)
 
     async def kill_switch(
         self, name: str, *, action: str, reason: str | None
     ) -> dict[str, object]:
         fund = validate_name(name, what="paper fund")
-        if not self.paths.fund_dir(fund).is_dir():
+        directory = self.paths.fund_dir(fund)
+        if not directory.is_dir():
             raise AiHfNotFound(f"No paper fund named {fund!r}.")
         if action == "halt":
-            argv = [
-                "paper",
-                "halt",
-                fund,
-                "--reason",
-                reason or "halted from BharatQuant",
-            ]
+            engine.halt_fund(directory, reason or "halted from BharatQuant")
         elif action == "resume":
-            argv = ["paper", "resume", fund]
+            engine.resume_fund(directory)
         else:
             raise AiHfInvalid("action must be 'halt' or 'resume'")
-        result = await self._run(argv)
-        if not result.ok:
-            raise AiHfServiceError(result.failure_detail())
         return self.fund(fund)
 
     # ---- the approval gate ----------------------------------------------
 
-    async def preview(
-        self, name: str, *, model: str | None = None
-    ) -> dict[str, object]:
-        """Compute the next session against a copy of the fund; mutate nothing live."""
+    async def preview(self, name: str) -> dict[str, object]:
+        """Compute the next session without writing anything to the fund.
+
+        ``advance`` is pure given (fund, state, session, broker, data), so the
+        broker is rebuilt from the ledger in memory and the session runs against
+        it. Nothing in the fund directory is touched: no ledger append, no broker
+        rewrite. The record is stored for approval to adopt.
+        """
         fund = validate_name(name, what="paper fund")
-        live = self.paths.fund_dir(fund)
-        if not live.is_dir():
+        directory = self.paths.fund_dir(fund)
+        if not directory.is_dir():
             raise AiHfNotFound(f"No paper fund named {fund!r}.")
         control = control_state(self.paths, fund)
         if control["halted"]:
@@ -703,42 +749,30 @@ class PaperStore:
                 f"{fund} is halted: {control['reason'] or 'no reason given'}"
             )
 
-        self.clear_preview(fund)
+        deployed = load_deployed(directory)
         head, session_count = read_head(self.paths, fund)
-        token = uuid.uuid4().hex[:16]
-        sandbox_home = self.paths.sandbox_home(token)
-        sandbox_fund = sandbox_home / ".hedge-fund" / "paper" / fund
-        digest_before = directory_digest(live)
         try:
-            copy_tree(live, sandbox_fund)
-            result = await self._run(
-                ["paper", "tick", fund], model=model, home=sandbox_home
+            record = engine.predict_session(
+                directory,
+                data_client=self._data(),
+                llm=None,
+                cache=self._cache(),
+                spec=deployed.spec,
+                deployed=deployed,
             )
-            if not result.ok:
-                raise AiHfServiceError(result.failure_detail())
-            record = parse_session_document(result.stdout)
-        except AiHfParseError as exc:
-            remove_tree(sandbox_home)
-            raise AiHfServiceError(str(exc)) from exc
-        except BaseException:
-            remove_tree(sandbox_home)
-            raise
+        except (NothingDue, FundHalted) as exc:
+            raise AiHfConflict(str(exc)) from exc
 
-        if directory_digest(live) != digest_before:
-            remove_tree(sandbox_home)
-            raise AiHfServiceError(
-                "The preview modified the live fund; refusing to continue."
-            )
-
+        raw = record.model_dump()
+        token = uuid.uuid4().hex[:16]
         preview = Preview(
             preview_id=f"{token}.{session_count}",
             fund=fund,
             head=head,
             session_count=session_count,
-            token=token,
-            record=record,
+            record=parse_session(raw),
+            raw=raw,
             created_at=time.time(),
-            digest_before=digest_before,
         )
         self._write_preview(preview)
         return self._preview_payload(preview)
@@ -746,17 +780,19 @@ class PaperStore:
     async def execute(self, name: str, *, preview_id: str) -> dict[str, object]:
         """Adopt an approved preview into the live fund.
 
-        The sandbox holds only aihf-written files (its ledger record, broker
-        book and events), so adopting it cannot forge a record: aihf's own
-        ``Ledger.replay`` re-verifies every hash on the next read.
+        The preview holds a record the engine computed and hashed. Approving it
+        appends that exact record; ``Ledger.append`` re-verifies the hash and that
+        ``prev_hash`` chains to the current head, so a preview edited by hand is
+        refused. The broker's book is then written from the record's own positions
+        and cash — the same book ``advance`` computed.
         """
         fund = validate_name(name, what="paper fund")
-        live = self.paths.fund_dir(fund)
-        if not live.is_dir():
+        directory = self.paths.fund_dir(fund)
+        if not directory.is_dir():
             raise AiHfNotFound(f"No paper fund named {fund!r}.")
 
         # The kill switch is checked before anything else: a halted fund must
-        # never be told "no preview" and then be committable once one exists.
+        # never be tellable "no preview" and then committable once one exists.
         control = control_state(self.paths, fund)
         if control["halted"]:
             raise AiHfConflict(
@@ -766,7 +802,6 @@ class PaperStore:
         preview = self._load_preview(fund)
         if preview.preview_id != preview_id:
             raise AiHfNotFound("That preview is no longer current; run it again.")
-
         if time.time() - preview.created_at > MAX_PREVIEW_AGE_SECONDS:
             self.clear_preview(fund)
             raise AiHfConflict("This preview is stale; run the session again.")
@@ -776,25 +811,23 @@ class PaperStore:
             raise AiHfConflict(
                 "The ledger advanced since this preview; run the session again."
             )
-        if directory_digest(live) != preview.digest_before:
-            self.clear_preview(fund)
-            raise AiHfConflict(
-                "The fund changed since this preview; run the session again."
-            )
 
-        sandbox_fund = (
-            self.paths.sandbox_home(preview.token) / ".hedge-fund" / "paper" / fund
-        )
-        if not sandbox_fund.is_dir():
+        deployed = load_deployed(directory)
+        record = SessionRecord.model_validate(preview.raw)
+        ledger = Ledger(directory)
+        try:
+            ledger.append(record)
+        except Exception as exc:  # noqa: BLE001 - a forged or stale record is a 409
             self.clear_preview(fund)
-            raise AiHfConflict(
-                "The preview is no longer on disk; run the session again."
-            )
-        _adopt(sandbox_fund, live)
+            raise AiHfConflict(f"The preview could not be adopted: {exc}") from exc
+        PaperBroker.restore(
+            directory / BROKER_FILE, record.cash, record.positions, deployed.spec.costs
+        )
+        ledger.log_event("approved", session=record.session)
         self.clear_preview(fund)
         return {
             "fund": self.fund(fund),
-            "adopted": session_payload(preview.record),
+            "adopted": session_payload(parse_session(record.model_dump())),
         }
 
     def ledger(
@@ -806,26 +839,22 @@ class PaperStore:
         verify: bool = True,
     ) -> dict[str, object]:
         fund = validate_name(name, what="paper fund")
-        if not self.paths.fund_dir(fund).is_dir():
+        directory = self.paths.fund_dir(fund)
+        if not directory.is_dir():
             raise AiHfNotFound(f"No paper fund named {fund!r}.")
         view: LedgerView = read_ledger(self.paths, fund, limit=limit, offset=offset)
         verified = view.chain_verified
         verify_error: str | None = None
         if verify:
+            # In-process now: the engine's own replay recomputes every hash, so
+            # this is the authentic check rather than a subprocess probe.
             try:
-                payload = run_probe(
-                    self.paths,
-                    VERIFY_LEDGER_PROBE,
-                    payload=str(self.paths.fund_dir(fund)).encode("utf-8"),
-                )
-                if payload.get("ok"):
-                    verified = bool(payload.get("verified"))
-                else:
-                    verified = False
-                    verify_error = str(payload.get("error"))
-            except AiHfRegistryError as exc:
-                verify_error = str(exc)
+                deployed = load_deployed(directory)
+                Ledger(directory).replay(deployed.spec.capital, full=True)
+                verified = True
+            except Exception as exc:  # noqa: BLE001 - a broken chain is reported, not raised
                 verified = False
+                verify_error = _bounded(str(exc))
         return {
             "fund": fund,
             "sessions": [session_payload(session) for session in view.sessions],
@@ -840,6 +869,16 @@ class PaperStore:
 
     # ---- internals -------------------------------------------------------
 
+    def _data(self) -> DataClient:
+        if self._data_client is not None:
+            return self._data_client
+        from bq.aihf.wiring import build_data_client
+
+        return build_data_client(self.settings)
+
+    def _cache(self) -> PromptCache:
+        return PromptCache()
+
     def _preview_path(self, fund: str) -> Path:
         return self.paths.previews / f"{fund}.json"
 
@@ -851,10 +890,8 @@ class PaperStore:
             "fund": preview.fund,
             "head": preview.head,
             "session_count": preview.session_count,
-            "token": preview.token,
             "created_at": preview.created_at,
-            "digest_before": preview.digest_before,
-            "record": _raw_record(preview.record),
+            "record": preview.raw,
         }
         path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -863,36 +900,23 @@ class PaperStore:
         if not isinstance(parsed, dict):
             raise AiHfNotFound("There is no preview to approve; run the session first.")
         record = parsed.get("record")
-        try:
-            session = parse_session(record)
-        except AiHfParseError as exc:
-            raise AiHfServiceError(str(exc)) from exc
+        if not isinstance(record, dict):
+            raise AiHfServiceError("The stored preview has no session record.")
         created = parsed.get("created_at")
         return Preview(
             preview_id=str(parsed.get("preview_id") or ""),
             fund=fund,
             head=parsed.get("head") if isinstance(parsed.get("head"), str) else None,
             session_count=int(parsed.get("session_count") or 0),
-            token=str(parsed.get("token") or ""),
-            record=session,
+            record=parse_session(record),
+            raw=dict(record),
             created_at=float(created) if isinstance(created, (int, float)) else 0.0,
-            digest_before=str(parsed.get("digest_before") or ""),
         )
 
     def clear_preview(self, fund: str) -> None:
-        """Drop a pending preview and its sandbox. Never touches the live fund."""
+        """Drop a pending preview. There is no sandbox to remove any more."""
         name = validate_name(fund, what="paper fund")
-        path = self._preview_path(name)
-        token: str | None = None
-        parsed = read_json(path)
-        if isinstance(parsed, dict) and isinstance(parsed.get("token"), str):
-            token = parsed.get("token")
-        path.unlink(missing_ok=True)
-        if token:
-            try:
-                remove_tree(self.paths.sandbox_home(token))
-            except AiHfConfigError:
-                pass
+        self._preview_path(name).unlink(missing_ok=True)
 
     def _preview_payload(self, preview: Preview) -> dict[str, object]:
         record = preview.record
@@ -929,47 +953,25 @@ class PaperStore:
             "halved": bool(decision and decision.is_halved),
         }
 
-    async def _run(
-        self,
-        argv: Sequence[str],
-        *,
-        model: str | None = None,
-        home: Path | None = None,
-    ) -> AiHfResult:
-        runtime = build_runtime(
-            self.settings, model_override=model, environ={}, paths=self.paths
-        )
-        env = dict(runtime.env)
-        if home is not None:
-            home.mkdir(parents=True, exist_ok=True)
-            env["HOME"] = str(home)
-        return await run_aihf(self.paths, argv, env, timeout=TICK_TIMEOUT_SECONDS)
+
+def _bounded(text: str, limit: int = 400) -> str:
+    return " ".join(text.split())[:limit]
 
 
-def _adopt(sandbox_fund: Path, live: Path) -> None:
-    """Copy aihf-written state from an approved sandbox over the live fund.
-
-    Only the files aihf owns are adopted: the ledger (and its checkpoints),
-    the broker's book, and the event log. ``fund.yaml`` and the kill switch
-    are deliberately left alone — the mandate snapshot and a halt that
-    happened during the preview must survive an approval.
-    """
-    ledger_dir = sandbox_fund / "ledger"
-    if ledger_dir.is_dir():
-        shutil.copytree(ledger_dir, live / "ledger", dirs_exist_ok=True)
-    for name in ("broker.json", "events.jsonl"):
-        source = sandbox_fund / name
-        if source.is_file():
-            shutil.copy2(source, live / name)
+def _nav_series(paths: AiHfPaths, fund: str) -> list[float]:
+    try:
+        return [session.nav for session in read_ledger(paths, fund).sessions]
+    except (LedgerReadError, AiHfConfigError):
+        return []
 
 
-def _raw_record(session: SessionView) -> dict[str, Any]:
-    """Re-read the record from disk so the stored preview is aihf's own JSON.
-
-    ``parse_session`` bounds and normalises for the wire; the preview needs the
-    untouched record for the adopt check to be meaningful.
-    """
-    return dict(session.raw) if session.raw else {}
+def _cadence_label(rebalance: str) -> str:
+    return {
+        "minute": "every bar",
+        "daily": "daily",
+        "weekly": "weekly",
+        "monthly": "monthly",
+    }.get(rebalance, rebalance)
 
 
 def _reasoning(record: SessionView) -> list[dict[str, object]]:
@@ -990,31 +992,40 @@ def _reasoning(record: SessionView) -> list[dict[str, object]]:
     ]
 
 
-def _nav_series(paths: AiHfPaths, fund: str) -> list[float]:
-    try:
-        return [session.nav for session in read_ledger(paths, fund).sessions]
-    except (LedgerReadError, AiHfConfigError):
-        return []
-
-
-def deployed_meta(deployed: object) -> dict[str, Any]:
-    if not isinstance(deployed, dict):
-        return {}
-    spec = deployed.get("spec")
-    spec_map = spec if isinstance(spec, dict) else {}
-    universe = deployed.get("universe")
-    return {
-        "mandate": spec_map.get("name"),
-        "capital": spec_map.get("capital"),
-        "rebalance": spec_map.get("rebalance"),
-        "benchmark": spec_map.get("benchmark"),
-        "universe": universe if isinstance(universe, list) else [],
-        "created": deployed.get("created"),
-    }
-
-
 def _mtime(path: Path) -> str | None:
     try:
         return datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat()
     except OSError:
         return None
+
+
+def install_market_clock() -> None:
+    """Point the engine at this app's market clock (NSE/IST).
+
+    Called once at start-up. Without it, `clock_for` returns upstream's New York
+    clock, and a fund would be a day off in a way nothing else surfaces.
+    """
+    from bq.aihf.bridge.clock import nse_clock_factory
+
+    set_clock_factory(nse_clock_factory())
+
+
+__all__ = [
+    "AiHfConflict",
+    "AiHfInvalid",
+    "AiHfNotFound",
+    "AiHfServiceError",
+    "MandateStore",
+    "PaperStore",
+    "ResearchStore",
+    "clamp_payload",
+    "decision_payload",
+    "execution_payload",
+    "install_market_clock",
+    "models",
+    "normalize_tickers",
+    "session_payload",
+    "status",
+    "summary_payload",
+    "validate_dates",
+]

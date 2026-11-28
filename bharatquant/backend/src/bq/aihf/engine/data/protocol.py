@@ -29,7 +29,13 @@ from bq.aihf.engine.data.models import (
     Price,
     PriceSnapshot,
 )
-from bq.aihf.engine.data.screener import OrderBy, SCREEN_LIMIT, ScreenerFields, ScreenFilter, ScreenRow
+from bq.aihf.engine.data.screener import (
+    SCREEN_LIMIT,
+    OrderBy,
+    ScreenerFields,
+    ScreenFilter,
+    ScreenRow,
+)
 
 
 class DataClientError(RuntimeError):

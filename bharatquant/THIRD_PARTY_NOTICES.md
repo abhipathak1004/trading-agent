@@ -51,6 +51,7 @@ dependencies are included because they are part of the lock.
 | Transitive | [colorama](https://pypi.org/project/colorama/0.4.6/) | 0.4.6 | BSD-3-Clause (bundled license) |
 | Transitive | [constantly](https://pypi.org/project/constantly/23.10.4/) | 23.10.4 | MIT |
 | Transitive | [cryptography](https://pypi.org/project/cryptography/50.0.2/) | 50.0.2 | Apache-2.0 OR BSD-3-Clause |
+| Runtime | [duckdb](https://pypi.org/project/duckdb/2.0.1/) | 2.0.1 | MIT |
 | Runtime | [fastapi](https://pypi.org/project/fastapi/0.165.0/) | 0.165.0 | MIT |
 | Transitive | [h11](https://pypi.org/project/h11/0.16.0/) | 0.16.0 | MIT |
 | Build and development | [hatchling](https://pypi.org/project/hatchling/1.33.0/) | 1.33.0 | MIT |
@@ -73,6 +74,9 @@ dependencies are included because they are part of the lock.
 | Development | [pandas-stubs](https://pypi.org/project/pandas-stubs/3.1.0.261029/) | 3.1.0.261029 | BSD-3-Clause |
 | Transitive | [pathspec](https://pypi.org/project/pathspec/1.1.1/) | 1.1.1 | MPL-2.0 (bundled license) |
 | Transitive | [pluggy](https://pypi.org/project/pluggy/1.7.0/) | 1.7.0 | MIT |
+| Runtime | [polars](https://pypi.org/project/polars/2.2.0/) | 2.2.0 | MIT |
+| Transitive | [polars-runtime-32](https://pypi.org/project/polars-runtime-32/2.2.0/) | 2.2.0 | MIT |
+| Runtime | [pyarrow](https://pypi.org/project/pyarrow/26.0.1/) | 26.0.1 | Apache-2.0 |
 | Runtime | [pydantic](https://pypi.org/project/pydantic/2.14.4/) | 2.14.4 | MIT |
 | Transitive | [pydantic-core](https://pypi.org/project/pydantic-core/2.50.5/) | 2.50.5 | MIT |
 | Transitive | [pycparser](https://pypi.org/project/pycparser/3.12/) | 3.12 | BSD-3-Clause |

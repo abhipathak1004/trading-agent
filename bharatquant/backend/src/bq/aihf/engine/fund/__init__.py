@@ -1,23 +1,23 @@
 """Fund configuration, model construction, and saved mandates."""
 
 from bq.aihf.engine.fund.spec import (
+    MIN_INTERVAL_SECONDS,
     AllocationPolicy,
     BlendPolicy,
     Cadence,
-    custom_strategy,
-    format_interval,
     Fund,
     FundSpec,
-    load_spec,
-    load_strategy,
-    MIN_INTERVAL_SECONDS,
     ModelSpec,
-    normalize_universe,
     PortfolioMode,
     StrategySpec,
     TradingWindow,
+    custom_strategy,
+    format_interval,
+    load_spec,
+    load_strategy,
+    normalize_universe,
 )
-from bq.aihf.engine.fund.storage import discover_funds, save_spec, SavedFund
+from bq.aihf.engine.fund.storage import SavedFund, discover_funds, save_spec
 
 __all__ = [
     "AllocationPolicy",

@@ -23,7 +23,7 @@ class FundamentalSource(StrEnum):
     OWNER = "OWNER"
     # Yahoo's quoteSummary. Labelling these rows XBRL would misstate where the
     # numbers came from, and a reader needs to know: XBRL is a filing, Yahoo is
-    # a vendor's restatement of one (ADR-052).
+    # a vendor's restatement of one (ADR-053).
     YAHOO = "YAHOO"
 
 

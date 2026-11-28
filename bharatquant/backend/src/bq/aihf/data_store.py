@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -111,7 +112,7 @@ class CompanyFactsStore:
         self.path = path
         self.clock = clock or SystemClock()
 
-    def _connect(self):  # noqa: ANN202 - sqlite3.Connection
+    def _connect(self) -> sqlite3.Connection:
         from bq.core import open_connection
 
         return open_connection(self.path, foreign_keys=True)
@@ -314,7 +315,7 @@ class EarningsStore:
         self.path = path
         self.clock = clock or SystemClock()
 
-    def _connect(self):  # noqa: ANN202 - sqlite3.Connection
+    def _connect(self) -> sqlite3.Connection:
         from bq.core import open_connection
 
         return open_connection(self.path, foreign_keys=True)
@@ -437,8 +438,8 @@ def _earnings_row(row: tuple[object, ...]) -> EarningsEvent:
         report_period=str(row[1]),
         filing_date=str(row[2]),
         source_type=str(row[3]),
-        eps_actual=float(row[4]) if row[4] is not None else None,
-        eps_estimate=float(row[5]) if row[5] is not None else None,
+        eps_actual=float(str(row[4])) if row[4] is not None else None,
+        eps_estimate=float(str(row[5])) if row[5] is not None else None,
         eps_surprise=str(row[6]) if row[6] is not None else None,
         known_at=_parse_timestamp(str(row[7])),
     )

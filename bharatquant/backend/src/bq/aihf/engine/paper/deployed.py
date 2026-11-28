@@ -15,12 +15,12 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, field_validator, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from bq.aihf.engine import paths
 from bq.aihf.engine.brokers.paper import PaperBroker
 from bq.aihf.engine.fund import FundSpec, normalize_universe
 from bq.aihf.engine.paper.ledger import Ledger
-from bq.aihf.engine import paths
 
 FUND_FILE = "fund.yaml"
 BROKER_FILE = "broker.json"

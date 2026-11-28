@@ -1602,7 +1602,9 @@ must remain the golden-set template (prompts, tools, assertions, tests).
 
 ## ADR-050: `aihf` runs from an isolated sidecar venv, driven as a subprocess
 
-**Status:** accepted (28 Nov 2026). Adds the **AI Hedge Fund** tab.
+**Status:** superseded by ADR-053 (28 Nov 2026). Kept for the reasoning and the
+facts it established, several of which ADR-053 re-uses. Adds the **AI Hedge Fund**
+tab.
 
 **Context.** The request was to install `aihf` (PyPI, `virattt/ai-hedge-fund`
 v2) and expose its mandates, backtests and paper desk in this app. Measuring
@@ -1797,3 +1799,208 @@ pre-existing gaps that were not Bedrock-specific:
   decision tier accepts only that provider.
 - Test doubles standing in for `ModelClient`/`ModelRouter` must accept the new
   keyword arguments. They are optional, so existing fakes only needed widening.
+
+## ADR-053: The AI Hedge Fund engine is vendored in-process, on this app's data and models
+
+**Status:** accepted (28 Nov 2026). Supersedes ADR-050.
+
+**Context.** ADR-050 ran `aihf==2.7.2` from an isolated sidecar venv as a
+subprocess, and its "alternatives rejected" list explicitly declined to
+"reimplement aihf's engine in-tree". That decision rested on one claim: the
+engine cannot share this environment because it pins `pandas<3`/`numpy<2` while
+this project is locked to `pandas>=3.1`/`numpy>=2.5`. Reading the installed
+source showed the claim guards almost nothing:
+
+- **pandas** is imported in exactly one file outside `tui/` (`signals/base.py`),
+  and only for `_compute_rsi`, which **nothing calls**.
+- **numpy** is used in four files, all 1-D scalar statistics: a bivariate OLS
+  slope (`risk/exposures.py`), a Sharpe ratio (`backtesting/fund.py`), tie-ranked
+  Spearman (`scorecard/analysts.py`), and `isnan/isinf/tanh` in the dead helper.
+- **`matplotlib` and `scipy`** are declared dependencies that are never
+  imported. Every `langchain_*` import is lazy, inside `make_llm`.
+
+Two other facts made the port worthwhile rather than merely possible: the engine
+takes its data and its language model through two narrow protocols
+(`DataClient`, `LLMClient`) with exactly one construction site each, so both can
+be substituted; and the sidecar's reason for existing was also the owner's
+blocking problem — a data key the owner does not have.
+
+**Decision.** Vendor the engine into `backend/src/bq/aihf/engine/` and run it
+**in-process**, on this app's data and models.
+
+1. **Vendor, don't reimplement.** The MIT-licensed source is copied nearly
+   verbatim; pandas and numpy are removed by deleting one dead function and
+   replacing ~80 lines of numerics with `math`/`statistics`. Every deviation is
+   logged in `engine/PATCHES.md`, and a test imports the engine in a fresh
+   subprocess to prove no `pandas`, `numpy`, `langchain`, `textual` or `requests`
+   reaches the graph. This is the alternative ADR-050 rejected; it is now the
+   right one because the port is a diff, not a rewrite, so "drift from upstream"
+   stays bounded and auditable.
+2. **Data comes from this app.** `bridge/data.py` implements the engine's
+   `DataClient` over the Yahoo→Kite vendor router (bars, quotes) and the
+   point-in-time stores (fundamentals, earnings, sector, news). Two contracts
+   hold: every read is bounded by its date (the store filters `known_at <= as_of`),
+   and an outage raises while "no data" returns empty. Because the app had **no
+   fundamentals feed at all**, `yahoo_fundamentals_vendor.py` populates the store
+   from Yahoo's quarterly statements, setting `known_at = period_end + 45 days`
+   (SEBI's filing window) so a backtest cannot see results before they existed.
+3. **Models come from Settings.** `bridge/llm.py` implements the engine's
+   `LLMClient` over `ModelRouter` + `complete_structured`. Each persona is its
+   own Settings agent (`aihf_buffett`, …), so its tier, model and prompt are all
+   configuration; nothing in the port names a model. Personas' prompts are
+   editable in the Agent Lab, defaulting to the vendored literals.
+4. **The market is NSE.** `bridge/clock.py` supplies the engine's clock in IST
+   with the exchange calendar (and the app's documented weekday fallback), and
+   `bridge/costs.py` charges Indian delivery fees through `paper_charges` — the
+   same schedule the paper ledger uses, matching to the paise. `Load_spec`
+   refuses intraday cadence and `universe:` screening rules, which are out of
+   scope for this pass rather than half-working.
+5. **The approval gate is a true dry run.** ADR-050 kept "no session without
+   approval" by copying the fund, ticking the copy, and adopting its files.
+   `advance` is pure given (fund, state, session, broker, data), so a preview now
+   runs against an in-memory broker and writes **nothing**; approval appends that
+   record, and `Ledger.append` re-verifies the hash and that it chains to the
+   head. A hand-edited preview is refused, and one LLM call is spent per session
+   instead of two. The sandbox directories and directory digests are gone.
+6. **Migration 042** rebuilds `fundamental_snapshots` to add a `period_label` and
+   admit a `YAHOO` source, and adds `company_facts` and `earnings_events`.
+   Verified as an incremental 41 → 42 upgrade on a database with an existing
+   snapshot, which survived. `company_facts` exists because `max_sector_pct`
+   silently exempts a name with no sector.
+
+**Consequences.**
+
+- No sidecar venv, no `just aihf-install`, no `registry.py`/`probe/`/env
+  building. `installed` is always true; `version` reads `"in-process"`.
+- **Accepted cost: Yahoo serves about four quarters**, exactly the personas'
+  4-period floor. A replay longer than roughly a year has earlier sessions
+  abstain with `InsufficientData`. This is stated in the UI, not hidden.
+- **Accepted cost: no US Ken-French size breakpoints.** Blind prompts omit size
+  rather than substitute a US decile for an Indian name.
+- **Accepted cost: no insider-trade feed**, so that protocol method returns
+  empty; the personas treat it as no evidence.
+- `pyyaml` becomes a direct dependency (mandates are YAML, part of the wire
+  contract). `THIRD_PARTY_NOTICES.md` gains the engine; `test_dependency_notices`
+  is satisfied.
+- Intraday funds, `universe:` screening, and a second market are future work;
+  the bar clocks would need the same factory treatment the daily clock now has.
+- **Risk:** a future upstream upgrade must be re-diffed against `PATCHES.md`.
+  Bounded by keeping files nearly verbatim and by the parse fixtures in
+  `tests/test_aihf_parsing.py`.
+
+**Alternatives rejected.**
+
+- *Keep the sidecar and inject a data key* — the owner has no Financial Datasets
+  key, and the engine would still not read this app's data or models.
+- *Port to a second process with a local HTTP API* — more moving parts than the
+  in-process call, and every fund operation is already synchronous.
+- *Relax the app's lock to `pandas<3`* — downgrades the whole app for code the
+  engine does not use.
+
+## ADR-054: The Research Lab gets an embedded analytical stack; SQLite stays the transactional authority
+
+**Status:** accepted (28 Nov 2026). Supersedes the deferral clause in ADR-003 and
+the rejection of Polars in ADR-014. Does not supersede either decision wholesale.
+
+**Context.** The Research Lab ports Vibe-Trading's research-to-action mechanisms
+(arXiv:2611.24845): frozen input manifests, frozen replay with walk-forward
+holdouts, cross-sectional factor benchmarking, Risk X-Ray, a scoped evidence
+ledger, and a bounded report gate. Three of those are analytical workloads over
+columnar bar panels — the shape ADR-003 deliberately deferred ("use file-backed
+Parquet/Arrow … only when a concrete workload needs it; use DuckDB only for
+appropriate analytical queries, not as a second transactional authority") and the
+shape ADR-014 evaluated and declined when the only consumer was an indicator
+helper over a few hundred bars.
+
+That precondition is now met, and the measurement is unambiguous: the workloads
+are cross-sectional (IC over a universe × date × horizon grid), the frames are
+written once and re-read many times under a hash, and the alpha bench has to scan
+a whole universe rather than one symbol. Reimplementing that over pandas +
+`Decimal` paise would add a hand-rolled groupby/rank layer whose arithmetic is
+already the riskiest part of the system.
+
+Separately, the port's upstream project is not a template to copy wholesale. Both
+of its published CVEs come from capability this app does not want:
+CVE-2026-114107 is `BashTool`/`BackgroundRunTool` passing model-emitted commands
+to `subprocess.run(shell=True)` with no allow-list, plus an unrestricted
+`read_url`; CVE-2026-114106 is a path traversal.
+
+**Decision.**
+
+1. **SQLite stays the single transactional authority.** Every durable record —
+   sessions, runs, artifacts, evidence, mandates — is a SQLite row written inside
+   a `BEGIN IMMEDIATE` transaction. Parquet slices and the DuckDB queries over
+   them are **derived, read-only artefacts**: they are rebuilt from SQLite plus
+   the vendor router and are never the source of truth for anything. This keeps
+   ADR-003's substance and lifts only its timing clause.
+2. **Polars, PyArrow and DuckDB become runtime dependencies.** Polars for frame
+   algebra, PyArrow as the Parquet writer, DuckDB in-memory as the query engine
+   over slices. `tests/test_runtime_dependencies.py` already proved the import
+   graph stays installable; it needed no allowlist entry because all three import
+   under their distribution names. `THIRD_PARTY_NOTICES.md` gains the three
+   packages plus `polars-runtime-32`, and `test_dependency_notices` is satisfied.
+3. **Money stays exact.** Every price column in a frame is `Int64` paise, matching
+   `CurrencyPaise`, and volume is `Int64`. Float64 exists only for ratios,
+   returns and scores, and never flows back into a money field. This is the one
+   place the port deliberately diverges from upstream, which carries float64
+   closes.
+4. **The freeze contract carries two digests, not one.** Upstream hashes the
+   Parquet file. Parquet bytes are not stable across writer versions or embedded
+   metadata, so a single file hash cannot both identify the *content* and survive
+   a re-freeze. `content_sha256` is taken over canonical JSON of the frame sorted
+   by `(symbol, ts)` and is the semantic identity stored on the run;
+   `file_sha256` covers the bytes and detects tampering. Verification checks both,
+   so a test can prove which layer caught which failure.
+5. **DuckDB is embedded, never persistent.** It is opened as
+   `duckdb.connect(":memory:")` and queried only through `read_parquet()` over
+   paths under `BQ_HOME`. No `.duckdb` file is ever created, so there is still
+   exactly one database in the system and `just run` stays one command.
+6. **Postgres is declined for now, on measurement rather than preference.**
+   Carrying the OLTP layer to Postgres means porting 47 `open_connection()` call
+   sites across 43 files, 42 migrations (82 `STRICT` tables), and ~1,110 tests;
+   and five capabilities do not map one-for-one — the `PRAGMA application_id`
+   identity gate, the SQLite online-backup API behind `bq db backup/restore` and
+   its SHA-256 manifest, `BEGIN IMMEDIATE` write serialisation, FTS5 + `bm25()`
+   with its term-index fallback, and `AUTOINCREMENT`/`RAISE(ABORT)` DDL. It would
+   also add a daemon to a single-owner local app whose state is currently one
+   file the owner can copy to `~/Backups`. What would reverse this: a
+   multi-user/server deployment, or a measured write-concurrency ceiling.
+7. **No generated-code surface, therefore no AST sandbox.** Strategies here are a
+   whitelist-validated declarative DSL and there is no `eval`/`exec` anywhere, so
+   an AST allow-list would guard a capability the app does not have. The CVE
+   mitigations are enforced by absence and by a self-audit test: `bq/research_lab/`
+   must not import `subprocess`, `socket`, `urllib`, `requests` or `httpx`, and no
+   shell or `read_url` tool is ever registered. Artifact access goes through
+   `safe_resolve_path` (`Path.resolve()` + `is_relative_to`).
+
+**Consequences.**
+
+- ADR-003's "one transactional authority" and ADR-014's "no float64 prices"
+  invariants survive; only the tool choice and its timing change.
+- `uv.lock` grows by four packages (~96 MiB of wheels). The `.venv` was already
+  built for `pandas`/`numpy`, so this is the first genuinely large addition.
+- A frozen run is reproducible from its content digest alone; a Parquet writer
+  upgrade cannot invalidate stored runs, because the byte digest is checked
+  against the file beside it, not against the run row.
+- mypy gains three new typed dependencies. `duckdb` ships partial annotations, so
+  the research-lab module may need a narrow `ignore_missing_imports` override if
+  strict mode objects; that is preferable to weakening the package.
+- **Accepted cost: two digests per run** and a slightly larger manifest than the
+  upstream design. Bounded and mechanical.
+- **Risk:** a future Polars major bump can change frame semantics. Bounded by
+  pinning `>=2.2,<3` and by the contract's explicit schema assertion.
+
+**Alternatives rejected.**
+
+- *Postgres for everything* — see point 6. A separate programme of work, not a
+  configuration change; documented in the plan as Plan 0 if it is ever chosen.
+- *Keep pandas and skip the analytical stack* — the alpha bench would become a
+  hand-written groupby/rank implementation, duplicating arithmetic that already
+  has a correctness risk budget.
+- *Hash the Parquet file only* (upstream's design) — not reproducible across
+  writer versions, so a stored run would stop verifying after a dependency bump.
+- *A Postgres read replica for analytics* — reintroduces sync machinery and dual
+  schema for what DuckDB already reads with no copy step.
+- *Port the AST sandbox anyway* — a control for a vulnerability this app does not
+  have; it would create the impression of a code-execution surface that must then
+  be maintained.

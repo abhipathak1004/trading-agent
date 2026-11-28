@@ -99,30 +99,31 @@ development hosts, set `BQ_HOME` to a dedicated local data directory before
 running `bq init`; macOS uses the BharatQuant Application Support directory by
 default.
 
-### AI Hedge Fund tab (optional)
+### AI Hedge Fund tab
 
-The **Build → AI Hedge Fund** tab drives [`aihf`](https://pypi.org/project/aihf/),
-which requires `pandas<3` and `numpy<2` and therefore cannot be installed into
-this project's environment. It runs from its own virtual environment:
+The **Build → AI Hedge Fund** tab runs a ported, in-process version of
+[`virattt/ai-hedge-fund`](https://github.com/virattt/ai-hedge-fund) v2 (MIT).
+Nothing to install: the engine is vendored under
+`backend/src/bq/aihf/engine/` and shares this app's environment (ADR-052).
 
-```sh
-just aihf-install     # creates bharatquant/.aihf-venv and installs aihf==2.7.2
-just aihf-status      # version, and a smoke `aihf paper list`
-```
+It trades **NSE names** over daily/weekly/monthly cadence, using this app's own
+data and models — not another vendor and not another process:
 
-`bq` never imports it — it is invoked as a subprocess with an environment built
-from **Settings**, so configure the keys there, not in `~/.hedge-fund/.env`
-(which this app does not read or write):
+- **Bars, quotes, indices** — the same Yahoo → Kite vendor router the rest of
+  the app uses.
+- **Fundamentals, earnings surprises, sector** — the point-in-time
+  `fundamental_snapshots` / `earnings_events` / `company_facts` stores, filled
+  by the `aihf.fundamentals.ingest` job (off by default; it makes one Yahoo
+  request per symbol). Yahoo serves about four quarters, so a persona replay
+  longer than roughly a year will see earlier sessions abstain.
+- **Costs** — Indian delivery charges (STT, exchange, SEBI, stamp, GST) from the
+  same `paper_charges` schedule the paper ledger uses.
+- **Models** — each persona is its own Settings agent (`aihf_buffett`, …), so
+  configure a provider key under **Settings → Models & keys**. No model id is
+  hardcoded, and each persona's prompt is editable in the Agent Lab.
 
-- **Settings → Models & keys → Data providers** — Financial Datasets API key.
-- **Settings → Models & keys → Provider API keys** — one LLM provider key
-  (Gemini, OpenAI, DeepSeek or TypeSafe). aihf's Anthropic/xAI/Kimi providers
-  are listed but cannot be run, because this app stores no key for them.
-
-Each run gets a private `HOME` under `BQ_HOME/aihf/`, so mandates, paper funds
-and backtest results are this installation's own. Without the sidecar the tab
-still renders and explains what is missing.
-
+A session is computed without touching the fund, then committed only when you
+approve it; the appended ledger record must hash to what the preview computed.
 
 While the server is running, its 30-second scheduler discovery loop records due
 wake decisions and durably enqueues `RUN` decisions as job occurrences. It does

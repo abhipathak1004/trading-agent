@@ -86,7 +86,6 @@ export default function AiHedgeFundPanel({
 }) {
   const [view, setView] = useState<SubView>("mandates");
   const [status, setStatus] = useState<Load<AiHfStatus>>({ state: "loading" });
-  const [modelOverride, setModelOverride] = useState("");
 
   const refreshStatus = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -110,15 +109,14 @@ export default function AiHedgeFundPanel({
   }, [refreshStatus]);
 
   const ready = status.state === "ready" ? status.value : null;
-  const runnableModels = ready?.models.filter((model) => model.runnable) ?? [];
 
   return (
     <div className="ahf">
       <header className="ahf-header" aria-label="AI Hedge Fund configuration">
         <div className="ahf-header__identity">
-          <p className="ahf-header__eyebrow">EXTERNAL ENGINE · AIHF v2</p>
+          <p className="ahf-header__eyebrow">AI HEDGE FUND · IN-PROCESS ENGINE</p>
           <p className="ahf-header__runtime">
-            {status.state === "loading" && "Reading the sidecar…"}
+            {status.state === "loading" && "Reading the engine…"}
             {status.state === "error" && status.message}
             {ready && (
               <>
@@ -130,70 +128,37 @@ export default function AiHedgeFundPanel({
         </div>
 
         <div className="ahf-header__controls">
-          <label htmlFor="ahf-model-override">
-            Model override
-            <select
-              id="ahf-model-override"
-              value={modelOverride}
-              onChange={(event) => setModelOverride(event.target.value)}
-            >
-              <option value="">
-                {ready?.active_model ?? "active provider default"}
-              </option>
-              {runnableModels.map((model) => (
-                <option key={model.model_name} value={model.model_name}>
-                  {model.display_name}
-                </option>
-              ))}
-            </select>
-          </label>
           {ready && (
             <div className="ahf-header__badges">
-              <span className={`status-badge status-badge--${ready.installed ? "ok" : "danger"}`}>
-                {ready.installed ? `aihf ${ready.version ?? ""}`.trim() : "not installed"}
+              <span className="status-badge status-badge--ok">
+                engine {ready.version ?? "in-process"}
               </span>
               <span
                 className={`status-badge status-badge--${ready.has_llm_key ? "ok" : "warn"}`}
               >
                 {ready.has_llm_key ? "model key" : "no model key"}
               </span>
-              <span
-                className={`status-badge status-badge--${ready.has_financial_datasets_key ? "ok" : "warn"}`}
-              >
-                {ready.has_financial_datasets_key ? "data key" : "no data key"}
+              <span className="status-badge status-badge--ok">
+                data: this app
               </span>
             </div>
           )}
         </div>
       </header>
 
-      {ready && (!ready.has_llm_key || !ready.has_financial_datasets_key) && (
+      {ready && !ready.has_llm_key && (
         <div className="mode-banner mode-banner--warn" role="alert">
           <span aria-hidden="true">!</span>
           <div>
-            <strong>This tab cannot run anything yet</strong>
+            <strong>No model provider is configured</strong>
             <p>
-              {!ready.has_financial_datasets_key && "The Financial Datasets API key is missing. "}
-              {!ready.has_llm_key && "No LLM provider key is bridged from Settings. "}
-              Both are read from Settings at run time — nothing is stored in aihf&apos;s own
-              <code>.env</code>.
+              The investor personas need a model. Configure a provider and key in
+              Settings → Models &amp; keys; each persona routes by its own agent
+              entry, so you can also point one persona at a different tier.
             </p>
             <button type="button" className="auth-button auth-button--compact" onClick={onOpenSettings}>
               Open Settings
             </button>
-          </div>
-        </div>
-      )}
-
-      {ready && !ready.installed && (
-        <div className="mode-banner mode-banner--warn" role="alert">
-          <span aria-hidden="true">!</span>
-          <div>
-            <strong>The aihf sidecar is not provisioned</strong>
-            <p>
-              aihf requires pandas&lt;3, which this project cannot lock. It runs from its own
-              virtual environment: <code>just aihf-install</code>.
-            </p>
           </div>
         </div>
       )}
@@ -217,11 +182,7 @@ export default function AiHedgeFundPanel({
         <MandatesView csrfToken={csrfToken} canRun={ready?.can_run ?? false} />
       )}
       {view === "backtester" && (
-        <BacktesterView
-          csrfToken={csrfToken}
-          modelOverride={modelOverride}
-          canRun={ready?.can_run ?? false}
-        />
+        <BacktesterView csrfToken={csrfToken} canRun={ready?.can_run ?? false} />
       )}
       {view === "paper" && (
         <PaperView csrfToken={csrfToken} canRun={ready?.can_run ?? false} />
@@ -543,19 +504,11 @@ function MandateForm({ summary }: { summary: NonNullable<Mandate["summary"]> }) 
 // Backtester
 // ---------------------------------------------------------------------------
 
-function BacktesterView({
-  csrfToken,
-  modelOverride,
-  canRun,
-}: {
-  csrfToken: string;
-  modelOverride: string;
-  canRun: boolean;
-}) {
+function BacktesterView({ csrfToken, canRun }: { csrfToken: string; canRun: boolean }) {
   const [mandates, setMandates] = useState<Load<Mandate[]>>({ state: "loading" });
   const [runs, setRuns] = useState<Load<BacktestSummary[]>>({ state: "loading" });
   const [mandate, setMandate] = useState("");
-  const [tickers, setTickers] = useState("AAPL, MSFT, NVDA");
+  const [tickers, setTickers] = useState("RELIANCE, TCS, INFY");
   const [start, setStart] = useState(defaultStart());
   const [end, setEnd] = useState(defaultEnd());
   const [runId, setRunId] = useState<string | null>(null);
@@ -655,7 +608,6 @@ function BacktesterView({
         tickers: tickers.split(",").map((value) => value.trim()).filter(Boolean),
         start_date: start,
         end_date: end,
-        model_override: modelOverride || null,
       });
       const body = (await response.json()) as { run_id: string };
       setRunId(body.run_id);
@@ -695,9 +647,9 @@ function BacktesterView({
       <section className="settings-panel" aria-labelledby="ahf-run-title">
         <h2 id="ahf-run-title">Run a backtest</h2>
         <p className="panel-note">
-          aihf replays the mandate over history: a decision at one session&apos;s close is
-          executed at the next one, so nothing can look ahead. It prints a result only when it
-          finishes; the log below is the real progress, not an estimate.
+          The engine replays the mandate over history: a decision at one session&apos;s close is
+          executed at the next one, so nothing can look ahead. Progress below counts real
+          completed sessions; there is no invented percentage.
         </p>
         <form className="config-form" onSubmit={(event) => void startRun(event)}>
           <div className="models-grid models-grid--compact">
@@ -1167,8 +1119,8 @@ function PaperView({ csrfToken, canRun }: { csrfToken: string; canRun: boolean }
         </div>
         <p className="panel-note">
           Each fund keeps a hash-chained ledger of real market sessions and fake money. A
-          session is decided and executed in one engine call, so it is computed against a copy
-          of the fund first and only committed once you approve it.
+          session is computed without touching the fund, then appended to the ledger only once
+          you approve it — and the appended record's hash must match what the preview computed.
         </p>
         {funds.state === "loading" && <p role="status">Loading…</p>}
         {funds.state === "error" && (
@@ -1362,7 +1314,7 @@ function CreateFundModal({
 }) {
   const [name, setName] = useState("");
   const [mandate, setMandate] = useState(mandates[0]?.name ?? "");
-  const [tickers, setTickers] = useState("AAPL, MSFT");
+  const [tickers, setTickers] = useState("RELIANCE, TCS");
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {

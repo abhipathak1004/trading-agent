@@ -9,6 +9,7 @@ export type NavView =
   | "opportunities"
   | "trade"
   | "research"
+  | "lab"
   | "technical"
   | "reports"
   | "strategy"

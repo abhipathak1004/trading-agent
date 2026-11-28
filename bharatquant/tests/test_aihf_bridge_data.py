@@ -22,11 +22,11 @@ from bq.aihf.bridge.data import BharatQuantDataClient, BridgeError
 from bq.aihf.data_store import CompanyFactsStore, EarningsStore
 from bq.aihf.engine.data.protocol import DataClient
 from bq.core import paise_from_price
-from bq.data.vendors.base import Bar, Quote
-from bq.data.vendors.router import VendorResult
-from bq.data.vendors.errors import VendorUnavailableError
-from bq.infra.database import migrate
 from bq.data.symbols import resolve
+from bq.data.vendors.base import Bar, Quote
+from bq.data.vendors.errors import VendorUnavailableError
+from bq.data.vendors.router import VendorResult
+from bq.infra.database import migrate
 
 
 class _FakeRouter:
@@ -48,7 +48,9 @@ class _FakeRouter:
             if day.weekday() < 5:
                 bars.append(
                     Bar(
-                        event_at=datetime.combine(day, datetime.min.time(), tzinfo=UTC).replace(hour=15, minute=30),
+                        event_at=datetime.combine(
+                            day, datetime.min.time(), tzinfo=UTC
+                        ).replace(hour=15, minute=30),
                         open=Decimal(str(close)),
                         high=Decimal(str(close)),
                         low=Decimal(str(close)),
@@ -136,7 +138,9 @@ def test_a_vendor_outage_raises_rather_than_returning_empty(db) -> None:
 
 def test_an_intraday_request_is_refused_clearly(db) -> None:
     with pytest.raises(BridgeError, match="daily bars"):
-        _client(db).get_prices("RELIANCE", "2026-11-02", "2026-11-30", interval="minute")
+        _client(db).get_prices(
+            "RELIANCE", "2026-11-02", "2026-11-30", interval="minute"
+        )
 
 
 def test_an_inverted_window_is_refused(db) -> None:
@@ -189,7 +193,9 @@ def _store_fundamentals(db, *, period: str, known: datetime) -> None:
 def test_fundamentals_before_the_filing_date_are_invisible(db) -> None:
     """The one rule that makes a backtest honest: a quarter filed on 14 Aug is
     not visible to a decision made on 30 Jun."""
-    _store_fundamentals(db, period="2024-06-30", known=datetime(2024, 8, 14, tzinfo=UTC))
+    _store_fundamentals(
+        db, period="2024-06-30", known=datetime(2024, 8, 14, tzinfo=UTC)
+    )
     client = _client(db)
     assert client.get_financial_metrics("RELIANCE", "2024-06-30") == []
     assert len(client.get_financial_metrics("RELIANCE", "2024-09-30")) == 1
@@ -198,7 +204,9 @@ def test_fundamentals_before_the_filing_date_are_invisible(db) -> None:
 def test_metrics_carry_ratios_computed_by_the_app_not_the_model(db) -> None:
     """Arithmetic stays in deterministic code: the row arrives with P/E, ROE and
     margins already computed from the store's paise, never asked of an LLM."""
-    _store_fundamentals(db, period="2024-06-30", known=datetime(2024, 8, 14, tzinfo=UTC))
+    _store_fundamentals(
+        db, period="2024-06-30", known=datetime(2024, 8, 14, tzinfo=UTC)
+    )
     rows = _client(db).get_financial_metrics("RELIANCE", "2024-12-31")
     row = rows[0]
     assert row.report_period == "2024-06-30"
@@ -214,19 +222,25 @@ def test_metrics_carry_ratios_computed_by_the_app_not_the_model(db) -> None:
 def test_market_cap_uses_the_running_date_close_not_todays(db) -> None:
     """A 2024 quarter valued at a 2026 price would look like a 20x return. The
     close is the session's own."""
-    _store_fundamentals(db, period="2024-06-30", known=datetime(2024, 8, 14, tzinfo=UTC))
+    _store_fundamentals(
+        db, period="2024-06-30", known=datetime(2024, 8, 14, tzinfo=UTC)
+    )
 
     class _Router(_FakeRouter):
         def bars(self, symbol, *, interval, start, end, domain=None):
             # Price is the date itself, so a wrong date is unmistakable.
             if symbol.tradingsymbol != "RELIANCE":
-                return super().bars(symbol, interval=interval, start=start, end=end, domain=domain)
+                return super().bars(
+                    symbol, interval=interval, start=start, end=end, domain=domain
+                )
             day = start.date()
             bars = []
             while day <= end.date():
                 bars.append(
                     Bar(
-                        event_at=datetime.combine(day, datetime.min.time(), tzinfo=UTC).replace(hour=15, minute=30),
+                        event_at=datetime.combine(
+                            day, datetime.min.time(), tzinfo=UTC
+                        ).replace(hour=15, minute=30),
                         open=Decimal(str(day.day)),
                         high=Decimal(str(day.day)),
                         low=Decimal(str(day.day)),
@@ -337,17 +351,21 @@ def test_news_is_attributed_by_catalyst_and_bounded_by_date(db) -> None:
 
     published = datetime(2024, 8, 1, 9, 0, tzinfo=UTC)
     NewsStore(db).ingest(
-        [FeedEntry(title="Reliance order win", summary="body",
-                   url="https://example.com/1", published_at=published)],
+        [
+            FeedEntry(
+                title="Reliance order win",
+                summary="body",
+                url="https://example.com/1",
+                published_at=published,
+            )
+        ],
         source_id="pulse.zerodha",
         agent_id="news_filter",
         memory_ttl=timedelta(days=30),
     )
     with sqlite3.connect(db) as connection:
         news_id = connection.execute("SELECT news_id FROM news_items").fetchone()[0]
-    CatalystStore(db).record(
-        [_catalyst(news_id)], trade_date=published.date()
-    )
+    CatalystStore(db).record([_catalyst(news_id)], trade_date=published.date())
 
     client = _client(db)
     news = client.get_news("RELIANCE", "2024-08-02")

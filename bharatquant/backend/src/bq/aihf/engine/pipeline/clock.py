@@ -27,11 +27,17 @@ from datetime import datetime
 from math import isfinite
 from typing import Callable, Protocol
 
-from bq.aihf.engine.data.bars import bar_time, current_bar, is_intraday, previous_bar, session_date
+from bq.aihf.engine.data.bars import (
+    bar_time,
+    current_bar,
+    is_intraday,
+    previous_bar,
+    session_date,
+)
 from bq.aihf.engine.data.models import Price, PriceSnapshot
 from bq.aihf.engine.data.protocol import DataClient
 from bq.aihf.engine.data.screener import SCREEN_LIMIT
-from bq.aihf.engine.data.sessions import completed_through, NEW_YORK, previous_day
+from bq.aihf.engine.data.sessions import NEW_YORK, completed_through, previous_day
 from bq.aihf.engine.fund.spec import FundSpec, TradingWindow
 
 

@@ -10,7 +10,7 @@ __pycache__/
 .ruff_cache/
 *.py[cod]
 
-# aihf sidecar: its own venv (own pandas/numpy), provisioned by `just aihf-install`.
-# Only the runtime data dir is ignored — bq/aihf/ is source and must be committed.
-bharatquant/.aihf-venv/
+# AI Hedge Fund runtime data (ledgers, previews, prompt cache, research results).
+# Only the data dir is ignored — bq/aihf/ (the engine and bridge) is source and
+# must be committed. The old .aihf-venv sidecar is gone (ADR-052).
 /bharatquant/aihf/

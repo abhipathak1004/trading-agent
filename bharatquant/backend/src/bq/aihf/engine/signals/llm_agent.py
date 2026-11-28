@@ -32,8 +32,18 @@ from bq.aihf.engine.data.bars import is_intraday
 from bq.aihf.engine.data.protocol import DataClient
 from bq.aihf.engine.features.breakpoints import MEBreakpoints, shared_breakpoints
 from bq.aihf.engine.features.intraday import build_intraday_context
-from bq.aihf.engine.features.snapshot import FundamentalsSnapshot, InsufficientData, build_snapshot
-from bq.aihf.engine.llm import LLMCallError, LLMClient, PromptCache, extract_json, prompt_key
+from bq.aihf.engine.features.snapshot import (
+    FundamentalsSnapshot,
+    InsufficientData,
+    build_snapshot,
+)
+from bq.aihf.engine.llm import (
+    LLMCallError,
+    LLMClient,
+    PromptCache,
+    extract_json,
+    prompt_key,
+)
 from bq.aihf.engine.models import Signal
 from bq.aihf.engine.signals.base import AlphaModel
 
@@ -52,12 +62,17 @@ class LLMAgent(AlphaModel):
         cache: PromptCache | None = None,
         blind: bool = False,
         breakpoints: MEBreakpoints | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         # A client is required: this port injects BharatQuant's router-backed
         # LLMClient. There is no process-wide factory to fall back on, so a
         # persona constructed without one is a programming error, not a run
         # that silently reaches for a vendor key.
         self._llm = llm
+        # An explicit prompt overrides get_system_prompt(): the persona's
+        # wording is configuration in this app (read from the prompt store, see
+        # bq/aihf/bridge/personas.py), and the subclass's literal is the default.
+        self._system_prompt = system_prompt
         self._cache = cache if cache is not None else PromptCache()
         # Blind prompts withhold the ticker, industry, calendar dates and
         # dollar values so a backtest can't lean on what the LLM remembers
@@ -84,7 +99,7 @@ class LLMAgent(AlphaModel):
             return self._abstain(ticker, date, f"insufficient data: {exc}")
         # Any other data-layer exception (e.g. FDClientError) propagates.
 
-        system = self.get_system_prompt()
+        system = self.voice()
         user = self.build_user_prompt(snapshot)
         if is_intraday(date):
             # A bar, not a close: add the day so far. Bucketed, so a quiet
@@ -141,6 +156,14 @@ class LLMAgent(AlphaModel):
     def get_system_prompt(self) -> str:
         """The persona — every subclass must define its voice."""
         raise NotImplementedError(f"{type(self).__name__} must define get_system_prompt()")
+
+    def voice(self) -> str:
+        """The prompt actually sent: an override when one was supplied, else the
+        persona's own text. Kept separate from `get_system_prompt` so a subclass
+        never has to know the override exists."""
+        if self._system_prompt is not None:
+            return self._system_prompt
+        return self.get_system_prompt()
 
     def build_snapshot(self, ticker: str, date: str, data_client: DataClient) -> FundamentalsSnapshot:
         """What this persona is allowed to know. Default: the shared

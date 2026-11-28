@@ -20,7 +20,12 @@ from bq.aihf.engine.data.models import (
     PriceSnapshot,
 )
 from bq.aihf.engine.data.protocol import DataClient, DataClientError
-from bq.aihf.engine.data.screener import OrderBy, ScreenerFields, ScreenFilter, ScreenRow
+from bq.aihf.engine.data.screener import (
+    OrderBy,
+    ScreenerFields,
+    ScreenFilter,
+    ScreenRow,
+)
 
 __all__ = [
     "CachedDataClient",

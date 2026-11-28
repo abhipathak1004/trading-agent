@@ -35,7 +35,12 @@ from bq.aihf.engine.paper.deployed import (
 )
 from bq.aihf.engine.paper.ledger import Ledger
 from bq.aihf.engine.paper.tick import NothingDue, next_session, redo, tick
-from bq.aihf.engine.pipeline.session import FundHalted, FundState, SessionRecord, advance
+from bq.aihf.engine.pipeline.session import (
+    FundHalted,
+    FundState,
+    SessionRecord,
+    advance,
+)
 
 __all__ = [
     "DeployedFund",

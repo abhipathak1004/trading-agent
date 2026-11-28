@@ -120,6 +120,23 @@ JOB_CATALOGUE: tuple[JobDefinition, ...] = (
         max_attempts=2,
     ),
     JobDefinition(
+        job_id="aihf.fundamentals.ingest",
+        label="Ingest fund fundamentals",
+        description=(
+            "Read quarterly fundamentals, company facts and earnings surprises "
+            "for the AI Hedge Fund's traded names from Yahoo, and store them "
+            "point-in-time. Disabled until the owner picks a universe, because "
+            "it makes one request per symbol."
+        ),
+        resource_class="LIGHT",
+        timezone="Asia/Kolkata",
+        local_time="18:30",
+        window_start="18:00",
+        window_end="20:00",
+        enabled_by_default=False,
+        max_attempts=2,
+    ),
+    JobDefinition(
         job_id="logs.flush",
         label="Flush operational logs",
         description=(

@@ -36,6 +36,7 @@ import TodayOverview from "./TodayOverview";
 import CampaignPanel from "./CampaignPanel";
 import ModelEvalsPanel from "./ModelEvalsPanel";
 import AiHedgeFundPanel from "./AiHedgeFundPanel";
+import ResearchLabPanel, { ResearchLabAgentsPanel } from "./ResearchLabPanel";
 
 type WorkspaceView = NavView;
 
@@ -58,6 +59,7 @@ const NAV_GROUPS: {
     label: "Analyze",
     items: [
       { view: "research", label: "Research", icon: "◎" },
+      { view: "lab", label: "Research Lab", icon: "◬" },
       { view: "technical", label: "Technical", icon: "◨" },
       { view: "reports", label: "Reports", icon: "▤" },
     ],
@@ -93,6 +95,7 @@ const VIEW_LABELS: Record<WorkspaceView, string> = {
   opportunities: "Opportunities",
   trade: "Trade",
   research: "Research",
+  lab: "Research Lab",
   technical: "Technical Analysis",
   reports: "Reports",
   strategy: "Strategy",
@@ -813,6 +816,25 @@ export default function App() {
           </section>
         )}
 
+        {serviceState === "online" && session.state === "signed_in" && view === "lab" && (
+          <section className="dashboard" id="lab" aria-labelledby="lab-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">RESEARCH LAB</p>
+                <h1 id="lab-page-title">Research Lab</h1>
+                <p className="intro">
+                  Plan, run and verify research on frozen inputs. Every figure in a
+                  report must trace to the run that produced it, and nothing is
+                  published that the evidence gate could not confirm.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <ResearchLabPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
         {serviceState === "online" && session.state === "signed_in" && view === "hedgefund" && (
           <section className="dashboard" id="hedgefund" aria-labelledby="hedgefund-page-title">
             <header className="page-header">
@@ -1014,6 +1036,7 @@ export default function App() {
               <>
                 <SettingsConfigPanel csrfToken={session.csrfToken} />
                 <ModelsConfigPanel csrfToken={session.csrfToken} />
+                <ResearchLabAgentsPanel csrfToken={session.csrfToken} />
                 <UsageStatus />
               </>
             )}

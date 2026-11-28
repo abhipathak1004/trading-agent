@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -28,7 +28,6 @@ from pydantic import BaseModel, Field
 
 from bq.aihf.config import AiHfConfigError, AiHfPaths, validate_name
 from bq.aihf.parsing import AiHfParseError
-from bq.aihf.registry import AiHfRegistryError
 from bq.aihf.runner import (
     AiHfExecutionError,
     AiHfRunner,
@@ -36,7 +35,6 @@ from bq.aihf.runner import (
     read_progress,
     write_progress,
 )
-from bq.aihf.runtime_env import build_runtime
 from bq.aihf.service import (
     AiHfConflict,
     AiHfInvalid,
@@ -52,7 +50,7 @@ from bq.aihf.service import (
 from bq.aihf.service import (
     models as list_models,
 )
-from bq.settings import SettingsError, SettingsStore
+from bq.settings import SettingsStore
 
 SSE_HEARTBEAT_SECONDS = 15.0
 SSE_POLL_SECONDS = 1.0
@@ -94,10 +92,6 @@ class KillSwitchRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=200)
 
 
-class DataKeyUpdate(BaseModel):
-    financial_datasets_api_key: str | None = Field(default=None, max_length=256)
-
-
 # ---------------------------------------------------------------------------
 # registration
 # ---------------------------------------------------------------------------
@@ -122,26 +116,6 @@ def register(app: FastAPI, deps: AiHfDeps) -> None:
     paper = PaperStore(paths, settings)
     runner = deps.backtest_runner
 
-    # ---- settings: the Financial Datasets key ----------------------------
-
-    @app.get("/api/v1/aihf/settings")
-    def aihf_settings(request: Request) -> dict[str, object]:
-        deps.read_auth(request)
-        return settings.aihf_secrets().to_projection()
-
-    @app.put("/api/v1/aihf/settings")
-    def update_aihf_settings(
-        request: Request, body: DataKeyUpdate
-    ) -> dict[str, object]:
-        deps.require_write(request)
-        try:
-            saved = settings.save_aihf_secrets(
-                financial_datasets_api_key=body.financial_datasets_api_key
-            )
-        except SettingsError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return saved.to_projection()
-
     # ---- status ----------------------------------------------------------
 
     @app.get("/api/v1/aihf/status")
@@ -149,7 +123,7 @@ def register(app: FastAPI, deps: AiHfDeps) -> None:
         deps.read_auth(request)
         try:
             return status(paths, settings)
-        except (AiHfServiceError, AiHfRegistryError) as exc:
+        except AiHfServiceError as exc:
             raise _status_error(exc) from exc
 
     @app.get("/api/v1/aihf/models")
@@ -157,7 +131,7 @@ def register(app: FastAPI, deps: AiHfDeps) -> None:
         deps.read_auth(request)
         try:
             return {"models": list_models(paths, settings)}
-        except (AiHfServiceError, AiHfRegistryError) as exc:
+        except AiHfServiceError as exc:
             raise _status_error(exc) from exc
 
     # ---- mandates --------------------------------------------------------
@@ -210,6 +184,17 @@ def register(app: FastAPI, deps: AiHfDeps) -> None:
                 status_code=409,
                 detail="A backtest is already running; wait for it or stop it.",
             )
+        if body.model_override is not None:
+            # The engine names no model: a persona routes through Settings. A
+            # per-run override was a subprocess concept; accepting and ignoring
+            # it would be a lie in the UI.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "model_override is not supported: models are chosen in "
+                    "Settings -> Models & keys"
+                ),
+            )
         try:
             mandate_name = validate_name(body.mandate, what="mandate")
             tickers = normalize_tickers(body.tickers)
@@ -222,41 +207,18 @@ def register(app: FastAPI, deps: AiHfDeps) -> None:
             raise HTTPException(
                 status_code=404, detail=f"No mandate named {mandate_name!r}."
             )
-        try:
-            runtime = build_runtime(
-                settings, model_override=body.model_override, environ={}, paths=paths
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        missing = _missing_for_run(runtime)
-        if missing:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Configure these first (Settings): {', '.join(missing)}.",
-            )
 
         run_id = f"{mandate_name}-{start}-{end}"
         paths.runs.mkdir(parents=True, exist_ok=True)
         progress_path = paths.runs / run_id / "progress.json"
         write_progress(
             progress_path,
-            Progress(run_id=run_id, phase="queued", detail="waiting for the reporter"),
+            Progress(run_id=run_id, phase="queued", detail="waiting for the engine"),
         )
         runner.start(
             run_id,
-            [
-                "backtest",
-                str(mandate_path),
-                "--universe",
-                ",".join(tickers),
-                "--start",
-                start,
-                "--end",
-                end,
-            ],
-            model=body.model_override,
-            timeout=None,
-            on_finish=_reporter(paths, mandate_name, run_id),
+            _backtest_body(paths, settings, mandate_name, tickers, start, end),
+            on_finish=_save_result(paths, run_id),
         )
         return {"run_id": run_id, "status": "queued"}
 
@@ -346,12 +308,10 @@ def register(app: FastAPI, deps: AiHfDeps) -> None:
             raise _status_error(exc) from exc
 
     @app.post("/api/v1/aihf/paper/{name}/preview")
-    async def preview_session(
-        request: Request, name: str, model_override: str | None = None
-    ) -> dict[str, object]:
+    async def preview_session(request: Request, name: str) -> dict[str, object]:
         deps.require_write(request)
         try:
-            return await paper.preview(name, model=model_override)
+            return await paper.preview(name)
         except (AiHfServiceError, AiHfConfigError, AiHfExecutionError) as exc:
             raise _status_error(exc) from exc
 
@@ -426,38 +386,64 @@ def _mandate_name_from_yaml(text: str) -> str:
     raise HTTPException(status_code=422, detail="The mandate YAML must declare a name:")
 
 
-def _missing_for_run(runtime: Any) -> list[str]:
-    """Human names for what still has to be configured before a run can start."""
-    missing: list[str] = []
-    describe = runtime.describe()
-    if not describe["has_llm_key"]:
-        missing.append("an LLM provider key")
-    if not describe["has_data_key"]:
-        missing.append("the Financial Datasets API key")
-    return missing
+def _backtest_body(
+    paths: AiHfPaths,
+    settings: SettingsStore,
+    mandate: str,
+    tickers: tuple[str, ...],
+    start: str,
+    end: str,
+) -> Callable[[Any, Callable[[], bool]], Any]:
+    """The engine call a backtest run executes, in a worker thread.
+
+    Builds the mandate, staffs its personas through the model router and runs the
+    replay against this app's data client. Progress is reported as sessions
+    complete, which a subprocess could never do.
+    """
+    from bq.aihf.bridge.personas import staff
+    from bq.aihf.engine.llm import PromptCache
+    from bq.aihf.wiring import build_data_client
+    from bq.model_router import ModelRouter
+
+    def body(progress: Progress, cancelled: Callable[[], bool]) -> Any:
+        store = MandateStore(paths)
+        spec = store.load(mandate)
+        router = ModelRouter(settings)
+        cache = PromptCache()
+        models = staff(spec, router=router, cache=cache, blind=True)
+        data = build_data_client(settings)
+        progress.note(f"backtesting {spec.name} over {len(tickers)} names")
+
+        from bq.aihf.engine.api import run_backtest
+        from bq.aihf.engine.backtesting.fund import FundBacktestResult  # noqa: F401
+        from bq.aihf.engine.fund import Fund
+
+        fund = Fund(spec, models=models, blind=True)
+        _ = fund  # staffed above; run_backtest accepts the spec directly
+        return run_backtest(
+            spec,
+            start=start,
+            end=end,
+            data_client=data,
+            universe=list(tickers),
+            cache=cache,
+            on_valuation=lambda i, n, v: progress.note(f"session {i + 1}/{n}"),
+        )
+
+    return body
 
 
-def _reporter(
-    paths: AiHfPaths, mandate: str, run_id: str
-) -> Callable[[Any], Awaitable[None]]:
-    """Copy aihf's printed result into the run's directory for the detail view."""
+def _save_result(paths: AiHfPaths, run_id: str) -> Callable[[Any], None]:
+    """Persist the engine's result where the detail routes find it."""
 
-    async def report(result: Any) -> None:
-        directory = paths.runs / run_id
-        directory.mkdir(parents=True, exist_ok=True)
-        output = directory / "result.json"
+    def save(result: Any) -> None:
         try:
-            if result.stdout.strip():
-                # aihf prints the result JSON on stdout and rich status on
-                # stderr, so stdout is the payload.
-                json.loads(result.stdout)
-                temporary = output.with_name(".result.json.tmp")
-                temporary.write_text(result.stdout, encoding="utf-8")
-                temporary.replace(output)
+            ResearchStore(paths).save(result, run_id)
         except (OSError, ValueError):
+            # A failed save must not turn a completed backtest into a failed run.
             pass
 
-    return report
+    return save
 
 
 async def _event_stream(paths: AiHfPaths, run_id: str) -> AsyncIterator[bytes]:
@@ -505,7 +491,7 @@ def _status_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, (AiHfInvalid, AiHfConfigError, AiHfParseError, ValueError)):
         return HTTPException(status_code=422, detail=str(exc))
-    if isinstance(exc, (AiHfExecutionError, AiHfRegistryError)):
+    if isinstance(exc, AiHfExecutionError):
         return HTTPException(status_code=503, detail=str(exc))
     # The engine ran and refused: an upstream data/model failure, not a bug
     # in this API. 502 says "the dependency answered badly".

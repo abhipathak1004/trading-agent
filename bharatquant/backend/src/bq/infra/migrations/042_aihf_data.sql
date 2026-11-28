@@ -1,5 +1,5 @@
 -- AI Hedge Fund data: company facts, an earnings-surprise history, and a
--- period label on fundamental snapshots (ADR-052).
+-- period label on fundamental snapshots (ADR-053).
 --
 -- The ported fund engine reads point-in-time fundamentals through the same
 -- `fundamental_snapshots` store the rest of the app uses, so the store gains

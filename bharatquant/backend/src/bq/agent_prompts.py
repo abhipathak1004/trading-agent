@@ -135,6 +135,37 @@ class PromptDefinition:
     required_fields: tuple[str, ...] = ()
 
 
+def _persona_definitions() -> tuple[PromptDefinition, ...]:
+    """The AI Hedge Fund personas' editable prompts (ADR-053).
+
+    The default text lives in `bq.aihf.persona_prompts`, a module with no `bq`
+    imports. Importing the persona classes to read their literals would pull in
+    the model router, which imports this module — a cycle at load time. The texts
+    are the same, and a test asserts they match.
+    """
+    from bq.aihf.persona_prompts import DEFAULT_PROMPTS
+
+    # persona -> settings agent id. Stated here as literals rather than imported
+    # from the bridge: the bridge imports the model router, which imports this
+    # module, so any import from it here is a cycle at load time. The bridge
+    # derives the same ids (`agent_id_for`) and a test asserts the two agree.
+    return tuple(
+        PromptDefinition(
+            agent_id=f"aihf_{name}",
+            label=f"{name.title()} persona",
+            description=(
+                f"System prompt for the AI Hedge Fund's {name.title()} "
+                "investor persona. The facts it reads are assembled "
+                "point-in-time by the engine and are not editable."
+            ),
+            system=text,
+            template="",
+            required_fields=(),
+        )
+        for name, text in DEFAULT_PROMPTS.items()
+    )
+
+
 DEFINITIONS: tuple[PromptDefinition, ...] = (
     PromptDefinition(
         agent_id="bull_debater",
@@ -220,7 +251,8 @@ DEFINITIONS: tuple[PromptDefinition, ...] = (
         template="",
         required_fields=(),
     ),
-)
+) + _persona_definitions()
+
 
 DEFINITIONS_BY_ID = {definition.agent_id: definition for definition in DEFINITIONS}
 

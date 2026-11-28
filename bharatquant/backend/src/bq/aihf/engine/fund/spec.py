@@ -10,16 +10,22 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationError,
     field_validator,
     model_serializer,
     model_validator,
-    ValidationError,
 )
 
 from bq.aihf.engine.brokers.costs import TradingCosts
 from bq.aihf.engine.llm import LLMClient, PromptCache
 from bq.aihf.engine.risk.limits import RiskLimits
-from bq.aihf.engine.signals import ALPHA_MODEL_REGISTRY, LLMAgent, get_horizon_days, get_investment_approach, get_screen
+from bq.aihf.engine.signals import (
+    ALPHA_MODEL_REGISTRY,
+    LLMAgent,
+    get_horizon_days,
+    get_investment_approach,
+    get_screen,
+)
 from bq.aihf.engine.signals.base import AlphaModel
 from bq.aihf.engine.universe.models import Factor, UniverseSpec
 
@@ -341,7 +347,7 @@ def load_spec(path: str | Path) -> FundSpec:
     """Load a YAML mandate, raising ValueError with its path and error details.
 
     The engine supports intraday (minute) funds and self-screening ``universe:``
-    rules; both are out of scope for the first NSE pass (ADR-052). They are
+    rules; both are out of scope for the first NSE pass (ADR-053). They are
     rejected here, at parse time, rather than failing later inside a run — an
     owner editing a mandate deserves to be told the field is unsupported when
     they save it, and a half-working intraday fund would value its book at daily

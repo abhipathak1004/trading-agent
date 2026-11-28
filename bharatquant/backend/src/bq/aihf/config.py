@@ -1,16 +1,13 @@
-"""Where the ``aihf`` sidecar lives, and the files it owns.
+"""Where the AI Hedge Fund's data lives, and what a fund name may be.
 
-``aihf`` (the PyPI distribution for ``virattt/ai-hedge-fund``) cannot be
-installed into BharatQuant's environment: it requires ``pandas<3`` and
-``numpy<2``, while this project is locked to ``pandas>=3.1`` and
-``numpy>=2.5``. It is therefore provisioned into its own virtual environment
-and driven as a subprocess (see ``bq.aihf.service``).
+Upstream the engine anchored everything under ``~/.hedge-fund`` and ran from a
+separate virtual environment. Both are gone (ADR-053): the engine shares this
+app's environment, and its data lives under ``<BQ_HOME>/aihf`` beside ``bq.db``
+so one backup, one gitignore and one data directory cover the whole app.
 
-Its import name is ``hedge_fund``; ``aihf`` is only the console script. The
-distribution depends on ``Path.home()``, so every run is given a scoped
-``HOME`` under this project's data directory. That relocates ``mandates/``,
-``paper/``, ``research/``, ``cache/`` and notably ``~/.hedge-fund/.env``, so a
-key written by another tool can never be picked up by accident.
+What remains here is the paths and the name rule. The name rule is not cosmetic:
+a fund name is a directory name, and a mandate name is a file name, so
+``validate_name`` is the path-traversal guard every route depends on.
 """
 
 from __future__ import annotations
@@ -20,30 +17,23 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-ENV_AIHF_VENV = "BQ_AIHF_VENV"
-SIDECAR_DIRNAME = ".aihf-venv"
-INSTALLED_VERSION = "2.7.2"
+from bq.aihf.engine import paths as engine_paths
 
-# aihf's own user directory, relative to the HOME we hand it.
-_HEDGE_FUND_DIRNAME = ".hedge-fund"
 MANDATES_DIRNAME = "mandates"
 RESEARCH_DIRNAME = "research"
 PAPER_DIRNAME = "paper"
 
-# A fund name is also a directory name in aihf (see paper/deployed.py).
+# A fund name is also a directory name; a mandate name is a file name. Rejects
+# separators, traversal and a bare "." or "..".
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
 class AiHfConfigError(ValueError):
-    """The sidecar is missing, or a path/name cannot be used."""
+    """The paths or a name cannot be used."""
 
 
 def validate_name(name: str, *, what: str = "name") -> str:
-    """Reject anything that is not a flat file name (no separators, no dots-only).
-
-    These become path components under the aihf home, so traversal must be
-    impossible here rather than at each call site.
-    """
+    """Reject anything that is not a flat file name (no separators, no dots-only)."""
     if not NAME_PATTERN.fullmatch(name) or name in (".", ".."):
         raise AiHfConfigError(
             f"invalid {what} {name!r}: use letters, digits, '.', '_' or '-', "
@@ -63,32 +53,27 @@ def find_repo_root(start: Path | None = None) -> Path:
 
 @dataclass(frozen=True, slots=True)
 class AiHfPaths:
+    """The data root, and the directories under it.
+
+    ``root`` is injected (``<BQ_HOME>/aihf``). The engine's own ``paths`` module
+    is pointed at the same root by `resolve_paths`, so the engine's ledger,
+    prompt cache and this service's research/previews never disagree about where
+    a fund is.
+    """
+
     root: Path
-    venv: Path
-
-    # ---- the aihf home (what aihf sees as HOME) ---------------------------
-
-    @property
-    def home(self) -> Path:
-        """The ``HOME`` every aihf subprocess is given."""
-        return self.root / "home"
-
-    @property
-    def user_dir(self) -> Path:
-        """``$HOME/.hedge-fund`` — aihf's own data root."""
-        return self.home / _HEDGE_FUND_DIRNAME
 
     @property
     def mandates(self) -> Path:
-        return self.user_dir / MANDATES_DIRNAME
+        return self.root / MANDATES_DIRNAME
 
     @property
     def research(self) -> Path:
-        return self.user_dir / RESEARCH_DIRNAME
+        return self.root / RESEARCH_DIRNAME
 
     @property
     def paper(self) -> Path:
-        return self.user_dir / PAPER_DIRNAME
+        return self.root / PAPER_DIRNAME
 
     def fund_dir(self, name: str) -> Path:
         return self.paper / validate_name(name, what="paper fund")
@@ -96,7 +81,9 @@ class AiHfPaths:
     def mandate_path(self, name: str) -> Path:
         return self.mandates / f"{validate_name(name, what='mandate')}.yaml"
 
-    # ---- BharatQuant-side working areas ----------------------------------
+    def fund_meta_path(self, name: str) -> Path:
+        """Where this service describes a fund to the UI (not the engine's files)."""
+        return self.root / "funds" / f"{validate_name(name, what='paper fund')}.json"
 
     @property
     def runs(self) -> Path:
@@ -108,72 +95,51 @@ class AiHfPaths:
         """A computed-but-unapproved session, waiting for the owner's decision."""
         return self.root / "previews"
 
-    @property
-    def sandbox(self) -> Path:
-        """Scratch HOMEs for preview runs. Never read by the live fund."""
-        return self.root / "sandbox"
-
-    def sandbox_home(self, token: str) -> Path:
-        return self.sandbox / validate_name(token, what="sandbox token")
-
-    # ---- the interpreter and console script ------------------------------
-
-    @property
-    def python(self) -> Path:
-        return self.venv / "bin" / "python"
-
-    @property
-    def executable(self) -> Path:
-        return self.venv / "bin" / "aihf"
-
-    @property
-    def available(self) -> bool:
-        return self.python.is_file() and self.executable.is_file()
-
     def ensure(self) -> None:
-        """Create only the directories BharatQuant owns.
+        """Create only the directories this service owns.
 
-        ``mandates/`` and ``paper/`` are deliberately *not* created here:
-        aihf seeds the mandates example only when that directory is absent
-        (``hedge_fund.paths.ensure_mandates_dir``), so pre-creating it would
-        silently suppress the example.
+        ``mandates/`` is deliberately *not* created here: seeding it is what
+        shows the owner an example to edit, and that happens on first use, not on
+        a server start.
         """
-        for directory in (self.runs, self.previews, self.sandbox, self.home):
+        for directory in (self.runs, self.previews, self.root):
             directory.mkdir(parents=True, exist_ok=True)
-
-
-def _default_sidecar(repo_root: Path | None = None) -> Path:
-    override = os.environ.get(ENV_AIHF_VENV)
-    if override:
-        return Path(override).expanduser().resolve()
-    return (repo_root or find_repo_root()) / SIDECAR_DIRNAME
 
 
 def resolve_paths(
     *, database_path: Path | None = None, repo_root: Path | None = None
 ) -> AiHfPaths:
-    """Anchor everything under the project's data directory (``bq.db``'s parent)."""
+    """Anchor everything under the project's data directory (``bq.db``'s parent).
+
+    As a side effect the engine's own ``paths.set_root`` is pointed at the same
+    root: the engine writes a fund's ledger and prompt cache through its own
+    module, so the two must agree or a preview and an approval would look at
+    different directories.
+    """
     if database_path is not None:
         root = Path(database_path).expanduser().parent / "aihf"
     elif override := os.environ.get("BQ_HOME"):
         root = Path(override).expanduser() / "aihf"
     else:
-        root = _default_sidecar(repo_root).parent / "aihf"
-    return AiHfPaths(root=root, venv=_default_sidecar(repo_root))
+        root = (repo_root or find_repo_root()).parent / "aihf"
+    engine_paths.set_root(root)
+    return AiHfPaths(root=root)
 
 
-def installed_version(paths: AiHfPaths) -> str | None:
-    """The installed aihf version, read from its dist-info without a subprocess."""
-    if not paths.venv.is_dir():
-        return None
-    for metadata in paths.venv.glob(
-        "lib/python*/site-packages/aihf-*.dist-info/METADATA"
-    ):
-        try:
-            text = metadata.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for line in text.splitlines():
-            if line.startswith("Version:"):
-                return line.split(":", 1)[1].strip()
-    return None
+def installed_version() -> str:
+    """The vendored engine's version.
+
+    The sidecar's dist-info is gone; the engine is source now, so the version is
+    this app's own. Reported on the status card so the UI never has to guess.
+    """
+    return "in-process"
+
+
+__all__ = [
+    "AiHfConfigError",
+    "AiHfPaths",
+    "find_repo_root",
+    "installed_version",
+    "resolve_paths",
+    "validate_name",
+]

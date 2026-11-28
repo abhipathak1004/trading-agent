@@ -26,14 +26,33 @@ from pathlib import Path
 from typing import Callable
 
 from bq.aihf.engine.brokers.paper import PaperBroker
-from bq.aihf.engine.data.bars import current_bar, is_intraday, is_last_bar, next_bar, previous_bar, session_date
+from bq.aihf.engine.data.bars import (
+    current_bar,
+    is_intraday,
+    is_last_bar,
+    next_bar,
+    previous_bar,
+    session_date,
+)
 from bq.aihf.engine.data.protocol import DataClient
-from bq.aihf.engine.data.sessions import completed_through, NEW_YORK, previous_day, session_closes
+from bq.aihf.engine.data.sessions import (
+    NEW_YORK,
+    completed_through,
+    previous_day,
+    session_closes,
+)
 from bq.aihf.engine.fund import Fund, FundSpec, TradingWindow
 from bq.aihf.engine.paper.deployed import BROKER_FILE, load_deployed
 from bq.aihf.engine.paper.ledger import Ledger
 from bq.aihf.engine.pipeline.clock import Clock, LiveClock, Marked
-from bq.aihf.engine.pipeline.session import advance, FundHalted, FundState, is_rebalance_session, next_state, SessionRecord
+from bq.aihf.engine.pipeline.session import (
+    FundHalted,
+    FundState,
+    SessionRecord,
+    advance,
+    is_rebalance_session,
+    next_state,
+)
 from bq.aihf.engine.scorecard import current_allocation
 
 # A fresh fund starts at the most recent completed session; this is how far

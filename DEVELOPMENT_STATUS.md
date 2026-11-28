@@ -1,10 +1,134 @@
 # BharatQuant — compact handoff
 
-Updated 26 November 2026. This file keeps only what is needed for the **next**
+Updated 28 November 2026. This file keeps only what is needed for the **next**
 task. History lives in git and
 [`architecture-decisions.md`](./bharatquant/docs/architecture-decisions.md).
 
 ## Current state
+
+- **Research Lab, Phases 0–5 (28 Nov 2026, ADR-054).** Plan:
+  `~/.commandcode/plans/research-lab-vibe-trading-replan.md`. Polars/PyArrow/
+  DuckDB are runtime deps as a **derived** analytical stack; SQLite stays the
+  only transactional authority and Postgres was measured and declined (47
+  stores, 42 migrations, ~1,110 tests; see plan §1). Migration **043** adds
+  `research_sessions`, `research_runs`, `portfolio_snapshots`,
+  `research_artifacts`, `research_evidence`, `execution_mandates` — no
+  `audit_ledger` (`audit_events` is reused) and no FTS in SQL (lazy + LIKE
+  fallback, matching `semantic_docs_fts`).
+  - `bq/research_lab/`: `config` in `settings.py` (`save_research_lab`,
+    `resolve_research_lab_models`, `parse_research_lab`; overrides are in-memory
+    only); `contracts.py` (Int64-paise contract, refuses mixed raw/adjusted and a
+    network-served `local`); `freeze.py` (two digests: content identity + file
+    tamper); `store.py` (sessions/runs/versioned artifacts); `replay.py`
+    (verified replay + walk-forward folds/holdout, CSV); `risk_xray.py` (top-5
+    episodes + open, signed contributions summing to total vol); `alpha_bench.py`
+    (IC/rank IC/ICIR/turnover + survivorship stamp); `reconcile.py`;
+    `evidence.py` (scoped E_t, 24/24 ablation); `security.py` (path confinement,
+    no shell/network surface); `prompting.py` (byte-stable prefix);
+    `mandate.py` (paper-only gate, kill switch, existing audit chain);
+    `harness.py` (bounded loop: tool → admit → gate → bounded recovery);
+    `runner.py` (events.jsonl journal + cursor reads + single-flight + cancel);
+    `routes.py` (`/api/v1/research/*`, SSE via journal, `ResearchDeps`).
+  - **API:** sessions, messages (runs the harness), cancelled runs keep a partial
+    trace, run detail (equity + Risk X-Ray + evidence), replay + CSV, alpha/bench,
+    paper/reconcile, versioned artifacts (FTS search, diff, export), and
+    `GET/PUT /models`. Registered before the SPA catch-all; `/api/v1/research/`
+    was already in the `no-store` prefixes. `create_app` gained an optional
+    `research_model_turn` for offline tests.
+  - **UI:** new **Analyze → Research Lab** tab (`web/src/ResearchLabPanel.tsx`,
+    `researchLabContract.ts`) with Workbench / Run Detail / Artifacts / Alpha
+    Bench, plus a **Research Lab Agents** section inside Settings → Models & keys.
+    The existing `research` view (dossiers) is untouched; the new key is `lab`.
+  - `paper_charges.py` gained brokerage/IPFT/DP/venue and a **corrected GST base**;
+    all new rates default to 0 so no existing number moved. `backtest.py` is
+    product-aware (was hardcoded MIS) and reports `sharpe`/`sortino`/
+    `profit_factor` as `None`, never NaN.
+  - **Verification:** backend 1321 pass with only the 2 pre-existing failures;
+    ruff + mypy clean on `bq/research_lab`; frontend 181 tests, typecheck and
+    production build clean; `bq init` on a scratch `BQ_HOME` applies **43**
+    migrations. **Not yet done:** a live browser smoke against the real DB (it
+    needs 043 applied and a model route configured).
+- **AI Hedge Fund is being ported in-process (28 Nov 2026, IN PROGRESS).** Plan:
+  `~/.commandcode/plans/aihf-in-process-port.md`, supersedes ADR-050. The sidecar
+  exists only because `aihf==2.7.2` pins `pandas<3`/`numpy<2`; in fact pandas is
+  **dead code** in it (a never-called `_compute_rsi`) and numpy is 4 files of
+  scalar stats, so the whole engine now runs inside this venv on our own data and
+  models. **ADR-052 is not written yet.**
+  - **Phase 1 DONE.** `bq/aihf/engine/` is vendored `hedge_fund` (MIT, LICENSE +
+    `PATCHES.md`). No pandas/numpy/langchain/textual/requests; `bq/aihf/engine/api.py`
+    replaces `run.py`. `paths.py` root is injected (`<BQ_HOME>/aihf`). Ken-French
+    breakpoints fetch removed. New dep: **pyyaml** (mandate YAML). Guarded by
+    `tests/test_aihf_engine_imports.py`, which imports the engine in a subprocess
+    and asserts no forbidden root is loaded.
+  - **Phase 2 DONE.** `bq/aihf/bridge/calendar.py` (IST, NSE holidays, weekday
+    fallback via `ExchangeCalendar`), `bridge/clock.py` (`NseDailyClock`;
+    installed into the engine through `clock.set_clock_factory`), `bridge/costs.py`
+    (`IndianEquityCosts` → `paper_charges.compute_charges`, matches to the paise).
+    `load_spec` refuses minute cadence + `universe:`; benchmark default is
+    `NIFTY 50`. `tests/test_aihf_market.py`.
+  - **Phase 3 DONE.** Migration **042_aihf_data.sql** (rebuilds
+    `fundamental_snapshots` to add `period_label` + `YAHOO` source, verified
+    incrementally 41→42; new `company_facts`, `earnings_events`).
+    `bq/aihf/data_store.py` (`CompanyFactsStore`, `EarningsStore`),
+    `bq/data/vendors/yahoo_fundamentals_vendor.py` (real reported quarterly
+    statements, `known_at = period_end + 45d`, skips quarters Yahoo cannot
+    support), `bq/aihf/bridge/data.py` (the engine's `DataClient` over the vendor
+    router + PIT stores), `bq/aihf/ingest.py` + job
+    `aihf.fundamentals.ingest` (disabled by default). Tests:
+    `test_aihf_bridge_data.py`, `test_aihf_fundamentals_ingest.py`,
+    `test_aihf_ingest.py`.
+  - **Phase 4 DONE.** `bq/aihf/bridge/llm.py` (`RouterLLM` over `ModelRouter` +
+    `complete_structured`), `bridge/personas.py` (`staff()` injects per-persona
+    clients + editable prompts), `bq/aihf/persona_prompts.py` (dependency-free
+    default text, asserted equal to the persona classes). Five `aihf_*` agent ids
+    in `DEFAULT_AGENT_ROUTING` + a **merge** so an existing DB gains them, agent
+    catalogue entries, editable `PromptDefinition`s, `MAX_AGENT_ROUTING_ENTRIES`
+    32→48. `LLMAgent` gained `system_prompt=` and `voice()`.
+    `tests/test_aihf_bridge_llm.py`.
+  - **Phase 5 DONE.** `runner.py` no longer owns a process: `AiHfRunner.start`
+    takes a callable body that runs in a worker thread with cooperative
+    cancellation, and the same `Progress` journal keys drive the UI and SSE.
+    `config.py` dropped the venv (`installed_version()` = `"in-process"`);
+    `runtime_env.py` is a pure key-free descriptor (no env building);
+    `registry.py`, `probe/` deleted. **The approval gate is now a true dry run:**
+    `PaperStore.preview` rebuilds the broker in memory and calls
+    `engine.predict_session`, writing nothing to the fund; `execute` appends that
+    exact record and `Ledger.append` re-verifies the hash and chain. No sandbox,
+    no `directory_digest`, one LLM spend per session. `routes.py` runs the
+    backtest in-process (`_backtest_body` → `engine.run_backtest`), refuses
+    `model_override` with 422, and dropped the Financial-Datasets key routes.
+    `api.py` installs the NSE clock at startup. New `bq/aihf/wiring.py` builds the
+    data client. Tests rewritten: `test_aihf_api.py`, `test_aihf_runtime_env.py`,
+    `test_aihf_parsing.py`; new `tests/test_aihf_gate.py` (preview writes nothing,
+    tampered/stale preview refused, broker matches record).
+  - **Phase 6 DONE.** UI: `AiHedgeFundPanel` drops the sidecar banner, the
+    `EXTERNAL ENGINE` eyebrow, and the model-override select; copy now says the
+    engine is in-process and prices sessions as "computed without touching the
+    fund". `SettingsConfigPanel` replaces the Financial-Datasets key section with
+    a note (no data key exists). `just aihf-install`/`aihf-status` removed;
+    `.gitignore` drops `.aihf-venv`; README rewritten. **ADR-053** added and
+    ADR-050 marked superseded (ADR-052 was already taken by tool calling).
+  - **Phase 7 DONE.** Verified: **migration 042 applied to a copy of the owner DB
+    (at 41, with 6 settings keys and the live `paper-main` account) → 42, all
+    preserved, integrity ok.** Persona routes merge into the real routing row
+    (existing routes kept, 20 total, `aihf_buffett` → reasoning/GEMINI). Live
+    server on a throwaway DB: status/version/models correct, mandate create 201,
+    minute + universe mandates 422, fund create 201 on RELIANCE/TCS, halt →
+    preview AND execute both 409 → resume → ledger `chain_verified`. End-to-end
+    engine backtest trades and charges ₹505 on a ₹10L round trip (matches
+    `paper_charges`). **Fixed a real defect found only by running it:** PEAD
+    accepted only SEC `8-K` and so abstained on every Indian `RESULT` filing —
+    now `RESULT` is an announcement source (`tests/test_aihf_pead.py`).
+  - **Import graph:** the vendored engine loads **no** pandas, numpy, langchain,
+    textual or requests (subprocess probe). `pyyaml` is the one new dependency.
+  - **Next:** nothing outstanding for this port. Intraday funds, `universe:`
+    screening, a second market, and a scheduler job to advance funds unattended
+    are future work.
+  - **Next migration number is `043`.**
+  - Suite: 1205 pass; the same 2 pre-existing failures (`test_logbook`,
+    `test_phase5_acceptance`). mypy: zero errors in `bq/aihf/**` and
+    `yahoo_fundamentals_vendor.py`; the 49 remaining are the documented
+    pre-existing ones. Frontend: 174 tests, typecheck and build pass.
 
 - **Native tool calling (28 Nov 2026):** agents now get a real tool protocol
   instead of prose. `ToolSpec.input_schema()` renders one JSON Schema;
@@ -349,7 +473,7 @@ maintenance/optional breadth:
 | Logging | `bq/logbook.py`, `bq/infra/job_handlers.py` (`logs.flush`), `web/src/LoggingPanel.tsx`, `web/src/loggingContract.ts` |
 | Model Evals | `bq/evals/` (`config.py`, `store.py`, `scoring.py`, `runner.py`), `evals/*` (bundle), `web/src/ModelEvalsPanel.tsx`, `web/src/evalContract.ts` |
 | Local models | `bq/local_models.py` (registry, presence, pull), `bq/settings.py` (`local_models`), `web/src/modelsContract.ts`, Model Evals + `ModelsConfigPanel` |
-| AI Hedge Fund | `bq/aihf/` (`config`, `runtime_env`, `runner`, `service`, `routes`, `probe/`), `web/src/AiHedgeFundPanel.tsx`, `web/src/hedgeFundContract.ts`, `web/src/EquityCurve.tsx`, `justfile` (`aihf-install`) |
+| AI Hedge Fund | `bq/aihf/engine/` (vendored `hedge_fund`, ADR-053) + `engine/PATCHES.md`, `bq/aihf/bridge/` (`data`, `llm`, `personas`, `clock`, `costs`, `calendar`), `bq/aihf/` (`service`, `routes`, `runner`, `config`, `wiring`, `ingest`, `data_store`, `persona_prompts`), `bq/data/vendors/yahoo_fundamentals_vendor.py`, `web/src/AiHedgeFundPanel.tsx`, `web/src/hedgeFundContract.ts`, `web/src/EquityCurve.tsx` |
 
 ## Commands
 
@@ -370,9 +494,9 @@ BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq db ba
 # operational logs (Settings -> Logging flushes manually; the loop runs every 15 min)
 tail -n 5 "$HOME/Library/Application Support/BharatQuant/logs"/bq-*.jsonl
 
-# ai hedge fund (aihf sidecar: pandas<3, cannot share this venv)
-just aihf-install
-just aihf-status
+# ai hedge fund: vendored in-process (ADR-053), nothing to install.
+# Fundamentals are populated by the `aihf.fundamentals.ingest` job — enable it
+# on Schedules (off by default: one Yahoo request per symbol).
 
 # campaign (first run creates paper-main, saves defaults, seeds schedules)
 uv run --locked bq campaign init

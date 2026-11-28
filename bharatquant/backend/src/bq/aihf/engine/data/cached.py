@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from bq.aihf.engine import paths
 from bq.aihf.engine.data.models import (
     CompanyFacts,
     CompanyNews,
@@ -38,7 +39,7 @@ from bq.aihf.engine.data.models import (
 from bq.aihf.engine.data.protocol import DataClient
 from bq.aihf.engine.data.screener import SCREEN_LIMIT, ScreenerFields, ScreenRow
 from bq.aihf.engine.data.sessions import NEW_YORK
-from bq.aihf.engine import paths
+
 SAME_DAY_TTL = 600  # seconds an answer about an unfinished day stays fresh
 VOCABULARY_TTL = 86_400  # seconds the screener's field list stays fresh; it changes rarely
 

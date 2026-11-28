@@ -140,7 +140,7 @@ class FundamentalsSnapshot(BaseModel):
         """Backtest prompt: ratios and indexed trends, no identifying dollars."""
         oldest = self.periods[-1]
         lines = [
-            f"Company: (withheld)"
+            "Company: (withheld)"
             + (f"  |  Sector: {self.sector}" if self.sector else ""),
             "Periods are labelled relative to the latest filing (t-0). "
             "Calendar dates, absolute size and per-share dollar values are withheld; "

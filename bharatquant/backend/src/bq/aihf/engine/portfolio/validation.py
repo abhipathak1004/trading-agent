@@ -5,7 +5,7 @@ from __future__ import annotations
 from math import isfinite
 from typing import TYPE_CHECKING
 
-from bq.aihf.engine.portfolio.construction import blend_signals, WEIGHT_TOLERANCE
+from bq.aihf.engine.portfolio.construction import WEIGHT_TOLERANCE, blend_signals
 from bq.aihf.engine.signals import get_investment_approach
 
 if TYPE_CHECKING:

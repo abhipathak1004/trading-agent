@@ -2,7 +2,7 @@
 pandas, numpy, langchain, textual, rich or network client on the path.
 
 That guarantee is the whole reason the engine is vendored rather than run as a
-sidecar (ADR-052): upstream pins ``pandas<3``/``numpy<2`` against this project's
+sidecar (ADR-053): upstream pins ``pandas<3``/``numpy<2`` against this project's
 ``pandas>=3.1``/``numpy>=2.5``, and the lock was unsatisfiable. If a future
 upgrade reintroduces one of those imports, the port has silently lost its
 reason to exist — so the check lives here rather than in review.

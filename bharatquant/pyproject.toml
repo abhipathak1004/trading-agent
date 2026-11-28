@@ -31,6 +31,19 @@ dependencies = [
     "starlette>=1.10,<2",
     "tzdata",
     "uvicorn>=0.34,<1",
+    # Research Lab analytical stack (ADR-053). SQLite stays the single
+    # transactional authority: Parquet slices and the DuckDB queries over them
+    # are derived, read-only artefacts that rebuild from SQLite and the vendor
+    # router. Prices stay exact Int64 paise in every frame; float64 is only for
+    # ratios and never flows back into a money field.
+    "polars>=2.2,<3",
+    # Writes the frozen run slices. Its writer is the reason the freeze contract
+    # carries two digests (ADR-053): Parquet bytes are not stable across writer
+    # versions, so content identity is hashed separately from the file.
+    "pyarrow>=26,<27",
+    # Embedded query engine over those slices. Always opened in-memory with
+    # read_parquet(); never a persistent database file.
+    "duckdb>=2.0,<3",
 ]
 
 [project.scripts]

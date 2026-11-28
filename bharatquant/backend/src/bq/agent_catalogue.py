@@ -162,6 +162,112 @@ AGENT_CATALOGUE: tuple[AgentCatalogueEntry, ...] = (
         description="Atomic decision battery: final action and execute-trade judgment.",
         tier=_tier("final_decision_gate"),
     ),
+    # --- AI Hedge Fund personas (ADR-053) -------------------------------
+    # Each persona is its own agent, so its tier, model and prompt are all
+    # configuration. The prompt is the persona's voice, editable in the Agent
+    # Lab; the facts it reasons over are assembled by the engine and never
+    # supplied by the caller.
+    AgentCatalogueEntry(
+        agent_id="aihf_buffett",
+        kind=KIND_DAG_NODE,
+        label="Buffett persona",
+        description=(
+            "Long-term business owner: moat, management, financial strength and "
+            "a sensible price. Part of the AI Hedge Fund's deep-value desk."
+        ),
+        tier=_tier("aihf_buffett"),
+        prompt_id="aihf_buffett",
+    ),
+    AgentCatalogueEntry(
+        agent_id="aihf_munger",
+        kind=KIND_DAG_NODE,
+        label="Munger persona",
+        description=(
+            "Severe quality and inversion check: would rather miss ten good "
+            "ideas than accept one bad one."
+        ),
+        tier=_tier("aihf_munger"),
+        prompt_id="aihf_munger",
+    ),
+    AgentCatalogueEntry(
+        agent_id="aihf_graham",
+        kind=KIND_DAG_NODE,
+        label="Graham persona",
+        description=(
+            "Defensive value investor: the relationship between price and "
+            "demonstrated value, indifferent to Mr. Market's opinion."
+        ),
+        tier=_tier("aihf_graham"),
+        prompt_id="aihf_graham",
+    ),
+    AgentCatalogueEntry(
+        agent_id="aihf_lynch",
+        kind=KIND_DAG_NODE,
+        label="Lynch persona",
+        description=(
+            "Know what you own: business quality and growth at a reasonable "
+            "price, in plain terms."
+        ),
+        tier=_tier("aihf_lynch"),
+        prompt_id="aihf_lynch",
+    ),
+    AgentCatalogueEntry(
+        agent_id="aihf_druckenmiller",
+        kind=KIND_DAG_NODE,
+        label="Druckenmiller persona",
+        description=(
+            "Momentum and inflection: what the trajectory looks like now versus "
+            "what is already priced in."
+        ),
+        tier=_tier("aihf_druckenmiller"),
+        prompt_id="aihf_druckenmiller",
+    ),
+    # --- Research Lab slots (ADR-054) -----------------------------------
+    # Tiers are authoritative in `research_lab`; this catalogue only declares
+    # the identity, kind and prompt so the UI can render one tab per slot.
+    AgentCatalogueEntry(
+        agent_id="research_lab_planner",
+        kind=KIND_COORDINATOR,
+        label="Research planner",
+        description=(
+            "Turns a research request into a bounded tool plan. Cannot admit "
+            "evidence or write a run's numbers."
+        ),
+        tier=_tier("research_lab_planner"),
+        prompt_id="research_lab_planner",
+    ),
+    AgentCatalogueEntry(
+        agent_id="research_lab_synthesizer",
+        kind=KIND_LOOP,
+        label="Research synthesizer",
+        description=(
+            "Runs the bounded research loop and drafts the answer. Every numeric "
+            "claim it writes is checked against admitted evidence."
+        ),
+        tier=_tier("research_lab_synthesizer"),
+        prompt_id="research_lab_synthesizer",
+        tools=RESEARCH_TOOLS,
+        read_only=False,
+    ),
+    AgentCatalogueEntry(
+        agent_id="research_lab_evidence_auditor",
+        kind=KIND_DAG_NODE,
+        label="Evidence auditor",
+        description=(
+            "Optional draft-repair model. The evidence gate itself is "
+            "deterministic; a model may only propose a correction that the same "
+            "check must then accept."
+        ),
+        tier=_tier("research_lab_evidence_auditor"),
+        prompt_id="research_lab_evidence_auditor",
+    ),
+    AgentCatalogueEntry(
+        agent_id="research_lab_triage_scorer",
+        kind=KIND_DECISION,
+        label="Research triage",
+        description="Atomic decision battery: is this request worth a full run?",
+        tier=_tier("research_lab_triage_scorer"),
+    ),
 )
 
 

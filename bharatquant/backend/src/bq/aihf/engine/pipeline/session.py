@@ -42,7 +42,11 @@ from bq.aihf.engine.data.protocol import DataClient
 from bq.aihf.engine.fund import Cadence, Fund, FundSpec, normalize_universe
 from bq.aihf.engine.pipeline.clock import Clock, clock_for
 from bq.aihf.engine.pipeline.models import AllocationRecord, CycleRecord, DecisionRecord
-from bq.aihf.engine.pipeline.stages import assess_fund, execute_decision, stop_out_decision
+from bq.aihf.engine.pipeline.stages import (
+    assess_fund,
+    execute_decision,
+    stop_out_decision,
+)
 from bq.aihf.engine.signals import LLMAgent
 from bq.aihf.engine.universe.screen import cover
 

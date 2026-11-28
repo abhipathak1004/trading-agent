@@ -10,7 +10,6 @@ import {
   parseConfig,
 } from "./settingsContract";
 import type { AppConfig, KeyProvider, Provider } from "./settingsContract";
-import { parseDataKey } from "./hedgeFundContract";
 
 type LoadState =
   | { state: "loading" }
@@ -28,13 +27,6 @@ export default function SettingsConfigPanel({
   csrfToken: string;
 }) {
   const [load, setLoad] = useState<LoadState>({ state: "loading" });
-  const [dataKey, setDataKey] = useState("");
-  const [dataKeyShow, setDataKeyShow] = useState(false);
-  const [dataKeySave, setDataKeySave] = useState<SaveState>({ state: "idle" });
-  const [dataKeyStatus, setDataKeyStatus] = useState<{ configured: boolean; masked: string | null }>({
-    configured: false,
-    masked: null,
-  });
   const [retry, setRetry] = useState(0);
   const [provider, setProvider] = useState<Provider>("GEMINI");
   const [modelName, setModelName] = useState("");
@@ -67,14 +59,6 @@ export default function SettingsConfigPanel({
         setFeedUrl(config.news_feed_url);
         setTtlDays(String(config.news_memory_ttl_days));
         setBedrockRegion(config.bedrock_region ?? "");
-        // The AI Hedge Fund's data key is its own row, not a provider key.
-        const keyResponse = await fetch("/api/v1/aihf/settings", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (keyResponse.ok) {
-          setDataKeyStatus(parseDataKey(await keyResponse.json()));
-        }
       } catch {
         if (!controller.signal.aborted) {
           setLoad({ state: "error" });
@@ -255,61 +239,6 @@ export default function SettingsConfigPanel({
     }
   }
 
-  async function saveDataKey(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setDataKeySave({ state: "saving" });
-    try {
-      const response = await fetch("/api/v1/aihf/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
-        body: JSON.stringify({ financial_datasets_api_key: dataKey }),
-      });
-      if (!response.ok) {
-        let message = "Saving the Financial Datasets key failed.";
-        try {
-          const body = (await response.json()) as { detail?: unknown };
-          if (typeof body.detail === "string") {
-            message = body.detail;
-          }
-        } catch {
-          // Keep the generic message.
-        }
-        setDataKeySave({ state: "failed", message });
-        return;
-      }
-      setDataKeyStatus(parseDataKey(await response.json()));
-      setDataKey("");
-      setDataKeySave({ state: "saved" });
-    } catch {
-      setDataKeySave({
-        state: "failed",
-        message: "Saving the Financial Datasets key failed. Check the local service.",
-      });
-    }
-  }
-
-  async function clearDataKey() {
-    setDataKeySave({ state: "saving" });
-    try {
-      const response = await fetch("/api/v1/aihf/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
-        body: JSON.stringify({ financial_datasets_api_key: "" }),
-      });
-      if (!response.ok) {
-        setDataKeySave({ state: "failed", message: "Clearing the key failed." });
-        return;
-      }
-      setDataKeyStatus(parseDataKey(await response.json()));
-      setDataKeySave({ state: "saved" });
-    } catch {
-      setDataKeySave({
-        state: "failed",
-        message: "Clearing the key failed. Check the local service.",
-      });
-    }
-  }
-
   if (load.state === "loading") {
     return (
       <section className="settings-panel" aria-label="Configuration">
@@ -486,68 +415,12 @@ export default function SettingsConfigPanel({
       <section className="settings-panel" aria-labelledby="data-providers-title">
         <h2 id="data-providers-title">Data providers</h2>
         <p className="panel-note">
-          The AI Hedge Fund tab reads its own data key. It is stored locally, masked
-          on read, and injected into that engine&apos;s process environment per run —
-          never written to <code>~/.hedge-fund/.env</code>.
+          The AI Hedge Fund reads this app&apos;s own data — market bars from the
+          configured vendor router, fundamentals and earnings from the local
+          point-in-time store — so it needs no separate data key. Populate the
+          fundamentals with the <code>aihf.fundamentals.ingest</code> job on the
+          Schedules tab, or leave the personas to abstain until it runs.
         </p>
-        <ul className="task-list">
-          <li>
-            <strong>Financial Datasets</strong>{" "}
-            {dataKeyStatus.configured
-              ? `Configured · ${dataKeyStatus.masked ?? ""}`
-              : "Not configured"}{" "}
-            {dataKeyStatus.configured && (
-              <button
-                type="button"
-                className="text-button"
-                onClick={() => void clearDataKey()}
-                disabled={dataKeySave.state === "saving"}
-              >
-                Clear key
-              </button>
-            )}
-          </li>
-        </ul>
-        <form className="config-form" onSubmit={(event) => void saveDataKey(event)}>
-          <label htmlFor="data-key-value">Financial Datasets API key</label>
-          <div className="ahf-secret">
-            <input
-              id="data-key-value"
-              type={dataKeyShow ? "text" : "password"}
-              autoComplete="off"
-              spellCheck={false}
-              value={dataKey}
-              onChange={(event) => setDataKey(event.target.value)}
-              disabled={dataKeySave.state === "saving"}
-              placeholder="Paste the Financial Datasets key"
-            />
-            <button
-              type="button"
-              className="text-button"
-              aria-pressed={dataKeyShow}
-              onClick={() => setDataKeyShow((value) => !value)}
-            >
-              {dataKeyShow ? "Hide" : "Show"}
-            </button>
-          </div>
-          <button
-            type="submit"
-            className="auth-button"
-            disabled={dataKeySave.state === "saving" || dataKey.length === 0}
-          >
-            {dataKeySave.state === "saving" ? "Saving..." : "Save data key"}
-          </button>
-        </form>
-        {dataKeySave.state === "saved" && (
-          <p className="config-feedback" role="status">
-            Financial Datasets key saved.
-          </p>
-        )}
-        {dataKeySave.state === "failed" && (
-          <p className="auth-error" role="alert">
-            {dataKeySave.message}
-          </p>
-        )}
       </section>
 
       <section className="settings-panel" aria-labelledby="keys-title">

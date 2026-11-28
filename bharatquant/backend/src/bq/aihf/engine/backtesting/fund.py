@@ -30,11 +30,11 @@ from bq.aihf.engine.fund import Fund, FundSpec, normalize_universe
 from bq.aihf.engine.pipeline.clock import Clock, DailyClock
 from bq.aihf.engine.pipeline.models import CycleRecord
 from bq.aihf.engine.pipeline.session import (
-    advance,
     FundState,
+    SessionRecord,
+    advance,
     is_rebalance_session,
     next_state,
-    SessionRecord,
 )
 from bq.aihf.engine.scorecard import current_allocation
 

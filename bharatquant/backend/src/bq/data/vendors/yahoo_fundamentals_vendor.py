@@ -31,7 +31,7 @@ Two rules that are load-bearing:
 * **Yahoo's history is short.** It serves about four quarters, which is exactly
   the engine's 4-period floor and no more. A backtest longer than roughly a year
   will have personas abstain with ``InsufficientData`` for its earlier part. That
-  limit is stated in ADR-052 and shown in the UI, not hidden here.
+  limit is stated in ADR-053 and shown in the UI, not hidden here.
 
 Nothing in this module decides whether to trade — it only records facts.
 """
@@ -42,6 +42,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from urllib.parse import quote as url_quote
 
 import httpx
@@ -141,7 +142,7 @@ def _number(value: object) -> float | None:
     if raw is None or isinstance(raw, bool):
         return None
     try:
-        return float(raw)
+        return float(str(raw))
     except (TypeError, ValueError):
         return None
 
@@ -181,7 +182,9 @@ def parse_quote_summary(payload: bytes) -> dict[str, object]:
     return results[0]
 
 
-def _statement_rows(summary: dict[str, object], module: str, key: str) -> list[dict]:
+def _statement_rows(
+    summary: dict[str, object], module: str, key: str
+) -> list[dict[str, object]]:
     """The rows of a quarterly statement module, keyed by period end."""
     section = summary.get(module)
     rows = section.get(key) if isinstance(section, dict) else None
@@ -192,8 +195,10 @@ def _statement_rows(summary: dict[str, object], module: str, key: str) -> list[d
     ]
 
 
-def _by_period(rows: list[dict]) -> dict[date, dict]:
-    keyed: dict[date, dict] = {}
+def _by_period(
+    rows: list[dict[str, object]],
+) -> dict[date, dict[str, object]]:
+    keyed: dict[date, dict[str, object]] = {}
     for row in rows:
         period = _date_raw(row.get("endDate"))
         if period is not None:
@@ -215,7 +220,7 @@ class YahooFundamentalsIngest:
 
     def __init__(
         self,
-        database_path,  # noqa: ANN001 - Path-like
+        database_path: Path,
         *,
         clock: Clock,
         transport: httpx.BaseTransport | None = None,
@@ -371,9 +376,9 @@ class YahooFundamentalsIngest:
         period: date,
         known_at: datetime,
         shares: int,
-        income: dict,
-        balance: dict,
-        cashflow: dict,
+        income: dict[str, object],
+        balance: dict[str, object],
+        cashflow: dict[str, object],
     ) -> FundamentalSnapshot | None:
         revenue = _paise(income.get("totalRevenue"))
         net_income = _paise(income.get("netIncome"))

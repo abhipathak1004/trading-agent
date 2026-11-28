@@ -36,6 +36,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import date as _date
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from bq.core import (
     EXCHANGE_TIMEZONE,
@@ -56,7 +57,7 @@ SESSION_CLOSE_MINUTE = 30
 # NSE trading holidays, used only when the exchange calendar has no row for a
 # date. These are the fixed-date national holidays the exchange observes every
 # year; movable festivals are published annually and belong in the calendar
-# table, not hardcoded here (ADR-052). A date listed here is never a session.
+# table, not hardcoded here (ADR-053). A date listed here is never a session.
 _FIXED_MARKET_HOLIDAYS: dict[tuple[int, int], str] = {
     (1, 26): "Republic Day",
     (8, 15): "Independence Day",
@@ -137,7 +138,7 @@ class SessionGate:
 
     def __init__(
         self,
-        database_path,  # noqa: ANN001 - Path-like; kept loose so the bridge owns the type
+        database_path: Path,
         clock: Clock | None = None,
     ) -> None:
         self._calendar = ExchangeCalendar(database_path, clock)
@@ -152,7 +153,7 @@ class SessionGate:
         return session.state is SessionState.OPEN
 
 
-def session_gate(database_path) -> Callable[[str], bool]:  # noqa: ANN001
+def session_gate(database_path: Path) -> Callable[[str], bool]:
     """A predicate ``day -> was it a session`` bound to one database.
 
     Bound once per run so a backtest over 250 sessions does not open 250

@@ -36,7 +36,7 @@ from bq.aihf.config import resolve_paths as ai_paths_resolve
 from bq.aihf.routes import AiHfDeps
 from bq.aihf.routes import register as register_aihf
 from bq.aihf.runner import AiHfRunner
-from bq.aihf.runtime_env import build_runtime
+from bq.aihf.service import install_market_clock
 from bq.analysis.batch import BatchAnalyst, BatchError, parse_symbol_list
 from bq.analysis.builder import build_analysis_pipeline
 from bq.analysis.decision import TradePlan, TradePlanError, trade_plan_from_json
@@ -206,6 +206,11 @@ from bq.research_expansion import (
     ResearchNote,
     ThesisEventRecord,
 )
+from bq.research_lab.harness import ModelTurn
+from bq.research_lab.routes import ResearchDeps
+from bq.research_lab.routes import register as register_research
+from bq.research_lab.runner import ResearchRunner
+from bq.research_lab.wiring import router_model_turn
 from bq.risk.policy import KillSwitchLevel, RiskLimits
 from bq.runtime import inspect_runtime, metrics_text
 from bq.schedules import (
@@ -2365,12 +2370,14 @@ def create_app(
     *,
     database_path: Path | None = None,
     tunnel_manager: TunnelManager | None = None,
+    research_model_turn: Callable[[], ModelTurn] | None = None,
 ) -> FastAPI:
     scheduler: SchedulerLoop | None = None
     worker_loop: JobWorkerLoop | None = None
     settings_store: SettingsStore | None = None
     eval_runner: EvalRunner | None = None
     aihf_runner: AiHfRunner | None = None
+    research_runner: ResearchRunner | None = None
     flush_task: asyncio.Task[None] | None = None
     tunnel = tunnel_manager
     if tunnel is None and database_path is not None:
@@ -2398,6 +2405,8 @@ def create_app(
                 await eval_runner.stop()
             if aihf_runner is not None:
                 await aihf_runner.stop()
+            if research_runner is not None:
+                await research_runner.stop()
             await pull_runner.stop()
             if tunnel is not None:
                 await tunnel.stop()
@@ -2529,15 +2538,13 @@ def create_app(
         eval_runner = EvalRunner(evals, resolve_paths())
         pull_runner = ModelPullRunner()
         aihf_paths = ai_paths_resolve(database_path=database_path)
-        aihf_runner = AiHfRunner(
-            aihf_paths,
-            lambda model: (
-                build_runtime(
-                    settings, model_override=model, environ={}, paths=aihf_paths
-                ).env
-            ),
-            name="backtest",
-        )
+        # The engine runs in-process now (ADR-053); the clock is installed once
+        # so every fund is valued on the NSE session rather than New York's.
+        install_market_clock()
+        aihf_runner = AiHfRunner(aihf_paths, name="backtest")
+        # Research Lab journals live beside the database, under BQ_HOME.
+        research_root = database_path.parent / "research"
+        research_runner = ResearchRunner(research_root)
 
         def effective_local_models() -> tuple[LocalModel, ...]:
             config = settings.load()
@@ -6179,6 +6186,28 @@ def create_app(
                 read_auth=require_read,
                 require_write=require_write,
                 backtest_runner=aihf_runner,
+            ),
+        )
+
+    if database_path is not None and research_runner is not None:
+        # Registered before the SPA catch-all, which would otherwise answer
+        # every /api/v1/research/* path 404.
+        register_research(
+            app,
+            ResearchDeps(
+                database_path=database_path,
+                artifacts_root=research_runner.root,
+                settings=settings,
+                read_auth=require_read,
+                require_write=require_write,
+                runner=research_runner,
+                model_turn_factory=research_model_turn
+                or (
+                    lambda: router_model_turn(
+                        ModelRouter(settings, prompts=PromptStore(database_path)),
+                        agent_id="research_lab_synthesizer",
+                    )
+                ),
             ),
         )
 

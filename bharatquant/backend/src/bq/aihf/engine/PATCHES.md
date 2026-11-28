@@ -10,7 +10,7 @@ why `pyproject.toml` excludes it from ruff and relaxes strict mypy for it. Every
 deviation from upstream is listed below with the reason; the goal is that a
 future upgrade is a re-diff, not an archaeology exercise.
 
-Supersedes ADR-050 (the sidecar subprocess). Decision record: ADR-052.
+Supersedes ADR-050 (the sidecar subprocess). Decision record: ADR-053.
 
 ## Why vendored at all
 
@@ -54,10 +54,11 @@ model layers instead of running beside them.
 | `llm/cache.py`, `data/cached.py` | Default dirs resolved at call time via `paths.*` instead of bound constants. | A root injected after import must still take effect. |
 | `paper/deployed.py` | `root: Path = PAPER_DIR` → `root: Path | None = None` defaulting to `paths.paper_dir()`; `list_deployed` likewise. | Same reason; also avoids `Path(None)`. |
 | `features/breakpoints.py` | Removed the Ken-French download (`requests`, `zipfile`, retry); `shared_breakpoints()` returns `None` when no local CSV exists. | The table describes **US** stocks; this port trades NSE names, so a US decile is worse than no size. Blind prompts already treat `size_percentile=None` as "omit size". |
+| `signals/pead.py` | `_ANNOUNCEMENT_SOURCES = {"8-K", "RESULT"}` (was `"8-K"` only), and `RESULT` added to `_SOURCE_PRIORITY` at 0. | This app stores an NSE quarterly result as source type `RESULT`, whose `filing_date` **is** the announcement (period end + SEBI's 45-day window). Without this the model skipped every Indian filing and the earnings-drift strategy silently never traded. `10-Q`/`10-K` remain rejected: their date is the statutory filing, not the announcement. |
 | `data/protocol.py` | `FDClientError` → `DataClientError`. | The client is now the app's vendor router, not the FD API; the contract is identical. |
 | `brokers/sim.py` | Added an optional `shares` argument to `SimBroker.__init__` and a `_charge_for` hook that prefers a cost model's `charge(side, quantity, price)`. | (a) The approval gate's compute step rebuilds the book in memory. (b) India's fees are percentages of turnover, which a per-share `commission()` cannot express; a model without `charge` keeps upstream behaviour exactly. |
 | `pipeline/clock.py` | Added `set_clock_factory(factory)`; `clock_for` returns the factory's clock when one is installed. | The market clock (NSE/IST) is app policy. `clock_for` is called with no clock from deep inside `advance`, so a factory is the only way to substitute it once instead of at every call site. Left unset, upstream's New York clock is used unchanged. |
-| `fund/spec.py::load_spec` | Refuses `rebalance: minute` and a `universe:` rule with a clear message. | Both are out of scope for the first NSE pass (ADR-052); failing at parse time tells the owner when they save, instead of mid-run. |
+| `fund/spec.py::load_spec` | Refuses `rebalance: minute` and a `universe:` rule with a clear message. | Both are out of scope for the first NSE pass (ADR-053); failing at parse time tells the owner when they save, instead of mid-run. |
 | `fund/spec.py` (`FundSpec.benchmark`) | Default `"SPY"` → `"NIFTY 50"`. | `SPY` cannot be resolved by this app; every default-constructed mandate would fail its first fetch. |
 | `fund/example.yaml` | Rewritten for NSE: no `--universe`, `NIFTY 50` benchmark, US cost/CLI references removed. | The example is what an owner starts from. |
 | `paper/__init__.py`, `backtesting/__init__.py`, `data/__init__.py` | Dropped exports of deleted modules. | Import hygiene. |
