@@ -10,7 +10,13 @@ from pathlib import Path
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
 from bq.infra.audit import append_event
 
 SESSION_SECONDS = 12 * 60 * 60
@@ -70,9 +76,7 @@ class OwnerAuth:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
+        return core_open_connection(self.path, foreign_keys=False)
 
     def _now(self) -> int:
         instant = self.clock.now()

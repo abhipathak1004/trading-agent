@@ -1,17 +1,43 @@
-import json
-import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
-from hashlib import sha256
 from pathlib import Path
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    IDENTIFIER,
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    canonical_digest as core_canonical_digest,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    parse_timestamp as core_parse_timestamp,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.audit import append_event
 
-IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise ResearchError("Research timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return core_parse_timestamp(value)
 
 
 class ResearchError(ValueError):
@@ -53,29 +79,8 @@ class Thesis:
     thesis_hash: str
 
 
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise ResearchError("Research timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 def _hash(payload: object) -> str:
-    return sha256(
-        json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    return core_canonical_digest(payload)
 
 
 class ResearchStore:
@@ -84,11 +89,7 @@ class ResearchStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def freeze_filing(
         self,
@@ -236,6 +237,67 @@ class ResearchStore:
             ingested_at=_parse_timestamp(str(row[5])),
             filing_hash=str(row[6]),
         )
+
+    def filings(
+        self,
+        *,
+        instrument_id: str | None = None,
+        as_of: datetime | None = None,
+        limit: int = 50,
+    ) -> tuple[Filing, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ResearchError("Filing limit must be between 1 and 100.")
+        clauses: list[str] = []
+        params: list[object] = []
+        if instrument_id is not None:
+            clauses.append("instrument_id = ?")
+            params.append(instrument_id)
+        if as_of is not None:
+            clauses.append("published_at <= ? AND ingested_at <= ?")
+            pivot = _timestamp(as_of)
+            params.extend([pivot, pivot])
+        query = (
+            "SELECT filing_id FROM filings "
+            + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
+            + "ORDER BY published_at DESC, filing_id LIMIT ?"
+        )
+        with closing(self._connect()) as connection:
+            rows = connection.execute(query, (*params, limit)).fetchall()
+        return tuple(self.get_filing(str(row[0])) for row in rows)
+
+    def theses(
+        self,
+        *,
+        instrument_id: str | None = None,
+        as_of: datetime | None = None,
+        limit: int = 50,
+    ) -> tuple[Thesis, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ResearchError("Thesis limit must be between 1 and 100.")
+        clauses: list[str] = []
+        params: list[object] = []
+        if instrument_id is not None:
+            clauses.append("instrument_id = ?")
+            params.append(instrument_id)
+        if as_of is not None:
+            clauses.append("created_at <= ?")
+            params.append(_timestamp(as_of))
+        query = (
+            "SELECT thesis_id FROM theses "
+            + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
+            + "ORDER BY created_at DESC, thesis_id LIMIT ?"
+        )
+        with closing(self._connect()) as connection:
+            rows = connection.execute(query, (*params, limit)).fetchall()
+        return tuple(self.get_thesis(str(row[0])) for row in rows)
 
     def get_thesis(self, thesis_id: str) -> Thesis:
         with closing(self._connect()) as connection:

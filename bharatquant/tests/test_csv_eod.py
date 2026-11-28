@@ -232,7 +232,7 @@ def test_context_migration_preserves_existing_csv_import(
     store = DataRecordStore(path, FrozenClock())
     original = _import(store)
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert migrate(path) == 13
+    assert migrate(path) == len(migrations) - 8
     assert _import(store) == original
     assert store.import_summary().record_count == 1
     check_database(path)

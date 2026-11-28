@@ -1,9 +1,8 @@
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
-IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+from bq.core import IDENTIFIER
 
 
 class StrategyKind(StrEnum):

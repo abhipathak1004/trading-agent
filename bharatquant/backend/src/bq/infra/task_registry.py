@@ -6,7 +6,13 @@ from hashlib import sha256
 from pathlib import Path
 
 from bq.context import SECTION_ORDER, ContextSection
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
 from bq.infra.audit import append_event
 from bq.model_routing import (
     DataClassification,
@@ -106,9 +112,7 @@ class TaskRegistry:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
+        return core_open_connection(self.path, foreign_keys=False)
 
     def save(self, definition: TaskDefinition) -> None:
         if not isinstance(definition, TaskDefinition):
@@ -180,3 +184,33 @@ class TaskRegistry:
                 "Stored task definition identity does not match."
             )
         return definition
+
+    def list_latest(self, *, limit: int = 100) -> tuple[TaskDefinition, ...]:
+        """Return the newest stored version of each task, ordered by task id."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise RoutingError("Task listing limit must be a positive integer.")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT task_id, task_version, definition_json, definition_hash "
+                "FROM task_definitions AS t "
+                "WHERE t.rowid = ("
+                "SELECT s.rowid FROM task_definitions AS s "
+                "WHERE s.task_id = t.task_id "
+                "ORDER BY s.recorded_at DESC, s.rowid DESC LIMIT 1"
+                ") ORDER BY t.task_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        definitions: list[TaskDefinition] = []
+        for task_id, version, payload, digest in rows:
+            if sha256(str(payload).encode("utf-8")).hexdigest() != digest:
+                raise sqlite3.DatabaseError("Task definition integrity check failed.")
+            definition = _deserialize(str(payload))
+            if (
+                definition.policy.task_id != task_id
+                or definition.policy.version != version
+            ):
+                raise sqlite3.DatabaseError(
+                    "Stored task definition identity does not match."
+                )
+            definitions.append(definition)
+        return tuple(definitions)

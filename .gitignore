@@ -1,8 +1,16 @@
 graphify-out/
 .venv/
 node_modules/
+.runtime-data/
+.DS_Store
+pinak.zip
 __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 *.py[cod]
+
+# AI Hedge Fund runtime data (ledgers, previews, prompt cache, research results).
+# Only the data dir is ignored — bq/aihf/ (the engine and bridge) is source and
+# must be committed. The old .aihf-venv sidecar is gone (ADR-052).
+/bharatquant/aihf/

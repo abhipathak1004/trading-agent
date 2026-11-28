@@ -1,0 +1,168 @@
+"""Code-owned job handlers. No model calls and no broker access."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from bq.analysis.wiring import build_analysis_router
+from bq.infra.job_worker import JobHandler
+from bq.infra.jobs import JobRun
+from bq.logbook import configure_logbook
+from bq.memory import EpisodicMemoryStore, OutcomeResolver
+from bq.paper_square_off import PaperSquareOff
+from bq.paper_stops import PaperStopStore
+from bq.reports.engine import ReportEngine
+from bq.reports.store import ReportStore
+from bq.services import build_services
+from bq.settings import SettingsStore
+
+MEMORY_RESOLVE_JOB = "memory.resolve"
+NEWS_INGEST_JOB = "news.ingest"
+REPORT_MORNING_JOB = "report.morning"
+REPORT_EVENING_JOB = "report.evening_accuracy"
+PAPER_STOPS_JOB = "paper.stops"
+PAPER_SQUARE_OFF_JOB = "paper.square_off"
+CAMPAIGN_RESEARCH_JOB = "campaign.research"
+CAMPAIGN_TRIGGERS_JOB = "campaign.triggers"
+AIHF_FUNDAMENTALS_JOB = "aihf.fundamentals.ingest"
+LOGS_FLUSH_JOB = "logs.flush"
+DEFAULT_RESOLVE_HORIZON_DAYS = 5
+DEFAULT_RESOLVE_MAX_EPISODES = 50
+
+
+def build_job_handlers(
+    database_path: Path, settings: SettingsStore
+) -> dict[str, JobHandler]:
+    services = build_services(database_path, settings)
+
+    def resolve_memory(run: JobRun) -> dict[str, object]:
+        config = settings.load()
+        router = build_analysis_router(database_path, config)
+        resolver = OutcomeResolver(
+            EpisodicMemoryStore(database_path),
+            router,
+            horizon_days=DEFAULT_RESOLVE_HORIZON_DAYS,
+            max_episodes=DEFAULT_RESOLVE_MAX_EPISODES,
+        )
+        return resolver.resolve_due(as_of=run.scheduled_at).to_dict()
+
+    def ingest_news(_run: JobRun) -> dict[str, object]:
+        config = settings.load()
+        report = services.news_agent().run(memory_ttl_days=config.news_memory_ttl_days)
+        return {
+            "source_id": report.source_id,
+            "fetched": report.fetched,
+            "stored": report.stored,
+            "duplicates": report.duplicates,
+            "long_term_memories": report.long_term_memories,
+        }
+
+    def record_failure(report_type: str, run: JobRun, exc: Exception) -> None:
+        try:
+            local_date = run.scheduled_at.astimezone(ZoneInfo("Asia/Kolkata")).date()
+            ReportStore(database_path).record(
+                report_type=report_type,
+                report_date=local_date,
+                status="FAILED",
+                title=f"{report_type.title()} report failed",
+                body_md=(
+                    f"# {report_type.title()} report failed\n\n"
+                    f"{type(exc).__name__}: report generation did not complete."
+                ),
+                body={"error": type(exc).__name__, "report_type": report_type},
+            )
+        except Exception:  # noqa: BLE001 - never hide the original failure
+            pass
+
+    def morning_report(run: JobRun) -> dict[str, object]:
+        try:
+            router = build_analysis_router(database_path, settings.load())
+            report = ReportEngine(database_path, router).morning(as_of=run.scheduled_at)
+        except Exception as exc:  # noqa: BLE001 - record and let worker mark failure
+            record_failure("morning", run, exc)
+            raise
+        return report.to_dict()
+
+    def evening_report(run: JobRun) -> dict[str, object]:
+        try:
+            router = build_analysis_router(database_path, settings.load())
+            report = ReportEngine(database_path, router).evening(as_of=run.scheduled_at)
+        except Exception as exc:  # noqa: BLE001 - record and let worker mark failure
+            record_failure("evening", run, exc)
+            raise
+        return report.to_dict()
+
+    def campaign_research(run: JobRun) -> dict[str, object]:
+        campaign = services.campaign_service().research(
+            as_of=run.scheduled_at, force=True
+        )
+        return campaign.to_dict()
+
+    def campaign_triggers(run: JobRun) -> dict[str, object]:
+        return services.trigger_engine().scan(as_of=run.scheduled_at).to_dict()
+
+    def flush_logs(_run: JobRun) -> dict[str, object]:
+        config = settings.load().logging
+        return configure_logbook(database_path.parent, config).flush().to_dict()
+
+    def evaluate_stops(run: JobRun) -> dict[str, object]:
+        router = build_analysis_router(database_path, settings.load())
+        result = PaperStopStore(database_path).evaluate(router, as_of=run.scheduled_at)
+        return {
+            "examined": result.examined,
+            "triggered": result.triggered,
+            "notes": list(result.notes),
+        }
+
+    def square_off(run: JobRun) -> dict[str, object]:
+        router = build_analysis_router(database_path, settings.load())
+        result = PaperSquareOff(database_path).square_off(
+            router, as_of=run.scheduled_at
+        )
+        return {
+            "examined": result.examined,
+            "squared_off": result.squared_off,
+            "notes": list(result.notes),
+        }
+
+    def ingest_fund_fundamentals(_run: JobRun) -> dict[str, object]:
+        """Refresh the fundamentals the AI Hedge Fund reads, for its own names.
+
+        One network request per symbol, which is why the job is disabled by
+        default: enabling it is the owner saying "spend that".
+        """
+        from bq.aihf.config import resolve_paths
+        from bq.aihf.ingest import ingest_fund_universes
+
+        paths = resolve_paths(database_path=database_path)
+        summary = ingest_fund_universes(database_path, paths)
+        return summary.to_dict()
+
+    return {
+        MEMORY_RESOLVE_JOB: resolve_memory,
+        NEWS_INGEST_JOB: ingest_news,
+        REPORT_MORNING_JOB: morning_report,
+        REPORT_EVENING_JOB: evening_report,
+        PAPER_STOPS_JOB: evaluate_stops,
+        PAPER_SQUARE_OFF_JOB: square_off,
+        CAMPAIGN_RESEARCH_JOB: campaign_research,
+        CAMPAIGN_TRIGGERS_JOB: campaign_triggers,
+        AIHF_FUNDAMENTALS_JOB: ingest_fund_fundamentals,
+        LOGS_FLUSH_JOB: flush_logs,
+    }
+
+
+__all__ = [
+    "AIHF_FUNDAMENTALS_JOB",
+    "DEFAULT_RESOLVE_HORIZON_DAYS",
+    "DEFAULT_RESOLVE_MAX_EPISODES",
+    "LOGS_FLUSH_JOB",
+    "MEMORY_RESOLVE_JOB",
+    "NEWS_INGEST_JOB",
+    "PAPER_SQUARE_OFF_JOB",
+    "PAPER_STOPS_JOB",
+    "REPORT_EVENING_JOB",
+    "REPORT_MORNING_JOB",
+    "build_job_handlers",
+]

@@ -1,197 +1,508 @@
-# BharatQuant development status
+# BharatQuant — compact handoff
 
-Start here when resuming work. This file lives in the workspace and does not depend on chat history or session todos.
+Updated 28 November 2026. This file keeps only what is needed for the **next**
+task. History lives in git and
+[`architecture-decisions.md`](./bharatquant/docs/architecture-decisions.md).
 
-## Current handoff
+## Current state
 
-Updated 25 November 2026. The roadmap is **not complete**: the application is
-an authenticated offline foundation, not an operational paper-trading system.
-The React shell uses the companion UI/UX guide's dark app-shell pattern:
-fixed navigation, a top status strip, a clear paper-only mode banner, and
-responsive owner setup/dashboard states. Navigation is limited to implemented
-foundation views; Trade, Agent Lab and Settings are marked unavailable rather
-than presented as working features.
-The latest additions are `infra/dispatch.py` and `infra/scheduler.py`: a
-wake-to-job dispatch layer and a small 30-second asyncio process loop. The
-`bq serve` lifespan starts the loop and reports its running state in schedule
-status. It records due decisions and enqueues matching `JobRun` occurrences,
-but still does not execute job handlers or provide schedule-editing UI.
+- **Research Lab, Phases 0–5 (28 Nov 2026, ADR-054).** Plan:
+  `~/.commandcode/plans/research-lab-vibe-trading-replan.md`. Polars/PyArrow/
+  DuckDB are runtime deps as a **derived** analytical stack; SQLite stays the
+  only transactional authority and Postgres was measured and declined (47
+  stores, 42 migrations, ~1,110 tests; see plan §1). Migration **043** adds
+  `research_sessions`, `research_runs`, `portfolio_snapshots`,
+  `research_artifacts`, `research_evidence`, `execution_mandates` — no
+  `audit_ledger` (`audit_events` is reused) and no FTS in SQL (lazy + LIKE
+  fallback, matching `semantic_docs_fts`).
+  - `bq/research_lab/`: `config` in `settings.py` (`save_research_lab`,
+    `resolve_research_lab_models`, `parse_research_lab`; overrides are in-memory
+    only); `contracts.py` (Int64-paise contract, refuses mixed raw/adjusted and a
+    network-served `local`); `freeze.py` (two digests: content identity + file
+    tamper); `store.py` (sessions/runs/versioned artifacts); `replay.py`
+    (verified replay + walk-forward folds/holdout, CSV); `risk_xray.py` (top-5
+    episodes + open, signed contributions summing to total vol); `alpha_bench.py`
+    (IC/rank IC/ICIR/turnover + survivorship stamp); `reconcile.py`;
+    `evidence.py` (scoped E_t, 24/24 ablation); `security.py` (path confinement,
+    no shell/network surface); `prompting.py` (byte-stable prefix);
+    `mandate.py` (paper-only gate, kill switch, existing audit chain);
+    `harness.py` (bounded loop: tool → admit → gate → bounded recovery);
+    `runner.py` (events.jsonl journal + cursor reads + single-flight + cancel);
+    `routes.py` (`/api/v1/research/*`, SSE via journal, `ResearchDeps`).
+  - **API:** sessions, messages (runs the harness), cancelled runs keep a partial
+    trace, run detail (equity + Risk X-Ray + evidence), replay + CSV, alpha/bench,
+    paper/reconcile, versioned artifacts (FTS search, diff, export), and
+    `GET/PUT /models`. Registered before the SPA catch-all; `/api/v1/research/`
+    was already in the `no-store` prefixes. `create_app` gained an optional
+    `research_model_turn` for offline tests.
+  - **UI:** new **Analyze → Research Lab** tab (`web/src/ResearchLabPanel.tsx`,
+    `researchLabContract.ts`) with Workbench / Run Detail / Artifacts / Alpha
+    Bench, plus a **Research Lab Agents** section inside Settings → Models & keys.
+    The existing `research` view (dossiers) is untouched; the new key is `lab`.
+  - `paper_charges.py` gained brokerage/IPFT/DP/venue and a **corrected GST base**;
+    all new rates default to 0 so no existing number moved. `backtest.py` is
+    product-aware (was hardcoded MIS) and reports `sharpe`/`sortino`/
+    `profit_factor` as `None`, never NaN.
+  - **Verification:** backend 1321 pass with only the 2 pre-existing failures;
+    ruff + mypy clean on `bq/research_lab`; frontend 181 tests, typecheck and
+    production build clean; `bq init` on a scratch `BQ_HOME` applies **43**
+    migrations. **Not yet done:** a live browser smoke against the real DB (it
+    needs 043 applied and a model route configured).
+- **AI Hedge Fund is being ported in-process (28 Nov 2026, IN PROGRESS).** Plan:
+  `~/.commandcode/plans/aihf-in-process-port.md`, supersedes ADR-050. The sidecar
+  exists only because `aihf==2.7.2` pins `pandas<3`/`numpy<2`; in fact pandas is
+  **dead code** in it (a never-called `_compute_rsi`) and numpy is 4 files of
+  scalar stats, so the whole engine now runs inside this venv on our own data and
+  models. **ADR-052 is not written yet.**
+  - **Phase 1 DONE.** `bq/aihf/engine/` is vendored `hedge_fund` (MIT, LICENSE +
+    `PATCHES.md`). No pandas/numpy/langchain/textual/requests; `bq/aihf/engine/api.py`
+    replaces `run.py`. `paths.py` root is injected (`<BQ_HOME>/aihf`). Ken-French
+    breakpoints fetch removed. New dep: **pyyaml** (mandate YAML). Guarded by
+    `tests/test_aihf_engine_imports.py`, which imports the engine in a subprocess
+    and asserts no forbidden root is loaded.
+  - **Phase 2 DONE.** `bq/aihf/bridge/calendar.py` (IST, NSE holidays, weekday
+    fallback via `ExchangeCalendar`), `bridge/clock.py` (`NseDailyClock`;
+    installed into the engine through `clock.set_clock_factory`), `bridge/costs.py`
+    (`IndianEquityCosts` → `paper_charges.compute_charges`, matches to the paise).
+    `load_spec` refuses minute cadence + `universe:`; benchmark default is
+    `NIFTY 50`. `tests/test_aihf_market.py`.
+  - **Phase 3 DONE.** Migration **042_aihf_data.sql** (rebuilds
+    `fundamental_snapshots` to add `period_label` + `YAHOO` source, verified
+    incrementally 41→42; new `company_facts`, `earnings_events`).
+    `bq/aihf/data_store.py` (`CompanyFactsStore`, `EarningsStore`),
+    `bq/data/vendors/yahoo_fundamentals_vendor.py` (real reported quarterly
+    statements, `known_at = period_end + 45d`, skips quarters Yahoo cannot
+    support), `bq/aihf/bridge/data.py` (the engine's `DataClient` over the vendor
+    router + PIT stores), `bq/aihf/ingest.py` + job
+    `aihf.fundamentals.ingest` (disabled by default). Tests:
+    `test_aihf_bridge_data.py`, `test_aihf_fundamentals_ingest.py`,
+    `test_aihf_ingest.py`.
+  - **Phase 4 DONE.** `bq/aihf/bridge/llm.py` (`RouterLLM` over `ModelRouter` +
+    `complete_structured`), `bridge/personas.py` (`staff()` injects per-persona
+    clients + editable prompts), `bq/aihf/persona_prompts.py` (dependency-free
+    default text, asserted equal to the persona classes). Five `aihf_*` agent ids
+    in `DEFAULT_AGENT_ROUTING` + a **merge** so an existing DB gains them, agent
+    catalogue entries, editable `PromptDefinition`s, `MAX_AGENT_ROUTING_ENTRIES`
+    32→48. `LLMAgent` gained `system_prompt=` and `voice()`.
+    `tests/test_aihf_bridge_llm.py`.
+  - **Phase 5 DONE.** `runner.py` no longer owns a process: `AiHfRunner.start`
+    takes a callable body that runs in a worker thread with cooperative
+    cancellation, and the same `Progress` journal keys drive the UI and SSE.
+    `config.py` dropped the venv (`installed_version()` = `"in-process"`);
+    `runtime_env.py` is a pure key-free descriptor (no env building);
+    `registry.py`, `probe/` deleted. **The approval gate is now a true dry run:**
+    `PaperStore.preview` rebuilds the broker in memory and calls
+    `engine.predict_session`, writing nothing to the fund; `execute` appends that
+    exact record and `Ledger.append` re-verifies the hash and chain. No sandbox,
+    no `directory_digest`, one LLM spend per session. `routes.py` runs the
+    backtest in-process (`_backtest_body` → `engine.run_backtest`), refuses
+    `model_override` with 422, and dropped the Financial-Datasets key routes.
+    `api.py` installs the NSE clock at startup. New `bq/aihf/wiring.py` builds the
+    data client. Tests rewritten: `test_aihf_api.py`, `test_aihf_runtime_env.py`,
+    `test_aihf_parsing.py`; new `tests/test_aihf_gate.py` (preview writes nothing,
+    tampered/stale preview refused, broker matches record).
+  - **Phase 6 DONE.** UI: `AiHedgeFundPanel` drops the sidecar banner, the
+    `EXTERNAL ENGINE` eyebrow, and the model-override select; copy now says the
+    engine is in-process and prices sessions as "computed without touching the
+    fund". `SettingsConfigPanel` replaces the Financial-Datasets key section with
+    a note (no data key exists). `just aihf-install`/`aihf-status` removed;
+    `.gitignore` drops `.aihf-venv`; README rewritten. **ADR-053** added and
+    ADR-050 marked superseded (ADR-052 was already taken by tool calling).
+  - **Phase 7 DONE.** Verified: **migration 042 applied to a copy of the owner DB
+    (at 41, with 6 settings keys and the live `paper-main` account) → 42, all
+    preserved, integrity ok.** Persona routes merge into the real routing row
+    (existing routes kept, 20 total, `aihf_buffett` → reasoning/GEMINI). Live
+    server on a throwaway DB: status/version/models correct, mandate create 201,
+    minute + universe mandates 422, fund create 201 on RELIANCE/TCS, halt →
+    preview AND execute both 409 → resume → ledger `chain_verified`. End-to-end
+    engine backtest trades and charges ₹505 on a ₹10L round trip (matches
+    `paper_charges`). **Fixed a real defect found only by running it:** PEAD
+    accepted only SEC `8-K` and so abstained on every Indian `RESULT` filing —
+    now `RESULT` is an announcement source (`tests/test_aihf_pead.py`).
+  - **Import graph:** the vendored engine loads **no** pandas, numpy, langchain,
+    textual or requests (subprocess probe). `pyyaml` is the one new dependency.
+  - **Next:** nothing outstanding for this port. Intraday funds, `universe:`
+    screening, a second market, and a scheduler job to advance funds unattended
+    are future work.
+  - **Next migration number is `043`.**
+  - Suite: 1205 pass; the same 2 pre-existing failures (`test_logbook`,
+    `test_phase5_acceptance`). mypy: zero errors in `bq/aihf/**` and
+    `yahoo_fundamentals_vendor.py`; the 49 remaining are the documented
+    pre-existing ones. Frontend: 174 tests, typecheck and build pass.
 
-The checked-in frontend bundle is generated from `bharatquant/web`. After
-changing the frontend, run `npm run build` in `bharatquant/web` so the packaged
-SPA stays synchronized with its source.
+- **Native tool calling (28 Nov 2026):** agents now get a real tool protocol
+  instead of prose. `ToolSpec.input_schema()` renders one JSON Schema;
+  `complete()` takes `tools`/`tool_call`/`tool_result`; Bedrock nests them under
+  `toolSpec.inputSchema.json`, OpenAI uses `tools`/`tool_calls`, Gemini uses
+  `functionDeclarations`. **The round trip was missing for every provider** —
+  a native call's result went to text history only, so turn 2 had no record of
+  the call and re-requested the same tool. `run_agent_loop` now stages the
+  executed call and result for the closure to replay exactly once. Verified
+  against a capturing mock: 9 tool specs reach `converse`, and turn 2 sends
+  `assistant[toolUse]` → `user[toolResult]` → prompt with no repeat call.
+  `map_finish_reason` learned `TOOL_USE`. ADR-052.
+  - Agents are configured in one step: `POST /api/v1/settings/bedrock/apply`
+    (UI: **Use Bedrock for all text agents**) points the reasoning and flash
+    tiers at a Bedrock model — **11 of 15 agent roles**. The 4 decision agents
+    stay on TypeSafe Jev by design. Verified live: `/api/v1/agents` resolves
+    7 text roles to BEDROCK, 4 to TYPESAFE_JEV.
+  - The prose `tools_prompt()` stays in the prompt as the fallback path, so a
+    provider without native tool use keeps working.
+  - Test doubles for `ModelClient`/`ModelRouter` must accept the new optional
+    kwargs; `tests/test_bedrock_tools.py` covers schemas, both wire shapes and
+    the loop.
+- **AWS Bedrock provider (28 Nov 2026):** `Provider.BEDROCK` is an **additive**
+  sixth provider — the five existing ones, their keys and the active selection
+  are untouched (asserted by test). Bedrock API keys are **bearer tokens**, not
+  AWS secret keys, so `BedrockClient` sends `Authorization: Bearer` and does no
+  SigV4. It speaks **`Converse`**, a third wire shape. Migration **041** widens
+  the `provider_api_keys` CHECK (verified incrementally: 40 → 41 with an
+  existing GEMINI key intact). New setting `bedrock_region` (validated as a bare
+  AWS region because it lands in a hostname; default `us-east-1`), saved via
+  `PUT /api/v1/settings/bedrock-region` and shown in Settings only when BEDROCK
+  is selected. `parse_usage` now reads `Converse`'s camelCase
+  `inputTokens`/`outputTokens` — without it every Bedrock call was recorded as
+  *unreported* usage. ADR-051.
+  - Model ids are region-namespaced (`us.anthropic.claude-sonnet-4-6`) and are
+    validated against `[A-Za-z0-9._:-]`, not path-escaped, because the id is a
+    URL path segment.
+  - Bedrock is a reasoning/flash provider; the decision tier still accepts only
+    TypeSafe Jev. **Not implemented:** Bedrock tool use (`Converse.toolUse`).
+  - Live-verified with a placeholder key: reached AWS, got 403, surfaced as 502
+    with no key echoed. A real key is needed for a successful completion.
+- **AI Hedge Fund tab (28 Nov 2026):** new **Build → AI Hedge Fund** tab
+  (`bq/aihf/`, `web/src/AiHedgeFundPanel.tsx`) over `aihf==2.7.2`
+  (`virattt/ai-hedge-fund` v2). It **cannot** share this environment: aihf
+  pins `pandas<3`/`numpy<2` and `uv` reports the lock unsatisfiable, its import
+  name is `hedge_fund` (not `aihf`), and it has no HTTP API. So it runs from a
+  sidecar venv (`just aihf-install` → `bharatquant/.aihf-venv`) as a
+  subprocess with a scoped env built from Settings and a private `HOME`. ADR-050.
+  - API: `/api/v1/aihf/{status,models,settings,mandates,backtest,backtests,
+    paper/*}`; reads need a session, writes need CSRF+origin; SSE progress on
+    `/backtest/{id}/stream`. `GET /aihf/settings` is the only projection of the
+    Financial Datasets key (masked).
+  - **Approval by adoption:** `aihf paper tick` has no dry run, so a preview
+    ticks a *copy* of the fund and approval copies aihf's ledger/broker/events
+    back. Nothing is re-serialised, so aihf's own hash check re-verifies it.
+    Kill switch is checked before preview state; head hash re-checked before
+    adoption. Verified: a failing preview left the live fund byte-identical.
+  - Key mapping is only what both sides share: `GEMINI→Google`,
+    `OPENAI→OpenAI`, `DEEPSEEK→DeepSeek`, `TYPESAFE_JEV→TypeSafe`. No
+    Anthropic/xAI/Kimi key exists in this app, so those models are listed but
+    not runnable. aihf's registry ids are placeholders — expect a first real
+    run to need an id the vendor actually serves.
+  - Sidecar is outside `uv.lock`, so `test_dependency_notices` is unaffected.
+    `.aihf-venv/` and `aihf/` are gitignored. **Not done:** scheduler job to
+    advance funds unattended (`aihf paper run` supervision), and the x402
+    keyless data path.
+- **Eval timeout 30 s (28 Nov 2026):** `defaultTest.options.timeout` in
+  `evals/promptfooconfig.yaml` is now 30000, not 15000. At `num_predict: 512`
+  an 8B model needs ~12.6 s here (40.6 tok/s) but a 14B reasoning model needs
+  ~20 s (25.8 tok/s), so 15 s truncated the 14B mid-JSON and scored it a
+  timeout. `latency_under_10s` is unchanged and still scores the 14B 0 — that
+  is the intended comparison, not a bug.
+- **Ollama runtime is 0.14.2 (28 Nov 2026):** `gemma4:12b-mlx` and
+  `qwen3.5:9b` are stored in the new `tensor`/safetensors manifest format this
+  build cannot load — they fail at generation while still reporting
+  `installed: true` (the check is name-based off `ollama list`). Registry holds
+  four explicit entries: granite4.2:8b (router) and deepseek-r1:14b (reasoning)
+  work; the two above need an Ollama upgrade past 0.40, or removal.
+- **Local model registry (28 Nov 2026):** open-source models can be added from
+  **Model Evals**, pulled with `ollama pull`, benchmarked, and then selected in
+  **Settings → Models & keys**. `bq/local_models.py` owns a bounded `LocalModel`
+  registry stored in `app_settings.local_models` (no migration); an explicitly
+  emptied registry stays empty, and only an absent key seeds the three shipped
+  YAML providers. Each eval run generates its own `promptfooconfig.yaml` in the
+  run artifact dir (providers block replaced, anchor/assertions kept, dataset
+  path absolute) — the tracked `evals/promptfooconfig.yaml` is never mutated.
+  API: `GET/POST/DELETE /api/v1/models`, `POST /api/v1/models/pull[/cancel]`;
+  `/evals/config`, `/evals/runs` and `/evals/promote` now read the registry.
+  Presence uses `ollama list` (`installed: null` = unknown); pulls run one at a
+  time with bounded output. Local models route through `CUSTOM`; a keyless
+  loopback `custom_endpoint` now counts as configured, and saving a tier derives
+  the endpoint from the selected model (one local endpoint at a time). UI: a
+  Local models section (add/pull/remove) in Model Evals and a registry-backed
+  datalist on the tier model fields. ADR-049.
+- **Empty scorecards fixed (28 Nov 2026):** `--filter-providers` is a single
+  **regex** in Promptfoo, not a comma list. The runner joined selected ids with
+  commas, so any multi-model selection matched no provider, ran zero cases and
+  wrote a header-only `scorecard.csv` while the run showed "completed". It now
+  passes `^(?:id1|id2|…)$` with each id escaped, and a run with zero case results
+  is marked **failed** ("Promptfoo produced no case results") instead of
+  completed, so an empty scorecard can no longer look successful. Existing
+  empty runs are historical; re-run to get scores.
+- **Node preflight for evals (28 Nov 2026):** the runner now picks the first PATH
+  `node` that satisfies Promptfoo's engine range (`>=22.22.0`) and prepends its
+  directory, so a shadowing `/usr/local/bin/node` (22.17) no longer breaks
+  `npx promptfoo@latest`; it fails fast with a clear message if none exists.
+- **Agent harness unification (28 Nov 2026):** every agent now shares one
+  config-driven harness. `ResearchAgent` routes through `ModelRouter` (so a
+  promoted local model in Model Evals actually applies to the Agent Console),
+  `research`/`news_research` prompts are editable from the Agent Lab, a new
+  `GET /api/v1/agents` catalogue drives one tab per agent, loop-agent runs are
+  persisted (`agent_runs`/`agent_run_steps`, migration **040**) with history in
+  the Agent Console, and `bq/services.py` centralizes wiring for the scheduler.
+  **ADR-048 is implemented:** `ModelRouter.complete` sends any call naming a
+  registered `TaskDefinition` through `LLMGateway` (manifest, schema validation,
+  citation check, attempt record); generic text keeps the synthetic route path.
+  No task definitions are seeded yet, so production behaviour is unchanged until
+  one is registered.
+- **Model Evals tab (28 Nov 2026):** a new **Build → Model Evals** page benchmarks
+  local Apple Silicon LLMs (Gemma 4 12B, Qwen3.5-9B, Granite 4.2 8B) against the
+  50-case trading golden set via Promptfoo. Migration **039** adds `eval_runs` +
+  `eval_model_scores`; the partial unique index `eval_runs_single_active` is the
+  single-run lock (a second `POST` is a 409). `bq/evals/` holds `config.py`
+  (stdlib parser for our `evals/promptfooconfig.yaml` + CSV categories),
+  `store.py`, `scoring.py` (imports the repo-root `evals/score_promptfoo_results.py`
+  by path), and `runner.py` (one sequential `npx promptfoo@latest eval
+  --max-concurrency 1` process, `PROMPTFOO_DISABLE_TELEMETRY=1`, SIGTERM cancel,
+  scorecard.csv export). API: `/api/v1/evals/{config,runs,runs/{id},
+  runs/{id}/cases,runs/{id}/cancel,runs/{id}/scorecard.csv,promote}`.
+  The bundle files live in `evals/` at the repo root. Promoting a winning model
+  writes `agent_routing` in SQLite and mirrors a readable `config/agent_settings.yaml`
+  (projection only; SQLite is truth). A real local endpoint now works:
+  `Provider.CUSTOM` may be keyless and `OpenAICompatClient` accepts loopback HTTP.
+  - **Live sweep verified (28 Nov 2026):** Node **26.13.1** (Homebrew;
+    `/opt/homebrew/bin` prepended in `~/.zshrc` because a root-owned
+    `/usr/local/bin/node` v22.17 shadowed it) and **Ollama 0.40.19** (Homebrew).
+    `POST /api/v1/evals/runs` → Promptfoo → Ollama generated for real; the run
+    `completed` with 20 cases and a persisted scorecard. Three bugs were found
+    and fixed only by running it:
+    1. `categories` were stored but never passed to Promptfoo → now
+       `--filter-metadata category=a,b` (10+10 cases, not 50).
+    2. Models rambled past 2,400 tokens per case → `num_predict: 512` on every
+       provider (and `failOnError: false` so a slow case aborts, not hangs).
+    3. **Exit code 100 means "some tests failed", not a crash** — the runner
+       discarded a perfectly good `results.json`. It now scores whenever the
+       file exists and only marks `failed` when there is no output.
+  - **Full three-model sweep (28 Nov 2026).** All three models pulled (~17 GB in
+    `~/.ollama/models`, 30 GB total) and scored through the app, one at a time,
+    `earnings` + `noise_filtering` (20 cases each). Two more fixes came only
+    from running it:
+    - **`think: false` on every provider.** Reasoning generation was most of
+      granite's latency *and* the source of the prose. With it off granite went
+      **0/20 → 12/20**, p50 **15.3 s → 2.9 s**, JSON parse 0% → 85%.
+    - **CUSTOM endpoint path bug.** `OpenAICompatClient` POSTed to `self.endpoint`
+      verbatim, so the documented Ollama base `http://127.0.0.1:11434/v1` 404'd
+      (needs `/v1/chat/completions`). Promote therefore *looked* fine but could
+      never actually call the model. The client now accepts either a base or the
+      full completions URL.
+  - **Results (20 cases, 10 earnings + 10 noise):**
 
-## Latest checkpoint — development skills
+    | Model | Overall | Task acc | JSON parse | p50 | p95 | Brier ↓ | ECE-5 ↓ | Calib N |
+    |---|---|---|---|---|---|---|---|---|
+    | Gemma 4 12B (MLX) | 65% | 65% | 100% | 2255 ms | 4262 ms | 0.311 | 0.330 | 20 |
+    | Qwen3.5-9B | 60% | 65% | 100% | 2301 ms | 6049 ms | 0.372 | 0.378 | 20 |
+    | Granite 4.2 8B | 60% | 60% | 85% | 2942 ms | 13538 ms | 0.375 | 0.456 | 17 |
 
-Added repository-scoped Copilot instructions and focused Clean Software
-Craftsmanship, Graphify, and Ponytail skills under `.github/`. The project
-README documents how contributors should apply them. Clean Software
-Craftsmanship's existing full source remains canonical. The project guidance
-does not install Ponytail's plugin or slash commands, and neither tool is a
-BharatQuant runtime dependency.
+    Gemma wins on latency, calibration and consistency; it is also the only model
+    at **10/10 on `earnings`**. All three score **0.3 on `noise_filtering`**:
+    they read the rumour/explainer text correctly (ticker, `event_type: noise`,
+    `extracted_numbers: []`) but answer with confidence 0.9–0.95 against the
+    0.65 cap — i.e. the filter works and the models are over-confident, which is
+    exactly what the Brier/ECE columns exist to show.
+  - **Promote verified live:** gemma promoted to `news_research` wrote the SQLite
+    route + the `config/agent_settings.yaml` mirror, and the role then resolved
+    to `CUSTOM`/`gemma4:12b-mlx` and returned a real completion from Ollama.
+- **Operational logging (26 Nov 2026):** `bq/logbook.py` records every LLM call
+  (full system/prompt/response, provider/model/tokens/latency/outcome) and every
+  model, final-gate, campaign and trigger decision. Entries buffer in
+  `<BQ_HOME>/logs/.pending.jsonl` and flush to `bq-YYYY-MM-DD.jsonl` every 15
+  minutes (asyncio loop + `logs.flush` job + record-time fallback); retention
+  defaults to 14 days and is owner-configurable. Controls and a log viewer live
+  in **Settings → Logging**; API `GET/PUT /api/v1/logs` and
+  `POST /api/v1/logs/flush`. No migration: settings live in `app_settings.logging`.
+- **Catalyst campaign delivered (26 Nov 2026):** the news → catalyst →
+  shortlist → deterministic TA/plan → breakout-trigger → paper fill → 5pm review
+  loop is wired end to end. Migration **038** adds `equity_master`,
+  `news_catalysts`, `campaigns`, `campaign_items`, `campaign_item_events`.
+  New modules: `data/equity_master.py` + `infra/equity_listing.py` (bounded NSE
+  listing), `catalysts.py` (event taxonomy, polarity, ₹-crore strength, alias
+  attribution), `shortlist.py`, `campaign_config.py`, `campaign.py`,
+  `triggers.py`, `campaign_feedback.py`, and `analysis/builder.py` (shared
+  pipeline builder; `api.py` delegates to it). Yahoo is registered for
+  `BARS_INTRADAY`, so delayed 5-minute NSE candles work without Kite.
+  - Entry is a breakout above the previous session high with a 0.5% chase cap.
+    Plans are swing/CNC, so exits are T+1 (delivery settlement) — the trigger
+    engine manages entries and exits from 09:15 to 15:15 every 5 minutes; the
+    campaign owns its stop/target (no duplicate `paper_stops` row).
+  - Default analysis is `deterministic` (no LLM, zero token cost for 8 names);
+    `analysis_depth="full"` opts into the existing debate pipeline.
+  - The evening report now carries a "Campaign review — what to change tomorrow"
+    section with per-catalyst hit rates and the Bayesian-smoothed weights the
+    next shortlist applies.
+  - UI: new Daily → **Campaign** tab (pipeline stages, candidates, trigger
+    levels, fills, review, settings) and a Today status card. API:
+    `/api/v1/campaign/*`, `/api/v1/settings/campaign`,
+    `/api/v1/equity-master/*`. Jobs: `campaign.research` 08:05 and
+    `campaign.triggers` every 5 minutes.
+  - News is multi-source by default: Pulse plus two Google News `when:7d`
+    queries for order wins and results. Lookback is 96 hours; publisher suffixes
+    are stripped, listicle headlines are skipped, and the longest company name
+    wins over a parent ticker. Residual attribution errors are visible in the
+    candidate table and are what the 5pm hit-rate table is meant to correct.
+  - Caveats surfaced in UI/report: Yahoo candles are ~15 min delayed;
+    `calendar_sessions` is empty so session gating uses a weekday/time fallback;
+    unmatched corporate headlines are counted.
+- **Live paper run (26 Nov 2026, 21:05 IST):** migration 038 applied to the
+  owner DB (backup at `~/Backups/bq-pre-campaign-20261126.db`). `paper-main`
+  created with ₹10,00,000. Schedules version 1 seeded: `campaign.research`
+  08:05, `campaign.triggers` every 5 min 09:15–15:15, plus news/morning/stops/
+  square-off/evening/memory. The 27 Nov campaign `camp_20261127` is **ACTIVE**:
+  7 names shortlisted, 2 actionable — **LT** breakout above 4160.00 (stop
+  4008.88, target 4386.68) and **LCCPROJECT** above 136.63 (stop 121.45, target
+  159.40); DBL/NBCC/EMSLIMITED/TEXRAIL/ALEMBICLTD were rejected by the
+  deterministic gate. Server is running at `127.0.0.1:8000` (background task
+  `s83v01hj`). Next: 08:05 forced rebuild, 09:15–15:15 scans, 17:00 campaign
+  review. Run `just run` if the background process is gone.
+- Cloudflare tunnel fixed (26 Nov 2026): the panel never left "Waiting for
+  Cloudflare" and the tunnel had **never** once reached live (audit DB: 3 ×
+  `tunnel.start_failed`, 0 × `tunnel.started`). Two independent causes:
+  1. **UI polled once.** `CloudflareTunnelPanel` scheduled a single 1.5 s fetch
+     after Start and never rescheduled, so the badge froze on whatever that one
+     snapshot said.
+  2. **Liveness depended on public DNS.** `cloudflared` created the URL at ~4 s
+     and registered its edge connection at ~5 s on `quic`, but the health probe
+     called the public `*.trycloudflare.com` hostname. A brand-new name is
+     negatively cached by the ISP resolver (measured: system resolver NXDOMAIN
+     for ~80 s; Cloudflare DoH resolved in ~16 s), so the probe failed the whole
+     `HEALTH_TIMEOUT_SECONDS` window and killed a perfectly good tunnel.
+- Fix: the panel polls for as long as the backend reports a busy state, keeps
+  the last known status through fetch errors and retries, and leaves Stop usable
+  in any non-terminal state. The manager now gates on cloudflared's `Registered
+  tunnel connection` line and probes the **loopback origin**, not the public name;
+  failures append the last cloudflared `ERR` line; log lines bound at 600 chars;
+  `request_start` is a no-op while live. Start/health budgets: 60 s / 20 s.
+- Verified end-to-end against real cloudflared: reaches **live in 6–8 s**, poll
+  loop terminates, host gate returns **200** for the tunnel host. The owner's own
+  browser may still need ~a minute to resolve a brand-new hostname (noted in the
+  panel and README).
+- Caveat to expect: a `cloudflared` child may outlive a `bq serve` started before
+  this fix; restart the server to pick up the backend change.
+- Startup fixed (26 Nov 2026): the local dev DB had been initialised from a
+  pre-commit draft of `034_reports.sql` (its `prediction_details.kind` CHECK
+  lacked `STANCE`), so `bq init`/`doctor` aborted with "Migration history
+  differs". Repaired in place; owner password, Gemini key and settings preserved.
+  Backup at `~/Library/Application Support/BharatQuant/bq.db.bak-*`. A fresh DB
+  applies all 37 migrations cleanly. `_applied_count` now names the first
+  divergent migration.
+- UI restructured (26 Nov 2026): sidebar groups are Daily (Today,
+  Opportunities, Trade), Analyze (Research, Technical, Reports), Build
+  (Strategy, Agent Lab), Operate (Data, Schedules) and System (Settings, How to
+  use). Data and Schedules are now top-level tabs; Settings narrowed to four
+  sub-tabs (Overview, Models & keys, Risk & execution, Runtime & network);
+  Today is a read-only command center of linked summary cards. `SchedulesPanel`
+  and `OpportunitiesPanel` were previously built but never mounted; both are
+  now wired. `PaperAccountStatus.tsx` was removed as redundant. Frontend
+  typecheck, 119 tests and the production build pass.
+- Single-owner, paper-only Indian equities system. **No broker order path**; Kite
+  is read-only. Paper execution is the only execution path.
+- Phases 1–19 are implemented: decision/Jev layer, agents, Strategy desk, paper
+  execution/realism, memory, confidence, opportunities/shadows, scheduler,
+  reports, backtests, research dossiers and runtime hardening.
+- **Verification:** 1110 backend tests collected, 1108 pass (the same 2 pre-existing failures
+  unchanged), 174 frontend tests; ruff/format clean; frontend typecheck/build
+  clean; `bq/local_models.py` and `bq/evals` are mypy-clean; a fresh DB applies
+  **41 migrations** (`041` is the Bedrock provider migration). Three real local sweeps and a live promote completed
+  end to end (see Model Evals above).
+- **mypy:** pre-existing errors remain in `cli.py`, `triggers.py`, `campaign.py`,
+  `campaign_feedback.py`, `catalysts.py`, `reports/engine.py`,
+  `infra/scheduler.py` and some test fakes. Do not “fix” them as part of
+  maintenance; the Model Evals change adds none.
+- **Next migration number:** `042` if a new migration is needed.
+- **Known pre-existing test failures:** `test_logbook` (filename is hard-coded to a
+  date, breaks off that day) and `test_phase5_acceptance` (produces no paper plan).
+  Both fail without this change too; do not attribute them to Model Evals.
 
-Graphify is an optional local developer tool. Keep extraction local and
-code-only, and verify graph findings against source and tests.
+## Phase 19 delivered
 
-## Scope and decisions
+- `bq/runtime.py`: owner runtime snapshot (DB/WAL/free disk, integrity,
+  migration count, job leases/stale jobs, table counts), Prometheus text metrics,
+  verified online SQLite backup with SHA-256 manifest, guarded restore with a
+  `bq.db.pre-restore` copy, and deterministic `bq bench` smoke timings.
+- CLI: `bq db backup`, `bq db restore --confirm`, `bq bench`; just targets
+  `bench`, `backup` and `restore`.
+- API: `GET /api/v1/system/status`, `GET /api/v1/system/metrics` and the
+  owner-authenticated `WS /api/v1/events` runtime snapshot feed.
+- Runtime card for health, storage, job leases and issues; it now lives in
+  Settings → Runtime & network (v1.1), not Today.
+- `docs/runtime-operations.md`: launchd/caffeinate, sleep/wake, backup/restore,
+  metrics and failure policy.
+- Tests: health/stale lease, backup/restore round-trip, metrics, WebSocket
+  snapshot, CLI commands and frontend contract.
 
-- Requirements: [trading agent plan.md](./trading%20agent%20plan.md). The [approved implementation plan](<C:/Users/apatha08/.copilot/session-state/6ccb5309-4c8d-4c32-a97f-865ae2c68ffa/plan.md>) is the more detailed work breakdown; if the session file is unavailable, use the source and decisions below.
-- Personal Apple Silicon Mac, one owner, paper trading only. Seed `AUTO` paper approval, but never bypass deterministic risk, promotion, reconciliation or kill controls.
-- Schedules and runtime windows are editable. Default morning/evening jobs at 08:00/17:00 IST; keep-awake defaults to 07:45–17:30. Never backdate missed work.
-- Delayed intraday data defaults to `WARN`; critically stale or invalid data still blocks new entries. Unavailable LLM confidence review permits labeled `RULES_ONLY` after deterministic gates pass. A known veto still stands.
-- Verify current exchange rules, terms, licenses and platform capabilities before enabling dependent features. Prefer vetted dependencies and original code/prompts; do not copy external source or prompts.
-- Apply [Clean Software Craftsmanship](./clean-software-craftsmanship/SKILL.md): small verifiable increments, domain policy independent of infrastructure, clear failures at boundaries, tests for the risk being changed.
-- Apply the repository's [Copilot skill instructions](./.github/copilot-instructions.md): use the relevant Clean Software Craftsmanship, Graphify, and Ponytail guidance on future development tasks. Keep Graphify local and code-only; verify graph findings against source and tests.
+## Remaining roadmap
 
-## Deferred external-access checklist
+The original phase roadmap ends here. There is no Phase 20. Future work is
+maintenance/optional breadth:
 
-Complete these tasks last on a separate machine with authorized access. Do not
-bypass this machine's network policy. Record the source, retrieval date,
-effective date, applicability and review outcome before enabling the affected
-features.
+1. Playwright browser E2E and longer chaos runs.
+2. Full XBRL/PDF ingestion and YouTube transcript extraction.
+3. Deeper walk-forward optimization and strategy-to-Trade promotion.
+4. Automated backup scheduling/retention and external alerting.
+5. Live broker integration only with a new explicit ADR; current boundary forbids
+   it.
 
-- [ ] Review [NSE market timings](https://www.nseindia.com/static/market-data/market-timings), special sessions and the applicable holiday calendar; record date-specific rules and owner review before enabling session-dependent work. Requests timed out here; a firewall cause is not confirmed.
-- [ ] Review official NSE market-data licensing, distribution and permitted-use terms, plus candidate EOD/intraday source capabilities and permissions. NSE requests timed out here; do not activate an adapter based on an unverified claim.
-- [ ] Review official Gemini API terms, privacy, eligible models, pricing and quota/reset behavior. Access was denied by this machine's network policy; do not enable Gemini or assume free-tier privacy.
-- [ ] Review official DeepSeek API terms, privacy, eligible models, pricing, quotas and usage reporting. The documentation returned HTTP 403 here; the cause is not established.
-- [ ] After the above reviews, record approved sources and effective dates in [external-source-gates.md](./bharatquant/docs/external-source-gates.md), complete authorized provider contract/smoke tests with owner-supplied credentials, and enable only the capabilities supported by the evidence and applicable policy.
+## Invariants
 
-Separate from network access, GitHub CI, project-license decisions and testing
-on the owner's Apple Silicon Mac remain open; see the checkpoint below.
+- Paper only; Kite read-only; no broker order path.
+- LLMs never compute prices, sizing, P&L, exposure, valuation or thresholds.
+- Point-in-time `as_of`; no look-ahead. Predictions frozen before the window.
+- Deterministic code owns rules, charges, settlement, stops, scoring, valuation,
+  gates and risk.
+- Strategy versions, backtest runs, research notes and fundamental snapshots are
+  immutable; reviews/events are append-only.
+- One lease/fencing job store; run handlers only in the worker.
+- Owner auth, origin + CSRF on writes, `no-store` private reads.
+- Backups are read-only snapshots; restore requires explicit confirmation.
+- Schedule times/windows are configuration, never UI hard-coding.
 
-## Work packages
+## Relevant module map
 
-| ID | Status | Deliverable |
-| --- | --- | --- |
-| P0 | In progress | Foundation: backend/CLI, web shell, security, CI and external verification |
-| P1 | Complete (offline) | Seedless calendar, point-in-time data, offline CSV import, durable jobs, dependency-aware daily/interval schedules, paper accounts, exact-paise OMS, fills/positions reconciliation, TWR/XIRR primitives and caller-supplied point-in-time universe publishing; live adapters, verified market facts and live/broker behavior remain excluded |
-| P2 | In progress | Offline context, task-definition registry, eligibility checks, attempt ledger and provider-blocking gateway; private-provider evidence, actual clients and full privacy controls remain incomplete |
-| P3 | In progress | Binary scoring plus immutable frozen predictions/resolutions and append-only outcome audit; reports, archive and evidence-backed coverage remain incomplete |
-| P4 | In progress | Deterministic evidence/confidence gate and immutable opportunity/shadow tracking; chart/volume provider evidence and live calibration remain incomplete |
-| P5 | In progress | Fixed-fractional sizing plus deterministic risk/approval gates and immutable decisions; authoritative accounts are offline, execution and accounting remain incomplete |
-| P6 | In progress | Strategy lifecycle, replay contamination guard and point-in-time replay cursor; backtest engines and strategy promotion persistence remain incomplete |
-| P7 | In progress | Typed in-process DAG runner with optional-node and risk/execution invariants; node persistence and asynchronous execution remain incomplete |
-| P8 | In progress | Filings and thesis data primitives with point-in-time publication/ingestion ordering; valuation and filing evidence remain incomplete |
-| P9 | In progress | macOS sleep-gap detection, launchd plist generation and benchmark regression contract; target-Mac UAT/backups remain incomplete |
+| Area | Files |
+|---|---|
+| Responsive shell | `web/src/Sidebar.tsx`, `web/src/TableScroll.tsx`, `web/src/styles.css`, `web/tests/responsive.test.mjs` |
+| Runtime | `bq/runtime.py`, `bq/cli.py`, `web/src/RuntimePanel.tsx` |
+| Tunnel | `bq/infra/tunnel.py`, `web/src/CloudflareTunnelPanel.tsx`, `web/src/tunnelContract.ts` |
+| Operations | `docs/runtime-operations.md`, `justfile` |
+| API/WS | `bq/api.py` system status/metrics/events |
+| Research | `bq/research_expansion.py`, `bq/fundamentals.py` |
+| Strategies | `bq/strategy_dsl.py`, `bq/backtest.py` |
+| Execution | `bq/paper_trading.py`, `bq/execution/` |
+| Campaign | `bq/campaign.py`, `bq/catalysts.py`, `bq/shortlist.py`, `bq/triggers.py`, `bq/campaign_feedback.py`, `bq/data/equity_master.py`, `web/src/CampaignPanel.tsx` |
+| Logging | `bq/logbook.py`, `bq/infra/job_handlers.py` (`logs.flush`), `web/src/LoggingPanel.tsx`, `web/src/loggingContract.ts` |
+| Model Evals | `bq/evals/` (`config.py`, `store.py`, `scoring.py`, `runner.py`), `evals/*` (bundle), `web/src/ModelEvalsPanel.tsx`, `web/src/evalContract.ts` |
+| Local models | `bq/local_models.py` (registry, presence, pull), `bq/settings.py` (`local_models`), `web/src/modelsContract.ts`, Model Evals + `ModelsConfigPanel` |
+| AI Hedge Fund | `bq/aihf/engine/` (vendored `hedge_fund`, ADR-053) + `engine/PATCHES.md`, `bq/aihf/bridge/` (`data`, `llm`, `personas`, `clock`, `costs`, `calendar`), `bq/aihf/` (`service`, `routes`, `runner`, `config`, `wiring`, `ingest`, `data_store`, `persona_prompts`), `bq/data/vendors/yahoo_fundamentals_vendor.py`, `web/src/AiHedgeFundPanel.tsx`, `web/src/hedgeFundContract.ts`, `web/src/EquityCurve.tsx` |
 
-## Latest checkpoint — P2 through P9 offline foundations
-
-The development handoff now includes verified offline foundations for the
-authoritative model gateway, immutable predictions and outcomes, deterministic
-confidence/opportunities, persisted risk/approval decisions, strategy replay
-guards, typed DAG orchestration, filing/thesis records and macOS sleep/launchd
-benchmark primitives. The full backend suite passes 301 tests under the available
-Python 3.12 environment; Python 3.13, Node 22, Apple Silicon UAT and external
-provider verification remain target-environment gates. Live clients and market
-adapters remain disabled.
-
-## Latest checkpoint — wake-to-job dispatch
-
-Added `infra/dispatch.py` and `tests/test_dispatch.py`. `dispatch_one` converts
-a single `WakeDecisionRecord` with `WakeDecision.RUN` into a durable `JobRun`
-occurrence by looking up the effective schedule at the occurrence time, deriving
-a canonical occurrence key (`<schedule_id>:<scheduled_at_iso>`), and calling
-`JobRunStore.enqueue` with the schedule's `job_id` and `max_attempts`. Non-RUN
-decisions are silently skipped. `JobRunConflict` on parameter mismatch is
-surfaced as an error; matching parameters are idempotent. `dispatch_due` applies
-`dispatch_one` to a batch, continuing on errors. No automatic trigger, worker
-loop, dependency ordering or catch-up safety is implemented.
-
-Implemented in [bharatquant](./bharatquant/):
-
-- Python 3.13 package and CLI (`bq init`, `bq doctor`, `bq db migrate`, `bq calendar record-session`, `bq data import-eod-csv`, `bq data inspect-eod`, `bq data inspect-symbol`, `bq data inspect-snapshot`, `bq llm usage`, `bq serve`), with [locked dependencies](./bharatquant/uv.lock).
-- [SQLite bootstrap and migrations](./bharatquant/backend/src/bq/infra/database.py): WAL, transactional SQL migrations, version/checksum tracking, integrity check and audit-chain verification, and refusal to initialize a foreign database.
-- [FastAPI health endpoint and static SPA serving](./bharatquant/backend/src/bq/api.py) at `/api/v1/system/health`; `bq serve` binds to `127.0.0.1:8000`. Unknown API GET paths stay 404 rather than returning the SPA.
-- [Owner authentication](./bharatquant/backend/src/bq/auth.py), [additive authentication migration](./bharatquant/backend/src/bq/infra/migrations/002_owner_auth.sql), and [authentication tests](./bharatquant/tests/test_auth.py): interactive `bq auth setup`, Argon2id password hash, hashed session tokens, 12-hour sessions, persistent lockout after five failures for 15 minutes, host-only HttpOnly/SameSite=Strict cookie, origin and logout CSRF checks. Setup refuses to overwrite a password or accept input when terminal echo cannot be disabled. Existing databases must run `bq db migrate` first.
-- [Security audit log](./bharatquant/backend/src/bq/infra/audit.py) and [audit migration](./bharatquant/backend/src/bq/infra/migrations/003_audit_events.sql): redacted owner setup, successful sign-in, lockout and sign-out events; database triggers reject update, delete and replacement, and `bq doctor` verifies the hash chain. It detects partial or accidental changes, not a fully rewritten database without a separately retained trusted checkpoint.
-- [Calendar contract](./bharatquant/backend/src/bq/data/calendar.py) and [calendar migration](./bharatquant/backend/src/bq/infra/migrations/004_exchange_calendar.sql): append-only, owner-reviewed date records with source provenance and `known_at`/reviewed/recorded-time as-of selection. No exchange records are seeded; missing coverage raises an error. Additions are recorded in the security audit chain.
-- [Calendar coverage endpoint](./bharatquant/backend/src/bq/api.py) and [panel](./bharatquant/web/src/CalendarCoverage.tsx): owner-only, non-cacheable, read-only coverage for 1–31 dates, using one database snapshot and returning the selected retained session ID and times or `UNCOVERED`. The panel requires explicit exchange and date inputs, uses the device clock for `as_of`, and clearly labels uncovered dates unknown and owner review unverified. It cannot edit sessions or establish market/trading readiness. No exchange data is seeded.
-- [Calendar record command](./bharatquant/backend/src/bq/cli.py): `bq calendar record-session` requires explicit owner review confirmation, a credential/query/fragment-free HTTPS source, session state and actual timezone-aware boundaries where open. It captures knowledge and review at the local current time, appends the reviewed record and audit event, and uses OS permissions rather than web authentication. Owner review remains an assertion; consult the deferred external-access checklist before entering real rules. No fact is automatically fetched or verified.
-- [Point-in-time data record contract](./bharatquant/backend/src/bq/data/records.py) and [data migration](./bharatquant/backend/src/bq/infra/migrations/005_point_in_time_records.sql): append-only provider-neutral records for instruments, EOD bars, snapshots, filings and market statistics, with provenance, quality labels, canonical payload hashes and as-of selection that excludes later inserts. The migration seeds no facts; no live provider adapter or provider-backed ingestion API is enabled. Recorded times depend on the local system clock.
-- [Provider request contract](./bharatquant/backend/src/bq/data/providers.py): an internal exact-key, single-kind `as_of` query with a 256-key bound, explicit capability checks, ordered complete results and rejection of duplicate, mismatched or not-yet-known records. Provider errors propagate and unsupported capabilities do not call the provider. Tests use synthetic in-memory providers only. Source identity, capability and availability times are provider assertions; fetching historical-looking records does not establish that the application possessed them at `as_of`. There is no live adapter, ingestion connection, verified terms, calendar operation, range query, pagination, retry, rate limiting or fallback.
-- [Effective-dated symbol timelines](./bharatquant/backend/src/bq/data/instruments.py): internal, exact case-sensitive exchange/symbol mapping to instrument IDs using the existing immutable point-in-time record store. Each version has at most 256 non-overlapping, start-inclusive/end-exclusive date intervals; `as_of` filters both knowledge and local record times, and resolution returns the retained record ID and source/quality metadata. Missing dates and malformed newer timelines fail closed. No mapping is seeded; all newly recorded mappings are `UNASSESSED` source assertions, not verified or usable for trading. CSV imports do not yet normalize via these mappings; source authority, cross-source conflicts and independent instrument validation remain open.
-- [Symbol-source comparison](./bharatquant/backend/src/bq/data/instruments.py) and `bq data inspect-symbol` compare 1–32 caller-selected source IDs using each source's latest retained version available at `as_of`, read in one SQLite snapshot. Output reports record IDs, per-source instrument IDs and quality, and independently flags uncovered selections and conflicting instruments. The CLI uses OS permissions, not web authentication. A concurrent-write test confirms snapshot consistency. It does not enumerate unselected sources, assess authority, adjudicate conflicts or make an agreement verified; source IDs and owner-supplied records remain assertions. Existing single-source lookup behavior remains unchanged and is not connected to ingestion or trading.
-- [Data-to-context adapter](./bharatquant/backend/src/bq/data/context.py): resolves an exact retained record ID only if both its knowledge and record times are available at `as_of`, then builds a deterministic context item with stable source/version IDs, canonical data and the recorded quality label. It omits the source URL from rendered content and accepts URL-safe record IDs including `_` and `-` prefixes. Source metadata, quality, clock and classification are not independently verified; only payload hashes are checked, not metadata integrity. Other caller-created context items remain possible, so a future gateway must enforce trusted source selection. Imported data remains unassessed.
-- [Snapshot freshness diagnostic](./bharatquant/backend/src/bq/data/freshness.py) and `bq data inspect-snapshot` compare a caller-selected retained snapshot's event time with `as_of`, after checking knowledge and record times. Callers explicitly provide delayed and critical thresholds and choose `WARN`, `BLOCK` or `ALLOW` for delays; `ALLOW` still labels the snapshot delayed. The CLI bounds thresholds to one year and returns metadata/age without the payload, using local OS permissions rather than the web password. Threshold equality is not exceeded, but critical staleness, non-acceptable quality or missing event time blocks under all modes. Future event/record times, events after publication/receipt and records before knowledge time fail. Quality labels, timestamps, source identity and local clocks remain assertions; no quote provider, policy configuration, readiness check or order flow uses this diagnostic.
-- [Snapshot freshness API](./bharatquant/backend/src/bq/api.py) and [panel](./bharatquant/web/src/SnapshotFreshness.tsx) expose the same diagnostic for an explicitly entered retained snapshot ID and caller-selected thresholds. The authenticated read-only endpoint is non-cacheable, bounds inputs and returns source, quality, timestamps, age and policy but not the payload. The panel uses the device clock and makes its non-readiness limitations visible. There is no snapshot provider or record-discovery UI; source, quality and timestamps remain assertions. No execution or order gate uses this diagnostic.
-- [Record-backed context replay](./bharatquant/backend/src/bq/data/context.py) reconstructs included prompt entries from retained record IDs at the manifest's `as_of` and checks their content, identity, record/knowledge times, prompt/manifest order and hashes against the stored prompt. It fails on unsupported source types, missing or later versions, duplicates and mismatches. Dropped items are not reconstructed; selection ranking, system/schema, classifications, source authority and local clocks remain assertions. No gateway calls it and it does not protect against a complete database rewrite or establish privacy eligibility.
-- [Offline EOD CSV importer](./bharatquant/backend/src/bq/data/csv_eod.py), [CLI](./bharatquant/backend/src/bq/cli.py), and [import migration](./bharatquant/backend/src/bq/infra/migrations/008_data_imports.sql): bounded, atomic imports with explicit source/review provenance, adjustment and currency, decimal-string prices, duplicate-row rejection, idempotency and audit events. The CLI requires explicit terms-review confirmation and runs with the local OS user's permissions, not the web password. Inputs are marked `UNASSESSED`; owner attestation is not a legal review or source-quality verification. There is no CSV upload API, raw-file retention, instrument-master mapping, automatic calendar-aware completeness/outlier verification or trading use.
-- [Offline EOD quality diagnostic](./bharatquant/backend/src/bq/data/eod_quality.py) and [CLI](./bharatquant/backend/src/bq/cli.py): caller supplies up to 366 ordered expected dates, a source/instrument/adjustment, an explicit basis-point threshold and either exact retained record IDs or a single import ID. `bq data inspect-eod` checks the import manifest, selects only that import's matching records and prints JSON; it uses local OS permissions, not web authentication. The diagnostic verifies `as_of` availability and series consistency, checks OHLC/volume and units, reports missing dates and flags exact close-to-close changes strictly above the threshold, without comparing across a gap. It neither mutates quality labels nor persists incidents; selected records can be older revisions. Expected dates, threshold and source authority are caller assertions, not a calendar, corporate-action or legal review. No public API, readiness gate or trading integration exists.
-- The same command optionally derives expected bars from 1–31 calendar dates using `--calendar-exchange`, `--calendar-start`, `--calendar-end` and explicit `--assume-open-sessions-expected`. It requires coverage for every date and refuses open sessions not yet closed at `as_of` or ranges with no open sessions; output includes session IDs/states for all dates and bars in the selected import on closed dates. Closed-day bars are indicators, not verified errors. This assumes every open session needs a bar for the instrument and does not verify its exchange, listing, suspension or special-session eligibility. Calendar and data reads use separate snapshots. Owner-recorded facts, source authority, local clocks and instrument eligibility are not independently verified; this remains a diagnostic rather than a readiness or trading gate.
-- [Authenticated data-status endpoint](./bharatquant/backend/src/bq/api.py) and [panel](./bharatquant/web/src/DataStatus.tsx): `/api/v1/data/status` returns non-cacheable historical import and record counts and up to 20 recent import identifiers, source IDs, UTC timestamps and counts, not imported rows, unique instrument counts or trading readiness. Both counts and history come from one database snapshot. It reports no live provider and labels imported data unassessed.
-- [Durable job-run core](./bharatquant/backend/src/bq/infra/jobs.py) and [job migration](./bharatquant/backend/src/bq/infra/migrations/006_job_runs.sql): unique job occurrences, bounded attempts, leased claims with per-claim fencing tokens, expired-lease recovery, stale-worker rejection and append-only run events. Generated URL-safe IDs and lease tokens beginning with `_` or `-` are accepted, including existing stored IDs. Job handlers still need idempotent side effects keyed by occurrence. Schedule triggering, workers, DAG dependency execution and APIs are not implemented.
-- [Daily schedule definitions](./bharatquant/backend/src/bq/schedules.py), [snapshot storage](./bharatquant/backend/src/bq/infra/schedules.py), and [schedule migration](./bharatquant/backend/src/bq/infra/migrations/007_schedule_versions.sql): immutable, audited configuration snapshots with optimistic version checks, dependency and implemented-job validation, timezone/window checks and read-only daily previews. A pure wake-policy decision handles on-time, skipped, expired and outside-window occurrences and rejects invalid/ambiguous occurrences. No jobs are registered or executed; session-event triggers, automatic wake processing, deadline validation, dependency execution and schedule editing remain to be implemented.
-- [Interval schedules](./bharatquant/backend/src/bq/schedules.py) extend the same immutable snapshots, wake decisions, bounded discovery and status previews. The configured local time is the first occurrence; subsequent occurrences are spaced by 1–1,440 whole minutes, through the inclusive operating-window end, then restart the next local day. Old daily snapshot JSON remains unchanged and readable. DST ambiguity or nonexistent local occurrences fail closed; exceeding discovery limits rolls back the batch. The status panel identifies the interval, start and end. These remain configuration and preliminary wake-policy eligibility only: no dispatch, automatic wake processing, market-day filtering, dependency execution or catch-up safety is implemented.
-- Daily and interval schedules can restrict occurrences to an ordered, nonempty set of local weekdays, numbered Monday `0` through Sunday `6`; existing snapshots without the field still mean every day. Previews, bounded discovery and direct wake decisions apply that selection, and the panel shows it. Weekdays are not a trading-day calendar: holidays and special sessions are not filtered.
-- [Schedule effective boundaries](./bharatquant/backend/src/bq/infra/migrations/012_schedule_effective_boundaries.sql) and [wake decision ledger](./bharatquant/backend/src/bq/infra/migrations/013_schedule_wake_decisions.sql): new snapshots have audited, append-only, strictly advancing effective times no earlier than their record times. Historical snapshots without a boundary remain readable but cannot be treated as effective; a later unbounded snapshot also makes historical selection fail closed. An explicitly requested occurrence is recorded once with the schedule version effective at its scheduled time; retries return the original decision and recorded observation time. The internal batch operation also discovers daily occurrences for a caller-supplied range, atomically records decisions and fails closed for legacy gaps, ambiguous local times or exceeded limits. It is not automatically invoked. Observation uses the local clock after the database write lock, before enumeration, not a trusted commit clock. `RUN` is preliminary wake-policy eligibility, not permission to execute: dependencies, job-specific catch-up safety and durable dispatch are not implemented. No jobs are enqueued or executed.
-- [Wake-to-job dispatch](./bharatquant/backend/src/bq/infra/dispatch.py): `dispatch_one` converts a `WakeDecision.RUN` record into a `JobRun` occurrence using the effective schedule at the occurrence time. `dispatch_due` batches multiple decisions with per-record error isolation. 19 tests in `tests/test_dispatch.py` cover idempotency, error paths, batch continuation and multi-schedule dispatch.
-- [Authenticated schedule-status endpoint](./bharatquant/backend/src/bq/api.py) and [panel](./bharatquant/web/src/ScheduleStatus.tsx): owner-only, non-cacheable `/api/v1/schedules/status` presents the latest and effective versions, the first 20 effective schedules and 20 recent wake decisions plus counts, all read from one database snapshot. Pending activation or missing historical boundaries are reported as unknown. For enabled daily or interval schedules, a read-only preview shows the next five occurrences after its observation time, assuming no configuration changes; it is withheld when a future version is pending or the next local time is ambiguous/nonexistent. It ignores calendars, dependencies and wake policies, and is not a guarantee of execution. The panel explicitly identifies `RUN` as wake-policy eligibility, not dispatch, and cannot edit or execute schedules.
-- [Context builder](./bharatquant/backend/src/bq/context.py), [manifest store](./bharatquant/backend/src/bq/infra/contexts.py), and [migration](./bharatquant/backend/src/bq/infra/migrations/009_context_manifests.sql): bounded, deterministic section ordering, point-in-time filtering against caller-provided knowledge/record times, duplicate/conflict detection, required-item and section protection, full-prompt budgeting via an injected counter, explicit drop reasons, exact prompt bytes and hashes. The system prompt, output schema and every item require classifications; the rendered-input classification excludes dropped items. The manifest is stored locally in plaintext; hash validation is not protection against a complete database rewrite. Source identities, classifications, timestamps and counter accuracy are not independently verified; dropped content is not retained and source-level reconstruction is not guaranteed. There is no model integration, trusted input classification or prompt-injection isolation. Do not use sensitive content before storage/privacy review.
-- [Model eligibility](./bharatquant/backend/src/bq/model_routing.py): rejects unreviewed terms/capabilities and data-handling permissions, private input on any free tier, and local reasoning/multimodal work. A local `SMALL` selection needs a matching task-version and model-fingerprint evaluation. Candidate and task metadata, classifications, review flags and evaluations are caller assertions, not a trusted registry or verified provider integration; no real routes are enabled.
-- [Offline context routing](./bharatquant/backend/src/bq/infra/context_routing.py): validates persisted manifest/task/model identity, rendered-item provenance and the rendered classifications before invoking eligibility checks. It fails closed for legacy manifests missing classification metadata and requires rebuilding for another model. It is not a gateway or authoritative privacy boundary; dropped private metadata remains in the manifest and must not be sent wholesale to a provider.
-- [Task definitions](./bharatquant/backend/src/bq/task_registry.py), [registry](./bharatquant/backend/src/bq/infra/task_registry.py) and [migration](./bharatquant/backend/src/bq/infra/migrations/011_task_definitions.sql): append-only, exact-version task policies, prompt/schema text and classifications, prompt/spec version identifiers, section limits and required sections, with idempotent writes and audit events. Registered-context routing checks system, schema, versions, classifications and actual rendered section counts against the selected definition. The registry starts empty, is writable by local code rather than an authenticated web session, and stores prompt/schema plaintext. It does not validate JSON Schema semantics, establish source selection or tokenizer accuracy, establish source or provider trust, specify timeouts/fallbacks, or protect against full database rewrites. Low-level routing can bypass the registry; do not dispatch until a gateway enforces trusted registry policy and privacy gates.
-- [Offline model-output validation](./bharatquant/backend/src/bq/model_output.py) checks existing task schemas at use time with JSON Schema Draft 2020-12 and an explicitly non-retrieving reference registry. It rejects invalid schemas, unresolved references, invalid JSON, duplicate keys, non-finite numbers, invalid UTF-8 scalar values and outputs over 1 MiB. Numeric comparisons use bounded exact decimals: literals are at most 512 characters and decimal adjusted exponents are limited to -308 through 308; fractional values return `Decimal` and require explicit serialization. No model content appears in the translated error messages. Definitions remain storable even if their schema is semantically invalid, preserving compatibility. Only trusted schemas should be used: regex/runtime complexity is not bounded. `format` is not asserted, and any `$schema` field must name the supported dialect even within literal data. Financial values still require domain-specific unit, precision and range validation. This is not a gateway, citation/fact/privacy check, repair loop or safety approval; it is not called by a model client.
-- [Offline registered-output verification](./bharatquant/backend/src/bq/infra/context_routing.py) composes exact registered-task/model eligibility checks, record-backed prompt replay and output schema validation. An optional immutable task `citation_path` specifies an object-key path to a nonempty array of exact source/version identity pairs; the verifier extracts and checks each pair against the replayed prompt, rejecting malformed, duplicate and unknown citations. Existing definitions without the field keep their original canonical representation and receive no citation check. It operates only on caller-supplied output and eligibility assertions, without dispatch. It does not check other paths, prove every claim is cited or entailed, prove which model produced a response, establish trusted source selection or privacy, inspect dropped content, or replace an enforcing gateway.
-- [Record citation identity checks](./bharatquant/backend/src/bq/data/context.py) replay the record-backed context and require each supplied source/version pair to have been included in that prompt. Empty or oversized lists and unknown or mismatched versions fail. Inclusion is not claim entailment, source authority, completeness or evidence of privacy. The registered-output helper invokes it only when the task version specifies a citation path; no gateway invokes it.
-- [Attempt ledger](./bharatquant/backend/src/bq/infra/model_attempts.py), [usage CLI](./bharatquant/backend/src/bq/cli.py), and [migration](./bharatquant/backend/src/bq/infra/migrations/010_model_attempts.sql): append-only intent and single terminal outcome with durable incomplete-attempt inspection, conflict prevention, consistent read snapshots and explicit reported/estimated/unknown/no-call usage including partial counts. Task/version/model JSON summaries separate reported from estimated totals and count missing input/output values without treating them as zero. The CLI uses local OS permissions, not the web password. An attempt references a stored prompt manifest and requires the same task ID, task version and model ID. No gateway, actual provider, cache, automatic recovery or external usage reconciliation uses it; no-call and usage values remain caller claims. SQLite/local-clock trust and plaintext-manifest limitations still apply.
-- [Authenticated usage endpoint](./bharatquant/backend/src/bq/api.py) and [panel](./bharatquant/web/src/UsageStatus.tsx): non-cacheable owner-only summaries for the first 20 task/version/model groups, with total group count and separate reported, estimated and unknown input/output usage. Token totals are serialized as decimal strings and displayed with `BigInt` to preserve precision. No model provider is connected; values are ledger assertions, not provider-verified billing.
-- [SPA security headers](./bharatquant/backend/src/bq/api.py): per-response nonce and `strict-dynamic` script policy, no inline-script allowance, explicit same-origin resource policies, and non-cacheable HTML so a cached nonce cannot mismatch its CSP header.
-- [Architecture decisions](./bharatquant/docs/architecture-decisions.md): paper-only boundary, local modular monolith, storage authority, market-data gates, task-class routing, durable schedules, local security and third-party reuse constraints.
-- [React/TypeScript/Vite shell](./bharatquant/web/): strict type-checking, responsive accessible status view, explicit offline state and retry, same-origin production health fetch, and local system fonts (no external font request). The build is included in the Python wheel.
-- [Frontend calendar](./bharatquant/web/tests/calendar.test.mjs), [freshness](./bharatquant/web/tests/freshness.test.mjs) and [schedule](./bharatquant/web/tests/schedule.test.mjs) contract tests: Node's built-in runner checks response identity, state and boundary cases. CI runs `npm test`; TypeScript stripping is experimental on the supported Node 22 line.
-- [UTC clock, exchange-time conversion and validated paise/quantity values](./bharatquant/backend/src/bq/core.py): both amounts are nonnegative integers, reject booleans and coercion, and allow zero. Order entry must independently enforce a positive quantity. No ledger or order execution exists yet.
-- [Fixed-fractional long sizing](./bharatquant/backend/src/bq/risk/sizing.py) computes whole shares from caller-supplied equity, cash, entry and stop prices in integer paise and a caller-supplied risk fraction in basis points. It floors the risk budget, limits quantity by both nominal stop-distance risk and gross entry cash, and rejects invalid stops and fractions. It sets no risk defaults, uses no verified quotes, accounts for no charges, slippage, gaps, taxes or short margin, and is not connected to accounts, order entry or a risk gate. A stop does not guarantee a maximum realized loss; never treat this calculation alone as permission to trade.
-- [Offline binary scoring](./bharatquant/backend/src/bq/reports/scoring.py) computes mean Brier score, log loss and a 95% Wilson interval for the observed positive-outcome rate from up to 100,000 caller-supplied resolved binary outcomes. Empty input yields unavailable metrics; impossible certainty is explicitly counted as unbounded log loss rather than clipped. A separate binary accuracy calculation uses an explicit caller-supplied positive threshold and a Wilson interval. The intervals describe sampled rates, not individual predictions. Calibration bins use explicit caller-supplied edges, with lower-inclusive/upper-exclusive bounds except the final upper bound, and retain empty bins without fabricating averages. Baseline comparisons require equal lengths and matching observed outcomes, but cannot independently verify prediction identities or baseline provenance. The caller must enforce prediction freeze, timing, outcome provenance and eligibility; coverage, small-sample labels, persistence and reports do not exist. No market-stance resolver is implied.
-- The same scoring module has a dated-input helper that rejects duplicate or future-created IDs, excludes predictions created at or after the evaluation window starts, and counts timely resolutions only when their asserted resolution time is at or before `as_of` and not before the window ends. UTC-instant comparison handles DST folds. Unresolved timely predictions and late predictions are counted separately. These input timestamps and outcomes remain caller assertions; this is not an immutable prediction registry, record-backed source check, full planned coverage or a historical model-cutoff check.
-- [Foundation tests](./bharatquant/tests/test_foundation.py) and a [lock-to-notice consistency test](./bharatquant/tests/test_dependency_notices.py). `bq serve` rejects a frontend directory missing its `index.html`, rather than starting with a broken shell.
-- [Project setup documentation](./bharatquant/README.md), [dependency/license inventory](./bharatquant/THIRD_PARTY_NOTICES.md), npm lockfile, ignored generated static build output, and Hatch configuration to include that output in wheels.
-- Pinned Hatchling at 1.33.0 in the build-system requirement and development lock; CI builds with `--no-build-isolation` to use the locked backend.
-- npm is used instead of the planned pnpm because pnpm was absent and Corepack failed signature validation; the signature failure was not bypassed.
-- [GitHub Actions workflow](./bharatquant/.github/workflows/ci.yml) configures Ubuntu and `macos-15` Apple Silicon checks, frontend install/build/audit, Python lint/type/tests, lock verification, idempotent CLI initialization, and wheel asset, freshness, model validator, scoring, sizing, dependency metadata and all thirteen migration checks. `npm audit` now runs in the correct `web` directory. Actions are pinned to release commit SHAs; the four selected action repositories were checked at those commits and report MIT licenses. CI pins uv to 0.12.13.
-- [External-source gates](./bharatquant/docs/external-source-gates.md) record checks and blockers: NSE pages timed out, Google AI documentation was denied by network policy, and DeepSeek documentation returned HTTP 403. No restricted access was bypassed; related provider and market behavior remains disabled.
-
-Verification on this Mac used Python 3.12.7 because Python 3.13 is not installed.
-The combined schedule, scheduler-runner and dispatch slices pass **74 tests**,
-and the changed Python files pass Ruff lint and format checks. The full Python
-3.13 suite and Node 22 frontend checks remain to be run on the target
-environment. The previous checkpoint passed **223 pytest tests** and **9
-frontend tests**; it did not include the lifecycle loop changes above.
-
-After adding `ALLOW`, Node 23.1.0 passed **9 frontend tests**, typecheck and an isolated Vite production build. Earlier, the in-project frontend build and offline npm audit passed. An isolated synthetic HTTP server and browser exercised the snapshot panel's successful result and invalid-threshold message before `ALLOW` was added; it did not test real authentication or a live provider. The temporary server was stopped. Pylance syntax checks passed for the changed Python files before `ALLOW` was added. The full backend suite, in-project frontend build and packaged wheel have not been re-run after the final `ALLOW` change.
-
-Earlier checks verified a wheel containing registered-output verification, freshness, time-aware/calibration/baseline scoring, sizing, model-output validation, the SPA index and thirteen migrations. Registered-output tests compose routing, exact task/schema identity, record replay and schema failure. Freshness tests cover the CLI's exact output, threshold boundaries, delayed modes, stale/quality blocks and inconsistent or unavailable timestamps. Scoring tests cover known Brier/log-loss/Wilson values, threshold accuracy, empty samples, impossible certainties, calibration boundaries, baseline alignment, late/pending predictions, as-of boundaries, DST folds and invalid/bounded inputs. Sizing tests cover risk and cash limits, flooring, zero, invalid inputs, large values and a range of integer invariants. Output tests cover exact decimal constraints and bounds, decimal context isolation, local and remote references, invalid stored schemas, nested duplicate keys, non-finite numbers, malformed/oversized/deep JSON and non-disclosing errors. Citation tests cover included and dropped records, other versions, forged content and bounded input. Tests also cover independently selected symbol sources, conflicting and uncovered results, corrections, as-of boundaries, malformed records, CLI output and concurrent snapshot consistency; scheduler tests exercise inclusive windows, a 1,000-occurrence limit, DST ambiguity/nonexistence, excluded weekdays, invalid occurrences, snapshot version changes, batch rollback, idempotency, authenticated preview and absence of dispatch. Earlier tests cover point-in-time data and context, calendar-aware EOD, record-backed replay, model routing and usage, leases, CSV imports and migration preservation. Pylance selected the host Python rather than the isolated test environment and reports missing `uvicorn`, `jsonschema` source and `referencing` imports; runtime and strict mypy checks used the isolated environment. Pylance diagnostics for context routing, freshness, scoring, sizing and the citation module were clean. A temporary synthetic HTTP server and browser accessibility snapshot verified the calendar panel's open/closed/uncovered states, invalid-range and invalid-response errors, and narrow viewport without horizontal overflow. An earlier synthetic check covered daily schedule preview; screenshot capture failed, so visual appearance was not inspected. Earlier isolated Edge checks covered private import and usage views, login and logout. Temporary servers were stopped.
-
-The workflow has not run on GitHub or Apple Silicon hardware.
-
-The workflow has not run on GitHub because the workspace has no Git repository; the Mac job and Node 22 frontend test execution are configured, not verified. Equivalent wheel-content checks passed locally; `actionlint` was unavailable for a recheck of the updated workflow (the earlier version passed actionlint 1.7.12). Hosted macOS CI may incur account charges. The inventory records package/license metadata and locked registry hashes but is not a legal review; full notices for redistribution and the BharatQuant project license remain undecided. WebSocket protections and a password-recovery workflow do not exist. Every future private route must explicitly enforce authentication, and state-changing routes must enforce origin and CSRF checks. Still pending: Apple Silicon macOS operation, provider or market-rule claims, and private-data and trading behavior. This is not an operational trading app.
-
-## Reproduce the checkpoint
-
-On the target Mac, from `bharatquant/`:
+## Commands
 
 ```sh
-uv sync --locked --python 3.13
+cd bharatquant
+PYTHONPATH=backend/src uv run --locked pytest -q
+PYTHONPATH=backend/src uv run --locked ruff check backend/src/bq tests
+PYTHONPATH=backend/src uv run --locked ruff format --check backend/src/bq tests
+PYTHONPATH=backend/src uv run --locked mypy backend/src/bq
+
 cd web
-npm ci
-npm test
-npm run build
-npm audit
-cd ..
-uv run --locked ruff check .
-uv run --locked ruff format --check .
-uv run --locked mypy
-uv run --locked pytest -q
+npm test && npm run typecheck && npm run build
+
+# operations
+BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq bench
+BQ_HOME="$HOME/Library/Application Support/BharatQuant" uv run --locked bq db backup --output "$HOME/Backups/bq.db"
+
+# operational logs (Settings -> Logging flushes manually; the loop runs every 15 min)
+tail -n 5 "$HOME/Library/Application Support/BharatQuant/logs"/bq-*.jsonl
+
+# ai hedge fund: vendored in-process (ADR-053), nothing to install.
+# Fundamentals are populated by the `aihf.fundamentals.ingest` job — enable it
+# on Schedules (off by default: one Yahoo request per symbol).
+
+# campaign (first run creates paper-main, saves defaults, seeds schedules)
+uv run --locked bq campaign init
+uv run --locked bq campaign refresh-master
+uv run --locked bq campaign research
+uv run --locked bq campaign scan
+uv run --locked bq campaign status
+uv run --locked bq campaign review
 ```
-
-On this Windows/OneDrive development host, clear inherited `VIRTUAL_ENV` and set `UV_LINK_MODE=copy`. The project-local `bharatquant\.venv\Scripts\bq.exe` was locked by another process, so dependency synchronization and checks used the isolated environment `C:\Users\apatha08\.copilot\session-state\6ccb5309-4c8d-4c32-a97f-865ae2c68ffa\files\schema-validation-env` via `UV_PROJECT_ENVIRONMENT`. Do not stop or interfere with the process holding the executable. Resync the project environment when it is safe; it does not yet include the new validator dependencies. Do not touch the unrelated `databricks_test` environment.
-
-## Resume next
-
-1. **Install Python 3.13** (`brew install python@3.13`) and run the full suite: `uv sync --locked && uv run --locked pytest -q`. Verify dispatch tests pass.
-2. Keep private data protected: every new private route must enforce authentication and every state-changing request must enforce origin and CSRF. Add and test WebSocket origin/auth controls if WebSockets are introduced; there are no WebSockets yet.
-3. **P1 offline complete**: scheduler lifespan, dependency dispatch, paper accounts, exact-paise OMS, reconciliation, TWR/XIRR and universe publishing are implemented and tested. Before P1 acceptance on the target Mac, run the 271-test backend suite and frontend build in Python 3.13/Node 22, verify external market/provider claims and provider adapters remain disabled, and add schedule/operator controls if job handlers are later enabled.
-4. Verify market/provider claims through authorized access before implementing features that rely on them. Complete legal review/full license notices if redistribution is planned and decide the project license.
-5. Run GitHub CI and test on the target Apple Silicon Mac, including frontend tests on Node 22. Do not add trading pages or mock balances. Keep P0 in progress and do not claim P1 acceptance until prerequisites and acceptance checks pass. Extend symbol normalization with independently reviewed source authority and conflict handling, then integrate it into ingestion without treating unassessed mappings as verified. Extend calendar-aware diagnostics with verified instrument/session eligibility, source authority and quality incidents before using them as readiness gates. Extend the provider contract for calendar, range and other use cases only with explicit provenance and coverage semantics; implement automatic wake processing and session/dependency semantics around the schedule and job-run stores. Before connecting wake decisions to execution, validate dependency occurrence identities, job-specific catch-up safety and durable dispatch, and prevent hindsight entries. Do not enable real adapters or seed external market facts before authoritative-source and terms gates pass.
-6. Continue P2 by making task definitions authoritative at the gateway boundary, including enforceable source-selection and citation requirements, output validation, route/fallback and timeouts; establish trusted model/privacy eligibility evidence and source classification, trusted source-version lookup, validated model-specific tokenization and comprehensive source-level context replay, including dropped content. Citation paths are currently optional, check only the configured array and do not establish claim coverage. Define the output serialization policy and resolve untrusted-schema resource limits before relying on output validation. Build a gateway that owns attempt accounting and cannot bypass registry policy. Keep model clients disabled until privacy, provider terms and source gates are verified. Protect plaintext task and manifest content and add prompt-injection defenses before accepting real data.
-7. Continue P5 with owner-reviewed risk limits, accounts, order state transitions, atomic reservations and independent safety gates before connecting the sizing calculation to any order flow. Keep short selling, execution and live trading disabled until their prerequisites are verified.
-8. Continue P3 after its P1/P2 prerequisites: frozen point-in-time predictions, evidence-backed outcome revisions, coverage and small-sample reporting, calibration/baselines and immutable reports. The isolated binary-score helper is not a prediction registry or report workflow.

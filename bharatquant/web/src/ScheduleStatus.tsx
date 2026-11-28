@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { formatUtc, isCount, isRecord, isTimestamp } from "./contracts";
+import TableScroll from "./TableScroll";
 
 import { parseInterval, parseWeekdays } from "./scheduleContract";
 
@@ -24,6 +26,17 @@ type Wake = {
   decision: WakeDecision;
 };
 
+type JobRun = {
+  run_id: string;
+  job_id: string;
+  occurrence_key: string;
+  scheduled_at: string;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  failure_code: string | null;
+};
+
 type Summary = {
   latest_version: number;
   observed_at: string;
@@ -31,24 +44,14 @@ type Summary = {
   schedules: Schedule[];
   decision_count: number;
   recent_decisions: Wake[];
+  job_run_count: number;
+  job_runs: JobRun[];
 } & (
   | { effective_state: "available"; effective_version: number; effective_at: string; schedule_count: number }
   | { effective_state: "not_configured" | "unknown"; effective_version: null; effective_at: null; schedule_count: null }
 );
 
 type Status = { state: "loading" | "error" } | { state: "ready"; summary: Summary };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isTimestamp(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
-}
 
 function parseSchedule(value: unknown): Schedule {
   if (
@@ -92,6 +95,32 @@ function parseWake(value: unknown): Wake {
   };
 }
 
+function parseJobRun(value: unknown): JobRun {
+  if (
+    !isRecord(value) ||
+    typeof value.run_id !== "string" ||
+    typeof value.job_id !== "string" ||
+    typeof value.occurrence_key !== "string" ||
+    !isTimestamp(value.scheduled_at) ||
+    typeof value.status !== "string" ||
+    !isCount(value.attempts) ||
+    !isCount(value.max_attempts) ||
+    (typeof value.failure_code !== "string" && value.failure_code !== null)
+  ) {
+    throw new Error("Invalid job run");
+  }
+  return {
+    run_id: value.run_id,
+    job_id: value.job_id,
+    occurrence_key: value.occurrence_key,
+    scheduled_at: value.scheduled_at,
+    status: value.status,
+    attempts: value.attempts,
+    max_attempts: value.max_attempts,
+    failure_code: value.failure_code as string | null,
+  };
+}
+
 function parseSummary(value: unknown): Summary {
   if (
     !isRecord(value) || !isCount(value.latest_version) || !isTimestamp(value.observed_at) ||
@@ -100,7 +129,9 @@ function parseSummary(value: unknown): Summary {
       value.effective_state !== "unknown") ||
     !Array.isArray(value.schedules) || value.schedules.length > 20 ||
     !isCount(value.decision_count) || !Array.isArray(value.recent_decisions) ||
-    value.recent_decisions.length > 20 || value.recent_decisions.length > value.decision_count
+    value.recent_decisions.length > 20 || value.recent_decisions.length > value.decision_count ||
+    !isCount(value.job_run_count) || !Array.isArray(value.job_runs) ||
+    value.job_runs.length > 20 || value.job_runs.length > value.job_run_count
   ) {
     throw new Error("Invalid schedule status");
   }
@@ -111,6 +142,8 @@ function parseSummary(value: unknown): Summary {
     schedules: value.schedules.map(parseSchedule),
     decision_count: value.decision_count,
     recent_decisions: value.recent_decisions.map(parseWake),
+    job_run_count: value.job_run_count,
+    job_runs: value.job_runs.map(parseJobRun),
   };
   if (value.effective_state === "available") {
     if (
@@ -143,10 +176,6 @@ function parseSummary(value: unknown): Summary {
     effective_at: null,
     schedule_count: null,
   };
-}
-
-function utc(value: string): string {
-  return new Date(value).toISOString().replace("T", " ").replace("Z", " UTC");
 }
 
 const decisionText: Record<WakeDecision, string> = {
@@ -205,7 +234,7 @@ export default function ScheduleStatus() {
             {status.summary.scheduler_running
               ? "Scheduler discovery loop is running."
               : "Scheduler discovery loop is stopped."}{" "}
-            Wake decisions do not execute jobs; no job handlers are registered.
+            A worker executes registered job runs; `memory.resolve` is the registered handler.
           </p>
           {status.summary.effective_state === "not_configured" && <p>No schedules configured.</p>}
           {status.summary.effective_state === "unknown" && (
@@ -216,12 +245,12 @@ export default function ScheduleStatus() {
               <p>
                 Effective version {status.summary.effective_version}, since{" "}
                 <time dateTime={status.summary.effective_at}>
-                  {utc(status.summary.effective_at)}
+                  {formatUtc(status.summary.effective_at)}
                 </time>; latest version {status.summary.latest_version}.
               </p>
               <p>Showing {status.summary.schedules.length} of {status.summary.schedule_count} schedules.</p>
               <p>
-                Previews after <time dateTime={status.summary.observed_at}>{utc(status.summary.observed_at)}</time>
+                Previews after <time dateTime={status.summary.observed_at}>{formatUtc(status.summary.observed_at)}</time>
                 {" "}assume the current version stays unchanged. They do not apply market calendars,
                 dependencies or wake policies and do not schedule jobs.
               </p>
@@ -239,7 +268,7 @@ export default function ScheduleStatus() {
                       {schedule.preview_state === "available" && (
                         <ul>
                           {schedule.next_occurrences.map((occurrence) => (
-                            <li key={occurrence}><time dateTime={occurrence}>{utc(occurrence)}</time></li>
+                            <li key={occurrence}><time dateTime={occurrence}>{formatUtc(occurrence)}</time></li>
                           ))}
                         </ul>
                       )}
@@ -259,12 +288,41 @@ export default function ScheduleStatus() {
             <ul>
               {status.summary.recent_decisions.map((wake) => (
                 <li key={JSON.stringify([wake.schedule_id, wake.scheduled_at])}>
-                  {wake.schedule_id} · <time dateTime={wake.scheduled_at}>{utc(wake.scheduled_at)}</time>
+                  {wake.schedule_id} · <time dateTime={wake.scheduled_at}>{formatUtc(wake.scheduled_at)}</time>
                   {" "}· {decisionText[wake.decision]} · version {wake.schedule_version}
-                  {" "}· observed <time dateTime={wake.observed_at}>{utc(wake.observed_at)}</time>
+                  {" "}· observed <time dateTime={wake.observed_at}>{formatUtc(wake.observed_at)}</time>
                 </li>
               ))}
             </ul>
+          )}
+          <h3>Recent job runs</h3>
+          {status.summary.job_runs.length === 0 ? (
+            <p>No job runs yet.</p>
+          ) : (
+            <TableScroll label="Recent job runs">
+              <table className="judgment-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Job</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Attempts</th>
+                    <th scope="col">Failure</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {status.summary.job_runs.map((run) => (
+                    <tr key={run.run_id}>
+                      <th scope="row">{run.job_id}</th>
+                      <td>{run.status}</td>
+                      <td>
+                        {run.attempts}/{run.max_attempts}
+                      </td>
+                      <td>{run.failure_code ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </>
       )}

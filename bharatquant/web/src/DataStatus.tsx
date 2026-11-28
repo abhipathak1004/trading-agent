@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { formatUtc } from "./contracts";
+
 type ImportSummary = {
   import_id: string;
   source_id: string;
@@ -11,7 +13,7 @@ type DataSummary = {
   import_count: number;
   imported_record_count: number;
   import_quality: "unassessed";
-  live_provider: "not_configured";
+  live_provider: string;
   recent_imports: ImportSummary[];
 };
 
@@ -62,7 +64,7 @@ function parseSummary(value: unknown): DataSummary {
     !("import_quality" in value) ||
     value.import_quality !== "unassessed" ||
     !("live_provider" in value) ||
-    value.live_provider !== "not_configured" ||
+    typeof value.live_provider !== "string" ||
     !("recent_imports" in value) ||
     !Array.isArray(value.recent_imports) ||
     value.recent_imports.length > 20
@@ -131,7 +133,12 @@ export default function DataStatus() {
             {status.summary.imported_record_count.toLocaleString("en-IN")} imported
             records
           </p>
-          <p>Data quality is unassessed. No live provider is configured.</p>
+          <p>
+            Data quality is unassessed.{" "}
+            {status.summary.live_provider === "not_configured"
+              ? "No live provider is configured."
+              : `Live data source: ${status.summary.live_provider}.`}
+          </p>
           {status.summary.recent_imports.length > 0 && (
             <>
               <h3>Recent imports (up to 20)</h3>
@@ -141,7 +148,7 @@ export default function DataStatus() {
                     {item.source_id}: {item.record_count.toLocaleString("en-IN")}{" "}
                     {item.record_count === 1 ? "record" : "records"} ·{" "}
                     <time dateTime={item.recorded_at}>
-                      {new Date(item.recorded_at).toISOString().replace("T", " ").replace("Z", " UTC")}
+                      {formatUtc(item.recorded_at)}
                     </time>
                   </li>
                 ))}

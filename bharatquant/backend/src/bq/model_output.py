@@ -76,10 +76,12 @@ def _check_unicode(value: object) -> None:
             _check_unicode(item)
 
 
-def validate_model_output(task: TaskDefinition, output: str) -> object:
-    """Parse bounded JSON and validate it against a trusted task's offline schema."""
-    if not isinstance(task, TaskDefinition) or not isinstance(output, str):
-        raise ModelOutputError("A task definition and JSON output text are required.")
+def validate_against_schema(schema_json: str, output: str) -> object:
+    """Parse bounded JSON and validate it against a trusted JSON Schema string."""
+    if not isinstance(schema_json, str) or not isinstance(output, str):
+        raise ModelOutputError(
+            "A task output schema and JSON output text are required."
+        )
     try:
         if (
             len(output) > MAX_OUTPUT_BYTES
@@ -88,9 +90,7 @@ def validate_model_output(task: TaskDefinition, output: str) -> object:
             raise ModelOutputError("Model output exceeds the byte limit.")
         # Cover bounded input digits and exponent differences in decimal remainders.
         with localcontext(Context(prec=2048)):
-            schema = json.loads(
-                task.output_schema_json, parse_int=_integer, parse_float=_decimal
-            )
+            schema = json.loads(schema_json, parse_int=_integer, parse_float=_decimal)
             _check_dialects(schema)
             Draft202012Validator.check_schema(schema)
             parsed: object = json.loads(
@@ -123,6 +123,13 @@ def validate_model_output(task: TaskDefinition, output: str) -> object:
             raise
         raise ModelOutputError("Model output or task schema is invalid JSON.") from None
     return parsed
+
+
+def validate_model_output(task: TaskDefinition, output: str) -> object:
+    """Parse bounded JSON and validate it against a trusted task's offline schema."""
+    if not isinstance(task, TaskDefinition) or not isinstance(output, str):
+        raise ModelOutputError("A task definition and JSON output text are required.")
+    return validate_against_schema(task.output_schema_json, output)
 
 
 def extract_record_citations(

@@ -370,7 +370,7 @@ def test_task_migration_preserves_existing_context(
     original = context()
     store.save(original)
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert database.migrate(path) == 11
+    assert database.migrate(path) == len(migrations) - 10
     assert store.load(original.manifest_hash) == original
     database.check_database(path)
 
@@ -449,3 +449,19 @@ def test_registered_context_enforces_section_spec_even_if_manifest_lies(
                 store=store,
                 candidates=(candidate,),
             )
+
+
+def test_task_registry_lists_only_the_latest_version_per_task(tmp_path: Path) -> None:
+    path = tmp_path / "bq.db"
+    database.migrate(path, create=True)
+    registry = TaskRegistry(path, FrozenClock())
+    first = definition()
+    second = replace(first, policy=replace(first.policy, version="v2"))
+    registry.save(first)
+    registry.save(second)
+    latest = registry.list_latest()
+    assert [item.policy.task_id for item in latest] == ["task"]
+    assert [item.policy.version for item in latest] == ["v2"]
+    assert latest[0] == second
+    with pytest.raises(RoutingError):
+        registry.list_latest(limit=0)

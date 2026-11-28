@@ -3,13 +3,43 @@ import secrets
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    parse_timestamp as core_parse_timestamp,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.audit import append_event
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise ValueError("Calendar timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return core_parse_timestamp(value)
+
 
 EXCHANGE_CODE = re.compile(r"[A-Z][A-Z0-9._-]{0,15}")
 
@@ -27,22 +57,6 @@ class SessionState(StrEnum):
 
 class UncoveredCalendarDate(LookupError):
     pass
-
-
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise ValueError("Calendar timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,9 +186,7 @@ class ExchangeCalendar:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
+        return core_open_connection(self.path, foreign_keys=False)
 
     def record(self, session: CalendarSession) -> str:
         session_id = secrets.token_urlsafe(18)

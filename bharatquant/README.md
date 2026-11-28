@@ -34,8 +34,14 @@ existing data, and starts the loopback server. On first use, complete owner
 setup in the browser or run `just auth-setup` in a terminal.
 
 Other useful recipes include `just build`, `just doctor`, `just test`,
-`just check`, and `just web-dev`. `just web-dev` starts only the Vite frontend;
-owner sign-in is not supported on its dev origin.
+`just check`, `just news` and `just web-dev`. `just web-dev` starts only the
+Vite frontend; owner sign-in is not supported on its dev origin.
+
+Recipes export `PYTHONPATH` to the source tree. On macOS, Python skips any
+`.pth` file carrying the hidden file flag, and uv's editable install can pick
+that flag up inside `.venv`; without the export, commands fail with
+`ModuleNotFoundError: No module named 'bq'` even though the package is
+installed. `pytest` is configured the same way.
 
 ## Manual build and run
 
@@ -52,10 +58,72 @@ uv run --locked bq auth setup
 uv run --locked bq serve
 ```
 
+### AWS Bedrock as a model provider
+
+Bedrock is selectable in **Settings → Models & keys** alongside Gemini, OpenAI,
+DeepSeek and a custom endpoint. It authenticates with a **Bedrock API key**,
+which is a bearer token — not an AWS secret access key, and no SigV4 signing
+happens in this app.
+
+1. In the AWS console, open **Bedrock → API keys** and generate a key.
+   - **Long-term** keys last until an expiry date and are the simplest to keep
+     in Settings, but they create a dedicated IAM user in your account with
+     `AmazonBedrockLimitedAccess`. AWS describes them as exploration-grade.
+   - **Short-term** keys last at most 12 hours and only work in the region that
+     minted them; they are the better production choice, at the cost of
+     refreshing them.
+2. In Settings, choose provider **BEDROCK**, then:
+   - **Model name** — the region-namespaced id, e.g.
+     `us.anthropic.claude-sonnet-4-6`.
+   - **Bedrock region** — e.g. `us-east-1` (the field only appears for Bedrock).
+3. Paste the key under **Provider API keys → BEDROCK**.
+
+Bedrock is available on the reasoning and flash tiers; the decision tier remains
+TypeSafe Jev only.
+
+**Tool use is supported.** Agents send their permitted tools to Bedrock as a
+native `toolConfig` (JSON Schema per tool) and the returned `toolUse` blocks
+execute in the agent loop; the assistant's request and the tool result are
+replayed on the next turn, which is what stops a model re-requesting the same
+tool. The OpenAI-compatible and Gemini clients take the same schemas in their
+own shapes.
+
+To point every text agent at Bedrock in one step, use
+**Settings → Models & keys → Use Bedrock for all text agents** (or
+`POST /api/v1/settings/bedrock/apply`). That moves the reasoning and flash
+tiers, i.e. 11 of the 15 agent roles; the four decision agents stay on TypeSafe
+Jev.
+
 Open `http://127.0.0.1:8000`. The server binds to loopback only. On non-macOS
 development hosts, set `BQ_HOME` to a dedicated local data directory before
 running `bq init`; macOS uses the BharatQuant Application Support directory by
 default.
+
+### AI Hedge Fund tab
+
+The **Build → AI Hedge Fund** tab runs a ported, in-process version of
+[`virattt/ai-hedge-fund`](https://github.com/virattt/ai-hedge-fund) v2 (MIT).
+Nothing to install: the engine is vendored under
+`backend/src/bq/aihf/engine/` and shares this app's environment (ADR-052).
+
+It trades **NSE names** over daily/weekly/monthly cadence, using this app's own
+data and models — not another vendor and not another process:
+
+- **Bars, quotes, indices** — the same Yahoo → Kite vendor router the rest of
+  the app uses.
+- **Fundamentals, earnings surprises, sector** — the point-in-time
+  `fundamental_snapshots` / `earnings_events` / `company_facts` stores, filled
+  by the `aihf.fundamentals.ingest` job (off by default; it makes one Yahoo
+  request per symbol). Yahoo serves about four quarters, so a persona replay
+  longer than roughly a year will see earlier sessions abstain.
+- **Costs** — Indian delivery charges (STT, exchange, SEBI, stamp, GST) from the
+  same `paper_charges` schedule the paper ledger uses.
+- **Models** — each persona is its own Settings agent (`aihf_buffett`, …), so
+  configure a provider key under **Settings → Models & keys**. No model id is
+  hardcoded, and each persona's prompt is editable in the Agent Lab.
+
+A session is computed without touching the fund, then committed only when you
+approve it; the appended ledger record must hash to what the preview computed.
 
 While the server is running, its 30-second scheduler discovery loop records due
 wake decisions and durably enqueues `RUN` decisions as job occurrences. It does
@@ -88,6 +156,33 @@ local backend on port 8000. Build the web app before running `bq serve`; the
 build is packaged with the Python application. The server refuses to start
 if the build's `index.html` is missing. Owner sign-in requires the served
 `http://127.0.0.1:8000` origin and is not supported through Vite's dev origin.
+
+### Share over a Cloudflare tunnel
+
+Settings → **Cloudflare tunnel** can start an ephemeral
+`https://<id>.trycloudflare.com` quick tunnel to the running server, so a second
+device can reach it while `bq serve` is running. Nothing is persisted; the link
+dies when you press **Stop tunnel** or quit the server.
+
+- Access is still **owner password only**. The link is public on the internet, so
+  treat it like any shared credential and stop the tunnel when finished.
+- The default posture is unchanged: with no tunnel active, only `127.0.0.1` is
+  accepted and non-loopback Host/Origin requests are rejected. While a tunnel is
+  live its host and origin are allow-listed, and the session cookie is `Secure`.
+- On a phone or tablet the sidebar becomes a drawer: use the three-line toggle
+  in the top bar. Wide tables scroll inside their own card with the first
+  column pinned, so the page itself never scrolls sideways.
+- `cloudflared` resolves from `BQ_CLOUDFLARED`, then `PATH`, then `BQ_HOME/bin`.
+  On the first Start the app may download the official release into `BQ_HOME/bin`
+  (verified with `cloudflared --version`) instead of asking you to install it.
+- The app marks the URL live once cloudflared has registered its edge connection
+  and the local origin answers its health check. It deliberately does not wait on
+  the public hostname: a brand-new `*.trycloudflare.com` name is negatively cached
+  by many ISP resolvers for a minute or more, so your own browser may need a short
+  wait before the copied link opens even though the tunnel is already up.
+
+This is remote access to the same paper-only app. It adds no broker path and does
+not change ADR-001 or ADR-013.
 
 ## Checks
 
@@ -529,6 +624,51 @@ execution is implemented.
 The locked dependency and license inventory is in
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md). It is not a legal review or
 a redistribution bundle; the project has no declared redistribution license.
+
+## News research agent
+
+The first agent ingests market news from **Pulse by Zerodha**
+(`https://pulse.zerodha.com/feed.xml`) and keeps what matters over the long
+term. It makes **no model calls**: fetching, parsing, deduplication and
+classification are deterministic, which is the cost strategy.
+
+```sh
+uv run --locked bq news ingest              # fetch, store new items, update memory
+uv run --locked bq news digest --limit 20   # long-term-impact memories as JSON
+```
+
+Or `just news` from the repository root.
+
+**Why it stays cheap.** Pulse's feed already carries a title and a one-line
+summary for every story, so **full articles are never fetched**. A single
+request returns roughly 150 stories in about 107 KB. Only that metadata is
+stored (bounded to 512 characters for a title and 1,024 for a summary).
+
+**Deduplication** uses no LLM: each item is keyed by a hash of its normalised
+HTTPS URL plus an order-insensitive fingerprint of its title words. Re-ingesting
+the same feed stores nothing and reports every item as a duplicate.
+
+**Classification** uses whole-word keyword rules into eight categories:
+`INDIA_MARKET`, `GLOBAL_MARKET`, `GEOPOLITICAL`, `COMMODITY`, `RATES`,
+`CORPORATE`, `REGULATORY` and `OTHER`. Whole-word matching matters — substring
+matching classified "celebrated" as a rate story.
+
+**Memory** keeps only long-term-impact items. Geopolitical and regulatory news
+qualifies outright; rate news must contain a structural word (repo, policy rate,
+rate cut or hike, inflation) so routine RBI notices do not flood memory; other
+categories need an explicit marker. Memories carry `known_at` and `expires_at`,
+are filtered point-in-time, and track `hit_count` for later frecency pruning.
+A live run produced 15 memories from 156 stories.
+
+`news_items` and `agent_memories` are immutable by trigger. The authenticated
+`GET /api/v1/news/digest` endpoint returns the 20 most recent items and
+memories; it is owner-only and non-cacheable.
+
+Limitations: classification is keyword-based and can mislabel a headline that
+mentions two topics (a merger story that opens with "RBI" lands first-match).
+`OTHER` is currently a large bucket. This agent performs no summarisation and
+does not fetch article bodies; any model-assisted pass would need an explicit
+token budget.
 
 ## Continuous integration
 

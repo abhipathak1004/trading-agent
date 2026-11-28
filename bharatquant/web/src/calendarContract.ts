@@ -1,3 +1,4 @@
+import { isRecord, isTimestamp } from "./contracts.ts";
 type Day = {
   date: string;
   state: "UNCOVERED" | "OPEN" | "CLOSED";
@@ -6,14 +7,6 @@ type Day = {
   closesAt: string | null;
 };
 export type Result = { exchange: string; asOf: string; days: Day[] };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isTimestamp(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
-}
 
 export function dateMillis(value: string): number {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return NaN;

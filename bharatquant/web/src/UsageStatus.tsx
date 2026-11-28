@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isCount, isRecord } from "./contracts";
 
 type TokenUsage = {
   reported_tokens: string;
@@ -19,18 +20,14 @@ type UsageGroup = {
   output: TokenUsage;
 };
 
-type UsageSummary = { total_groups: number; groups: UsageGroup[] };
+type UsageSummary = {
+  total_groups: number;
+  provider_connected: boolean;
+  groups: UsageGroup[];
+};
 type Status =
   | { state: "loading" | "error" }
   | { state: "ready"; summary: UsageSummary };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
 
 function parseTokens(value: unknown): TokenUsage {
   if (
@@ -85,7 +82,7 @@ function parseGroup(value: unknown): UsageGroup {
 function parseSummary(value: unknown): UsageSummary {
   if (
     !isRecord(value) ||
-    value.provider_connected !== false ||
+    typeof value.provider_connected !== "boolean" ||
     !isCount(value.total_groups) ||
     !Array.isArray(value.groups) ||
     value.groups.length > 20 ||
@@ -93,7 +90,11 @@ function parseSummary(value: unknown): UsageSummary {
   ) {
     throw new Error("Invalid model usage response");
   }
-  return { total_groups: value.total_groups, groups: value.groups.map(parseGroup) };
+  return {
+    total_groups: value.total_groups,
+    provider_connected: value.provider_connected,
+    groups: value.groups.map(parseGroup),
+  };
 }
 
 function tokenText(usage: TokenUsage): string {
@@ -153,7 +154,11 @@ export default function UsageStatus() {
       )}
       {status.state === "ready" && (
         <>
-          <p>No model provider is connected.</p>
+          <p>
+            {status.summary.provider_connected
+              ? "A model provider is configured."
+              : "No model provider is connected."}
+          </p>
           {status.summary.total_groups === 0 ? (
             <p>No model attempts recorded.</p>
           ) : (

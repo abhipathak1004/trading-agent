@@ -1,11 +1,11 @@
-import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+from bq.core import IDENTIFIER
+
 EVERY_DAY = (0, 1, 2, 3, 4, 5, 6)
 
 

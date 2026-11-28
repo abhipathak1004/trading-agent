@@ -2,16 +2,25 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    IDENTIFIER,
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    utc as core_utc,
+)
 from bq.infra.audit import append_event
 from bq.schedules import (
     EVERY_DAY,
-    IDENTIFIER,
     DailySchedule,
     IntervalSchedule,
     ScheduleError,
@@ -22,6 +31,17 @@ from bq.schedules import (
     interval_occurrences_between,
     validate_schedules,
 )
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise ScheduleError("Schedule timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 class ScheduleConflict(RuntimeError):
@@ -61,16 +81,6 @@ class ScheduleOverview:
     observed_at: datetime
     decision_count: int
     recent_decisions: tuple[WakeDecisionRecord, ...]
-
-
-def _utc(value: datetime) -> datetime:
-    if not isinstance(value, datetime) or value.utcoffset() is None:
-        raise ScheduleError("Schedule timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _serialize(schedules: tuple[DailySchedule, ...]) -> str:
@@ -168,11 +178,7 @@ class ScheduleStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def load(self, version: int | None = None) -> ScheduleSnapshot:
         if version is not None and (

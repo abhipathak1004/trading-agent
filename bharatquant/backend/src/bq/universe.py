@@ -3,12 +3,17 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from re import compile as regex
 
-from bq.core import Clock, CurrencyPaise, SystemClock
+from bq.core import (
+    IDENTIFIER,
+    Clock,
+    CurrencyPaise,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
 from bq.infra.audit import append_event
-
-IDENTIFIER = regex(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
 class UniverseError(ValueError):
@@ -33,11 +38,7 @@ class UniverseStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def publish(
         self,

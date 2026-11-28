@@ -1,0 +1,262 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  parseExecution,
+  parsePaperAccounts,
+  parsePaperBook,
+  parsePaperFill,
+  parsePaperOrder,
+  parsePaperRealism,
+  parseReconciliation,
+} from "../src/executionContract.ts";
+
+const account = {
+  account_id: "paper-main",
+  name: "Paper Main",
+  status: "ACTIVE",
+  opening_balance_paise: "1000000",
+  deposited_paise: "0",
+  withdrawn_paise: "0",
+  balance_paise: "945000",
+};
+
+const order = {
+  order_id: "order-1",
+  account_id: "paper-main",
+  instrument_id: "NSE:RELIANCE",
+  client_order_id: "intent-1",
+  side: "BUY",
+  order_type: "LIMIT",
+  quantity: 10,
+  limit_price_paise: "10000",
+  status: "PENDING",
+  filled_quantity: 0,
+  created_at: "2026-11-25T10:00:00Z",
+  product: "MIS",
+  approval_status: "APPROVED",
+};
+
+const execution = {
+  mode: "PAPER",
+  state: "ALLOW",
+  vetoes: [],
+  freshness: { usable: true, label: "delayed_warn", age_seconds: 300 },
+  context: {
+    account_id: "paper-main",
+    account_name: "Paper Main",
+    available_cash_paise: "945000",
+    balance_paise: "945000",
+    open_positions: 1,
+    symbol_exposure_paise: "50000",
+    daily_loss_paise: "5000",
+    weekly_loss_paise: "5000",
+    monthly_loss_paise: "5000",
+    orders_this_minute: 0,
+    kill_switch: "NONE",
+    instrument_valid: true,
+    session_open: true,
+    session_state: "UNCOVERED",
+    session_source: "owner_override",
+    notes: ["Paper only."],
+    positions: [{ instrument_id: "NSE:RELIANCE", quantity: 5 }],
+  },
+  order: null,
+};
+
+test("a paper account list parses", () => {
+  const parsed = parsePaperAccounts({ accounts: [account] });
+  assert.equal(parsed[0].account_id, "paper-main");
+  assert.equal(parsed[0].balance_paise, "945000");
+});
+
+test("a paper book parses positions and orders", () => {
+  const parsed = parsePaperBook({
+    account,
+    positions: [{ instrument_id: "NSE:RELIANCE", quantity: 5 }],
+    orders: [order],
+  });
+  assert.equal(parsed.positions[0].quantity, 5);
+  assert.equal(parsed.orders[0].limit_price_paise, "10000");
+});
+
+test("an execution result parses an ALLOW and a block", () => {
+  const allowed = parseExecution(execution);
+  assert.equal(allowed.state, "ALLOW");
+  assert.equal(allowed.context.session_source, "owner_override");
+  assert.equal(allowed.order, null);
+
+  const blocked = parseExecution({
+    ...execution,
+    state: "BLOCK",
+    vetoes: ["session_closed"],
+  });
+  assert.equal(blocked.state, "BLOCK");
+  assert.deepEqual(blocked.vetoes, ["session_closed"]);
+});
+
+test("an execution result with a placed order parses", () => {
+  const parsed = parseExecution({ ...execution, order });
+  assert.equal(parsed.order?.quantity, 10);
+  assert.equal(parsed.order?.status, "PENDING");
+});
+
+test("bad execution contracts are rejected", () => {
+  assert.throws(() => parseExecution({ ...execution, state: "MAYBE" }));
+  assert.throws(() =>
+    parseExecution({
+      ...execution,
+      context: { ...execution.context, available_cash_paise: "-1" },
+    }),
+  );
+  assert.throws(() => parsePaperBook({ account, positions: [], orders: [{}] }));
+});
+
+test("a fill result parses the updated order and the fill", () => {
+  const parsed = parsePaperFill({
+    order: {
+      ...order,
+      status: "PARTIALLY_FILLED",
+      filled_quantity: 4,
+    },
+    fill: {
+      fill_id: "fill-1",
+      order_id: "order-1",
+      quantity: 4,
+      price_paise: "10000",
+      filled_at: "2026-11-25T10:01:00Z",
+      idempotency_key: "fill-1",
+      realized_pnl_paise: null,
+      gross_paise: "40000",
+      charges_paise: "2",
+      net_pnl_paise: null,
+    },
+  });
+  assert.equal(parsed.order.status, "PARTIALLY_FILLED");
+  assert.equal(parsed.order.filled_quantity, 4);
+  assert.equal(parsed.fill.price_paise, "10000");
+  assert.equal(parsed.fill.realized_pnl_paise, null);
+});
+
+test("a reconciliation result parses", () => {
+  const parsed = parseReconciliation({
+    account_id: "paper-main",
+    order_count: 1,
+    fill_count: 2,
+    ledger_debit_paise: "100000",
+    ledger_credit_paise: "0",
+    position_count: 1,
+    charges_paise: "2",
+  });
+  assert.equal(parsed.fill_count, 2);
+  assert.equal(parsed.ledger_debit_paise, "100000");
+});
+
+test("bad fill and reconciliation contracts are rejected", () => {
+  assert.throws(() =>
+    parsePaperFill({
+      order,
+      fill: {
+        fill_id: "fill-1",
+        order_id: "order-1",
+        quantity: 0,
+        price_paise: "10000",
+        filled_at: "2026-11-25T10:01:00Z",
+        idempotency_key: "fill-1",
+      },
+    }),
+  );
+  assert.throws(() =>
+    parseReconciliation({
+      account_id: "paper-main",
+      order_count: 1,
+      fill_count: 2,
+      ledger_debit_paise: "-1",
+      ledger_credit_paise: "0",
+      position_count: 1,
+    }),
+  );
+});
+
+test("a standalone order response parses for cancel and exit", () => {
+  const parsed = parsePaperOrder({
+    ...order,
+    side: "SELL",
+    status: "CANCELLED",
+  });
+  assert.equal(parsed.side, "SELL");
+  assert.equal(parsed.status, "CANCELLED");
+});
+
+test("a sell fill parses realised P&L, including a loss", () => {
+  const parsed = parsePaperFill({
+    order: { ...order, side: "SELL", status: "FILLED", filled_quantity: 10 },
+    fill: {
+      fill_id: "fill-sell",
+      order_id: "order-1",
+      quantity: 10,
+      price_paise: "9000",
+      filled_at: "2026-11-25T10:02:00Z",
+      idempotency_key: "fill-sell",
+      realized_pnl_paise: "-1000",
+      gross_paise: "90000",
+      charges_paise: "20",
+      net_pnl_paise: "-1020",
+    },
+  });
+  assert.equal(parsed.fill.realized_pnl_paise, "-1000");
+});
+
+test("execution realism parses products, lots, approvals and stops", () => {
+  const parsed = parsePaperRealism({
+    account_id: "paper-main",
+    product_positions: [
+      { instrument_id: "NSE:RELIANCE", product: "CAS", quantity: 10 },
+    ],
+    tax_lots: [
+      {
+        lot_id: "lot-1",
+        instrument_id: "NSE:RELIANCE",
+        product: "CAS",
+        quantity: 10,
+        remaining_quantity: 10,
+        settles_on: "2026-11-26",
+        cost_paise: "10000",
+        charges_paise: "10",
+      },
+    ],
+    approvals: [
+      {
+        approval_id: "approval-1",
+        order_id: "order-1",
+        account_id: "paper-main",
+        status: "PENDING",
+        reason: "large order",
+        created_at: "2026-11-25T10:00:00Z",
+        decided_at: null,
+        decision_note: null,
+      },
+    ],
+    stops: [
+      {
+        stop_id: "stop-1",
+        account_id: "paper-main",
+        instrument_id: "NSE:RELIANCE",
+        product: "CAS",
+        quantity: 10,
+        stop_price_paise: "9000",
+        target_price_paise: "12000",
+        status: "ACTIVE",
+        trigger_order_id: null,
+        trigger_kind: null,
+        created_at: "2026-11-25T10:00:00Z",
+        triggered_at: null,
+      },
+    ],
+    charges_paise: "10",
+  });
+  assert.equal(parsed.product_positions[0].product, "CAS");
+  assert.equal(parsed.tax_lots[0].settles_on, "2026-11-26");
+  assert.equal(parsed.approvals[0].status, "PENDING");
+  assert.equal(parsed.stops[0].stop_price_paise, "9000");
+});

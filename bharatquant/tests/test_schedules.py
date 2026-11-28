@@ -623,7 +623,7 @@ def test_data_import_migration_preserves_existing_schedule_snapshot(
         path, available_jobs=frozenset({"synthetic-report"}), clock=FrozenClock()
     )
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert migrate(path) == 14
+    assert migrate(path) == len(migrations) - 7
     assert store.load() == snapshot
     with pytest.raises(ScheduleVersionNotFound, match="effective boundary"):
         store.effective_at(FrozenClock().now())
@@ -809,7 +809,7 @@ def test_wake_decision_migration_preserves_effective_schedules(
     )
     snapshot = store.save((_schedule(),), expected_version=0)
     monkeypatch.setattr(database, "packaged_migrations", lambda: migrations)
-    assert migrate(path) == 9
+    assert migrate(path) == len(migrations) - 12
     assert store.effective_at(FrozenClock().now()).snapshot == snapshot
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute(

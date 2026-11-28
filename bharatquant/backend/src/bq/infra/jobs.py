@@ -3,13 +3,43 @@ import secrets
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 
-from bq.core import Clock, SystemClock
+from bq.core import (
+    IDENTIFIER,
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
+from bq.core import (
+    parse_timestamp as core_parse_timestamp,
+)
+from bq.core import (
+    utc as core_utc,
+)
 
-IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise ValueError("Job timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return core_parse_timestamp(value)
+
+
 OPAQUE_IDENTIFIER = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._:-]{0,127}")
 FAILURE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
@@ -55,22 +85,6 @@ class JobRunEvent:
     failure_code: str | None
 
 
-def _utc(value: datetime) -> datetime:
-    if value.utcoffset() is None:
-        raise ValueError("Job timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _parse_timestamp(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 def _required_timestamp(value: str | None) -> datetime:
     parsed = _parse_timestamp(value)
     if parsed is None:
@@ -94,11 +108,7 @@ class JobRunStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return core_open_connection(self.path, foreign_keys=True)
 
     def enqueue(
         self,
@@ -307,6 +317,21 @@ class JobRunStore:
                 )
                 return self._get(connection, run_id)
 
+    def recent(self, *, limit: int = 20) -> tuple[JobRun, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ValueError("Job run limit must be between 1 and 100.")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT run_id FROM job_runs "
+                "ORDER BY scheduled_at DESC, run_id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return tuple(self._get(connection, str(row[0])) for row in rows)
+
     def get(self, run_id: str) -> JobRun:
         _validate_opaque_identifier(run_id, "run identifier")
         with closing(self._connect()) as connection:
@@ -318,8 +343,7 @@ class JobRunStore:
         _validate_identifier(occurrence_key, "occurrence key")
         with closing(self._connect()) as connection:
             row = connection.execute(
-                "SELECT run_id FROM job_runs "
-                "WHERE job_id = ? AND occurrence_key = ?",
+                "SELECT run_id FROM job_runs WHERE job_id = ? AND occurrence_key = ?",
                 (job_id, occurrence_key),
             ).fetchone()
             if row is None:

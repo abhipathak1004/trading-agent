@@ -5,10 +5,19 @@
 | Field | Value |
 |---|---|
 | Owner | Abhishek Pathak |
-| Version | 1.0 (companion document; applies to plan v3.11 and later) |
-| Date | 21 Nov 2026 |
+| Version | 1.1 (companion document; applies to plan v3.11 and later) |
+| Date | 26 Nov 2026 |
 | Relationship to the plan | **Extends and partly replaces plan Section 7.4 (Pages).** The stack (7.1), performance techniques (7.2), dark theme tokens (7.3), Mac touches (7.5) and auth (7.6) stay as written in the plan. Where this guide and Section 7.4 disagree, this guide wins |
 | Audience | Whoever builds the React frontend (you, or a coding agent working from this document) |
+
+### Change log
+
+| Version | Date | Change | Where it lands |
+|---|---|---|---|
+| 1.0 | 21 Nov 2026 | Target-state UI/UX guide: 7 groups, page anatomy, change workflow, settings, Agent Lab, testing workspace | Whole document |
+| 1.1 | 26 Nov 2026 | Data and Schedules promoted to top-level tabs; Settings narrowed to four sub-tabs; Today reduced to a command center of linked summaries; sidebar regrouped into Daily / Analyze / Build / Operate / System; Opportunities and Schedules editors wired in | §3.1, §3.2, §6.2, §9, Implementation Status |
+
+The earlier decisions in §2 (principles), §4 (page anatomy), §5 (change workflow), §7 (Agent Lab) and §8 (testing workspace) are unchanged. Where this log and an older paragraph disagree, the log wins.
 
 ---
 
@@ -82,26 +91,30 @@ These rules apply to every screen. Each has a concrete "do this" so it can be ch
 
 ### 3.1 Top-Level Groups
 
-The 21 pages in plan Section 7.4 are grouped into seven areas in a left sidebar. The sidebar can be collapsed to icons.
+The 21 pages in plan Section 7.4 are grouped into a left sidebar. The sidebar can be collapsed to icons. **Version 1.1 note:** the implemented sidebar uses five groups (Daily, Analyze, Build, Operate, System). Data and Schedules are now first-class tabs under Operate, and Today is a linked command center rather than a diagnostics dump. The broader target-state grouping below is preserved for the pages that are not built yet.
 
 | Group | Pages | Purpose |
 |---|---|---|
-| **Today** | Command Center (`/`) | Status, today's report, suggestions, positions, alerts |
-| **Trade** | Opportunities, Desk, Approvals, Chart | Act on ideas, manage paper positions |
-| **Research** | Reports, Research, Value | Read reports, news, YouTube insights, dossiers |
-| **Build** | Strategies, Backtests | Create and test strategies |
-| **Agent Lab** *(new)* | One tab per agent + Lab Home | Run, tune, evaluate and promote each agent |
-| **Observe** | Agents timeline, LLM Usage, Analytics, Audit, System | See what happened and why; health and costs |
-| **Settings** *(expanded)* | All configuration ([Section 6](#6-settings)) | Change how the system behaves |
+| **Daily** | Today (Command Center), Opportunities, Trade | Status, suggestions, act on ideas, manage paper positions |
+| **Analyze** | Research, Technical, Reports | Read reports, news, dossiers and technical runs |
+| **Build** | Strategies, Backtests, Agent Lab | Create and test strategies; run, tune and promote agents |
+| **Operate** *(v1.1)* | Data, Schedules | Data readiness, snapshot freshness, calendar coverage, job catalogue and history |
+| **System** | Settings, How to use | Change behaviour; read the in-app guide |
+| **Observe** *(future)* | Agents timeline, LLM Usage, Analytics, Audit | See what happened and why; health and costs |
+| **Settings** *(target-state)* | All configuration ([Section 6](#6-settings)) | Change how the system behaves; implemented as four sub-tabs |
+
+In the implemented app, Settings has four sub-tabs: **Overview**, **Models & keys**, **Risk & execution**, and **Runtime & network**. Data (Section 6.2 #9) and Schedules (#10) left Settings for their own tabs; the Settings entries now describe what those tabs contain.
 
 ### 3.2 Route Map
 
 ```
 /                              Today (Command Center)
-/trade/opportunities           Opportunities (+ /:oppId drawer)
+/opportunities                 Opportunities (+ /:oppId drawer) — implemented as a top-level tab
 /trade/desk                    Orders, positions, holdings, funds
 /trade/approvals               Approval inbox
 /trade/chart/:symbol           Chart workspace
+/data                          Data readiness, snapshot freshness, calendar coverage (v1.1)
+/schedules                     Job catalogue, schedule editor, wake decisions, job runs (v1.1)
 /research/reports              Reports archive (+ /:date, /:reportId)
 /research/feed                 News, YouTube, scanners
 /research/value                Screener, dossiers (+ /:symbol)
@@ -124,7 +137,7 @@ The 21 pages in plan Section 7.4 are grouped into seven areas in a left sidebar.
 /setup                         First-run wizard
 ```
 
-Old routes from plan Section 7.4 (`/llm/routing`, `/llm/prompts`, `/data`, `/risk`, `/schedules`, `/accounts`) redirect to their new Settings or Agent Lab homes.
+Old routes from plan Section 7.4 (`/llm/routing`, `/llm/prompts`, `/risk`, `/accounts`) redirect to their new Settings or Agent Lab homes. `/data` and `/schedules` are no longer redirects: v1.1 promotes them to their own top-level tabs, while Settings keeps only a link to each.
 
 ### 3.3 Global Elements (Always Visible)
 
@@ -239,8 +252,8 @@ flowchart LR
 | 6 | **Accounts and Capital** | Create, clone, pause, reset accounts; deposit/withdraw; bucket split | 18.1 |
 | 7 | **Risk and Approval** | Limits, loss limits, kill-switch levels, approval policy matrix with effective-policy preview | 18.3, 18.4 |
 | 8 | **Confidence Policy** | Levels, gates, minimum R:R, families, caps, provisional rules | 12.3.4 |
-| 9 | **Data and Universe** | Provider routing per domain, presets, delayed-data policy, universe floor, tiers, request-rate meter | 11 |
-| 10 | **Schedules** | Every job and runtime window, triggers, dependencies, Run now / Dry run | 16.1 |
+| 9 | **Data and Universe** *(now the top-level Data tab, v1.1)* | Provider routing per domain, presets, delayed-data policy, universe floor, tiers, request-rate meter; the implemented Data tab currently covers imports, snapshot freshness and calendar coverage | 11 |
+| 10 | **Schedules** *(now the top-level Schedules tab, v1.1)* | Every job and runtime window, triggers, dependencies, Run now / Dry run; the implemented tab also shows wake decisions and job runs | 16.1 |
 | 11 | **Reports** | Morning-report scope profiles, evening settings, delivery | 16.2.1 |
 | 12 | **Context and Memory** | Global defaults for context specs, memory on/off, retention, hygiene jobs | 10.9 |
 | 13 | **Horizons and Market Rules** | Horizons, sessions (effective-dated), holidays, MIS cut-offs, charges, tax | 11.4, 12.1, 17 |
@@ -526,7 +539,7 @@ These pages keep the scope in plan Section 7.4; this guide adds UX rules.
 
 | Page | UX rules added by this guide |
 |---|---|
-| **Today** | Top row: session, Market Stance, auto-trading state, day P&L, alerts. Then: "Today's suggestions" (confidence cards, or a clear "No suggestion met the bar today"), open positions, report links, "Next step" card (idea from indian-trading-agent). 3×3 sector heatmap. Nothing on this page requires scrolling at 1440 × 900 for the top section |
+| **Today** | *v1.1:* four linked summary cards (paper account, data, schedules, runtime) plus four "Start here" shortcuts; no forms and no duplicated controls. Target-state adds session, Market Stance, auto-trading state, day P&L, alerts, "Today's suggestions", open positions, report links and a 3×3 sector heatmap. Nothing on this page requires scrolling at 1440 × 900 for the top section |
 | **Opportunities** | Default filter HIGH and above; Watch list collapsed; every row opens the Explain drawer; one-click actions keyboard-accessible (P = paper trade, W = watch, D = dismiss with reason) |
 | **Chart** | Levels (SL, targets, fair value) and evidence pins (news, filings, YouTube) on the chart; crosshair shows bar source quality |
 | **Desk** | Positions grouped by horizon; tax-lot details in drawers; manual ticket validates against risk before submit and shows the risk result inline |
@@ -763,21 +776,38 @@ Use this list to sign off the UI.
 ## Implementation Status
 
 The guide is a target-state design, not an implementation claim. Current
-foundation status:
+foundation status (**v1.1, 26 Nov 2026**):
 
-- The React app uses the dark app-shell layout: sidebar, top status strip,
-  owner setup/sign-in states, paper-only mode banner and responsive data cards.
-- Authenticated current capabilities are shown for data imports, paper
-  accounts, schedules, snapshot freshness, calendar coverage and model usage.
+- The React app uses the dark app-shell layout: grouped sidebar, top status
+  strip, owner setup/sign-in states, paper-only mode banner and responsive
+  cards.
+- Sidebar groups are **Daily** (Today, Opportunities, Trade), **Analyze**
+  (Research, Technical, Reports), **Build** (Strategy, Agent Lab), **Operate**
+  (Data, Schedules) and **System** (Settings, How to use). Each item is a
+  working page; there are no placeholder links.
+- **Today** is a read-only command center: four linked summary cards (paper
+  account, data, schedules, runtime) and four "Start here" shortcuts. It
+  contains no forms, so diagnostics no longer double as settings.
+- **Data** owns imports, snapshot freshness and calendar coverage.
+  **Schedules** owns the job catalogue, schedule editor, enable/disable, dry
+  run, run now, run history and the live scheduler/wake/job-run status.
+  **Settings** owns models and keys, model usage, risk limits, runtime and the
+  optional Cloudflare tunnel, split into four sub-tabs.
+- **Opportunities** is now mounted and can stage a validated plan into Trade.
+  Agent Lab now includes memory calibration in addition to prompts, semantic
+  memory and playbooks.
 - The old welcome-page-only presentation is not the current UI.
-- A browser smoke check of owner access at 390px and 1440px found no
-  horizontal overflow. This does not certify WCAG AA or the full acceptance
-  checklist.
-- Trade, Agent Lab and Settings routes are not implemented and are not linked
-  as working pages. This keeps the guide's navigation from implying unavailable
-  behavior.
-- Settings draft/preview/history, command palette, Agent Lab, replay/evals,
-  experiments, feedback and full route navigation remain future work.
+- A browser check of owner access found no horizontal overflow and a working
+  off-canvas drawer at 320px, 390px, 430px, 768px, 1024px, 1280px and 1440px
+  (v1.2, 26 Nov 2026); tablet and laptop checks were run with a signed-in
+  session across every mounted page. Below 1024px the grouped sidebar is a
+  labelled drawer with 44px targets, wide tables scroll inside a labelled
+  region with the first column pinned, and form fields are 16px so iOS Safari
+  does not zoom on focus. This does not certify WCAG AA or the full
+  acceptance checklist.
+- Settings draft/preview/history, command palette, per-agent Lab sub-tabs,
+  replay/evals, experiments and feedback remain future work. The guide's
+  target-state IA for those surfaces is unchanged.
 - Any implementation update must preserve honest stale/error/degraded states
   and must not connect to live providers or broker behavior before the
   documented external and data gates are complete.

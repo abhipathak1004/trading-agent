@@ -61,7 +61,18 @@ def _applied_count(connection: sqlite3.Connection, migrations: list[Migration]) 
         (item.version, item.name, item.checksum) for item in migrations[: len(applied)]
     ]
     if applied != expected:
-        raise DatabaseError("Migration history differs from the packaged migrations.")
+        index = 0
+        while (
+            index < min(len(applied), len(expected))
+            and applied[index] == expected[index]
+        ):
+            index += 1
+        source = applied if len(applied) > len(expected) else expected
+        version, name = source[index][:2]
+        raise DatabaseError(
+            "Migration history differs from the packaged migrations at "
+            f"{version:03d} {name}."
+        )
     return len(applied)
 
 

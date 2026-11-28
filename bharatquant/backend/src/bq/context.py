@@ -2,11 +2,26 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
 
+from bq.core import (
+    utc as core_utc,
+)
 from bq.model_routing import DataClassification
+
+
+def _utc(value: datetime) -> datetime:
+    try:
+        return core_utc(value)
+    except ValueError as exc:
+        raise ContextError("Context timestamps must be timezone-aware.") from exc
+
+
+def _timestamp(value: datetime) -> str:
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
 
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 MAX_ITEMS = 256
@@ -27,16 +42,6 @@ class ContextSection(StrEnum):
 
 
 SECTION_ORDER = tuple(ContextSection)
-
-
-def _utc(value: datetime) -> datetime:
-    if not isinstance(value, datetime) or value.utcoffset() is None:
-        raise ContextError("Context timestamps must be timezone-aware.")
-    return value.astimezone(UTC)
-
-
-def _timestamp(value: datetime) -> str:
-    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _json(value: object, *, sort_keys: bool) -> str:

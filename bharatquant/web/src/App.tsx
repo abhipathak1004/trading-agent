@@ -1,12 +1,112 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
+import Sidebar from "./Sidebar";
+import type { NavView } from "./Sidebar";
 import DataStatus from "./DataStatus";
 import CalendarCoverage from "./CalendarCoverage";
 import SnapshotFreshness from "./SnapshotFreshness";
 import ScheduleStatus from "./ScheduleStatus";
+import SchedulesPanel from "./SchedulesPanel";
 import UsageStatus from "./UsageStatus";
-import PaperAccountStatus from "./PaperAccountStatus";
+import MemoryCalibrationPanel from "./MemoryCalibrationPanel";
+import RuntimePanel from "./RuntimePanel";
+import ResearchPanel from "./ResearchPanel";
+import ReportsPanel from "./ReportsPanel";
+import ResearchDossierPanel from "./ResearchDossierPanel";
+import AgentConsole from "./AgentConsole";
+import AnalysisPanel from "./AnalysisPanel";
+import TechnicalAnalysisPanel from "./TechnicalAnalysisPanel";
+import AgentLabPanel from "./AgentLabPanel";
+import OpportunitiesPanel from "./OpportunitiesPanel";
+import StrategyPanel from "./StrategyPanel";
+import BacktestsPanel from "./BacktestsPanel";
+import TradePanel from "./TradePanel";
+import type { StrategyPlan } from "./strategyContract";
+import SemanticMemoryPanel from "./SemanticMemoryPanel";
+import PlaybookPanel from "./PlaybookPanel";
+import SettingsOverviewPanel from "./SettingsOverviewPanel";
+import SettingsConfigPanel from "./SettingsConfigPanel";
+import LoggingPanel from "./LoggingPanel";
+import RiskLimitsPanel from "./RiskLimitsPanel";
+import CloudflareTunnelPanel from "./CloudflareTunnelPanel";
+import ModelsConfigPanel from "./ModelsConfigPanel";
+import HowToUsePanel from "./HowToUsePanel";
+import TodayOverview from "./TodayOverview";
+import CampaignPanel from "./CampaignPanel";
+import ModelEvalsPanel from "./ModelEvalsPanel";
+import AiHedgeFundPanel from "./AiHedgeFundPanel";
+import ResearchLabPanel, { ResearchLabAgentsPanel } from "./ResearchLabPanel";
+
+type WorkspaceView = NavView;
+
+type SettingsTab = "overview" | "models" | "risk" | "runtime" | "logging";
+
+const NAV_GROUPS: {
+  label: string;
+  items: { view: WorkspaceView; label: string; icon: string }[];
+}[] = [
+  {
+    label: "Daily",
+    items: [
+      { view: "today", label: "Today", icon: "◫" },
+      { view: "campaign", label: "Campaign", icon: "◈" },
+      { view: "opportunities", label: "Opportunities", icon: "◉" },
+      { view: "trade", label: "Trade", icon: "◇" },
+    ],
+  },
+  {
+    label: "Analyze",
+    items: [
+      { view: "research", label: "Research", icon: "◎" },
+      { view: "lab", label: "Research Lab", icon: "◬" },
+      { view: "technical", label: "Technical", icon: "◨" },
+      { view: "reports", label: "Reports", icon: "▤" },
+    ],
+  },
+  {
+    label: "Build",
+    items: [
+      { view: "strategy", label: "Strategy", icon: "⬡" },
+      { view: "agents", label: "Agent Lab", icon: "◈" },
+      { view: "evals", label: "Model Evals", icon: "◍" },
+      { view: "hedgefund", label: "AI Hedge Fund", icon: "◭" },
+    ],
+  },
+  {
+    label: "Operate",
+    items: [
+      { view: "data", label: "Data", icon: "▦" },
+      { view: "schedules", label: "Schedules", icon: "◷" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { view: "settings", label: "Settings", icon: "⚙" },
+      { view: "guide", label: "How to use", icon: "?" },
+    ],
+  },
+];
+
+const VIEW_LABELS: Record<WorkspaceView, string> = {
+  today: "Today",
+  campaign: "Campaign",
+  opportunities: "Opportunities",
+  trade: "Trade",
+  research: "Research",
+  lab: "Research Lab",
+  technical: "Technical Analysis",
+  reports: "Reports",
+  strategy: "Strategy",
+  agents: "Agent Lab",
+  evals: "Model Evals",
+  hedgefund: "AI Hedge Fund",
+  data: "Data",
+  schedules: "Schedules",
+  settings: "Settings",
+  guide: "How to use",
+};
 
 type ServiceState = "checking" | "online" | "offline";
 type SessionState =
@@ -68,6 +168,11 @@ export default function App() {
   const [confirmation, setConfirmation] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [view, setView] = useState<WorkspaceView>("today");
+  const [navOpen, setNavOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("overview");
+  const [stagedPlan, setStagedPlan] = useState<StrategyPlan | null>(null);
+  const navToggleRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -163,7 +268,14 @@ export default function App() {
         }
         return;
       }
-      setSession({ state: "signed_out" });
+      const body: unknown = await response.json();
+      const nextSession = parseSession(body);
+      if (nextSession.state === "signed_in") {
+        setSession(nextSession);
+      } else {
+        // Setup succeeded but no session was issued (e.g. race); fall back to sign-in.
+        setSession({ state: "signed_out" });
+      }
     } catch {
       setError("Password setup failed. Check the local service and try again.");
     } finally {
@@ -241,53 +353,39 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar" aria-label="Primary navigation">
-        <a className="wordmark" href="/" aria-label="BharatQuant home">
-          <span className="wordmark-mark" aria-hidden="true">BQ</span>
-          <span>BharatQuant</span>
-        </a>
-
-        {session.state === "signed_in" && (
-          <nav className="sidebar-nav" aria-label="Workspace">
-            <p className="nav-label">Workspace</p>
-            <a className="nav-item nav-item--active" href="#today">
-              <span aria-hidden="true">◫</span>Today
-            </a>
-            <a className="nav-item" href="#data">
-              <span aria-hidden="true">▦</span>Data
-            </a>
-            <a className="nav-item" href="#schedules">
-              <span aria-hidden="true">◷</span>Schedules
-            </a>
-            <a className="nav-item" href="#diagnostics">
-              <span aria-hidden="true">⌁</span>Diagnostics
-            </a>
-            <p className="nav-label nav-label--secondary">Not available yet</p>
-            <span className="nav-item nav-item--muted" aria-disabled="true">
-              <span aria-hidden="true">◇</span>Trade
-            </span>
-            <span className="nav-item nav-item--muted" aria-disabled="true">
-              <span aria-hidden="true">◈</span>Agent Lab
-            </span>
-            <span className="nav-item nav-item--muted" aria-disabled="true">
-              <span aria-hidden="true">⚙</span>Settings
-            </span>
-          </nav>
-        )}
-
-        <div className="sidebar-footer">
-          <span className="local-dot" aria-hidden="true" />
-          <div>
-            <strong>Local workspace</strong>
-            <span>Loopback only</span>
-          </div>
-        </div>
-      </aside>
+      <Sidebar
+        groups={NAV_GROUPS}
+        view={view}
+        signedIn={session.state === "signed_in"}
+        open={navOpen}
+        onSelect={(next) => {
+          setView(next);
+          setNavOpen(false);
+        }}
+        onClose={() => setNavOpen(false)}
+        toggleRef={navToggleRef}
+      />
 
       <div className="workspace">
         <header className="status-strip" aria-label="System status">
+          <button
+            ref={navToggleRef}
+            type="button"
+            className="nav-toggle"
+            aria-expanded={navOpen}
+            aria-controls="app-sidebar"
+            aria-label={navOpen ? "Close navigation" : "Open navigation"}
+            onClick={() => setNavOpen((value) => !value)}
+          >
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </button>
           <div className="status-strip__identity">
-            <span className="breadcrumb">Today</span>
+            <a className="strip-mark" href="/" aria-label="BharatQuant home">
+              <span className="wordmark-mark" aria-hidden="true">BQ</span>
+            </a>
+            <span className="breadcrumb">{VIEW_LABELS[view]}</span>
             <span className="mode-label">PAPER ONLY</span>
           </div>
           <div className={`service-status service-status--${serviceState}`}>
@@ -370,7 +468,7 @@ export default function App() {
                     className="auth-button"
                     disabled={pending || password.length < 12 || password !== confirmation}
                   >
-                    {pending ? "Setting up..." : "Set owner password"}
+                    {pending ? "Setting up..." : "Create owner password"}
                   </button>
                 </form>
               )}
@@ -428,41 +526,539 @@ export default function App() {
           </section>
         )}
 
-        {serviceState === "online" && session.state === "signed_in" && (
+        {serviceState === "online" && session.state === "signed_in" && view === "today" && (
           <section className="dashboard" id="today" aria-labelledby="today-title">
             <header className="page-header">
               <div>
                 <p className="eyebrow">COMMAND CENTER</p>
                 <h1 id="today-title">Today</h1>
-                <p className="intro">Research with discipline. Your local paper-only workspace.</p>
+                <p className="intro">
+                  What needs your attention now. Every card links to the page that
+                  owns the work.
+                </p>
               </div>
-              <span className="status-badge status-badge--provisional">FOUNDATION</span>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
             </header>
 
             <section className="mode-banner" aria-label="Current mode">
               <span aria-hidden="true">i</span>
               <div>
-                <strong>Operating in paper-only foundation mode</strong>
+                <strong>Paper-only workspace</strong>
                 <p>
-                  Trading, live research, and agent workflows are not enabled.
-                  Existing local diagnostics remain available below.
+                  No broker connection and no live order path. Paper execution runs
+                  in Trade after a plan passes the deterministic gate. Diagnostics
+                  live in Data, Schedules and Settings, so nothing here changes state.
                 </p>
               </div>
             </section>
 
-            <div className="dashboard-grid" id="data">
-              <PaperAccountStatus />
-              <DataStatus />
-              <div id="schedules">
-                <ScheduleStatus />
-              </div>
-            </div>
+            <TodayOverview onNavigate={setView} />
 
-            <div className="dashboard-grid dashboard-grid--diagnostics" id="diagnostics">
+            <section className="overview-next" aria-labelledby="today-next-title">
+              <h2 id="today-next-title">Start here</h2>
+              <div className="overview-links">
+                <button type="button" className="overview-link" onClick={() => setView("data")}>
+                  <strong>Check data readiness</strong>
+                  <span>Imports, snapshot freshness and calendar coverage.</span>
+                </button>
+                <button type="button" className="overview-link" onClick={() => setView("schedules")}>
+                  <strong>Review schedules</strong>
+                  <span>Job catalogue, run now, dry run and history.</span>
+                </button>
+                <button type="button" className="overview-link" onClick={() => setView("opportunities")}>
+                  <strong>Open opportunities</strong>
+                  <span>Confidence-ranked candidates and shadow outcomes.</span>
+                </button>
+                <button type="button" className="overview-link" onClick={() => setView("settings")}>
+                  <strong>Configure the system</strong>
+                  <span>Models, keys, risk limits, runtime and network.</span>
+                </button>
+              </div>
+            </section>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "campaign" && (
+          <section className="dashboard" id="campaign" aria-labelledby="campaign-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">NEWS CATALYST CAMPAIGN</p>
+                <h1 id="campaign-page-title">Today&rsquo;s campaign</h1>
+                <p className="intro">
+                  Collect the news, keep the positive catalysts, shortlist 5–10
+                  names, freeze deterministic technical plans and wait for a
+                  breakout at the open. Paper fills only.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Campaign scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Delayed candles, deliberate rules</strong>
+                <p>
+                  Yahoo 5-minute NSE candles are delayed by about 15 minutes, so a
+                  breakout is confirmed and filled on the delayed candle. Stops,
+                  targets, sizing and weights are computed in code; the model never
+                  sees a price it can change.
+                </p>
+              </div>
+            </section>
+
+            <CampaignPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "opportunities" && (
+          <section className="dashboard" id="opportunities" aria-labelledby="opportunities-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">OPPORTUNITIES</p>
+                <h1 id="opportunities-page-title">Opportunity board</h1>
+                <p className="intro">
+                  Confidence decides what is suggested; the deterministic score only
+                  ranks the board. Nothing here places an order by itself.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Opportunities scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Suggestions, not instructions</strong>
+                <p>
+                  Watch or dismiss a candidate to append a lifecycle event; the frozen
+                  opportunity never changes. Every candidate is shadow-tracked, so the
+                  filter can be judged on resolved outcomes later.
+                </p>
+              </div>
+            </section>
+
+            <OpportunitiesPanel
+              csrfToken={session.csrfToken}
+              onStagePlan={(plan) => {
+                setStagedPlan(plan);
+                setView("trade");
+              }}
+            />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "data" && (
+          <section className="dashboard" id="data" aria-labelledby="data-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">DATA &amp; UNIVERSE</p>
+                <h1 id="data-page-title">Data</h1>
+                <p className="intro">
+                  What the workspace has imported, how fresh a snapshot is and which
+                  calendar dates are covered.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">UNASSESSED</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Data scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Assertions, not trading readiness</strong>
+                <p>
+                  Source, quality and timestamps are reported by the data pipeline.
+                  Imported data quality stays UNASSESSED, and an uncovered calendar
+                  date is unknown, not automatically open or closed.
+                </p>
+              </div>
+            </section>
+
+            <div className="dashboard-grid dashboard-grid--data">
+              <DataStatus />
               <SnapshotFreshness />
               <CalendarCoverage />
-              <UsageStatus />
             </div>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "schedules" && (
+          <section className="dashboard" id="schedules" aria-labelledby="schedules-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">OPERATIONS</p>
+                <h1 id="schedules-page-title">Schedules</h1>
+                <p className="intro">
+                  Every recurring job is configuration: create, edit, enable, dry-run,
+                  run now and inspect history.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Schedules scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Configuration now, execution later</strong>
+                <p>
+                  Saving writes a new immutable schedule version. Run now queues one
+                  durable job for the worker; it never executes inside the browser
+                  request. Disabled schedules do not dispatch.
+                </p>
+              </div>
+            </section>
+
+            <SchedulesPanel csrfToken={session.csrfToken} />
+
+            <div className="dashboard-grid dashboard-grid--single">
+              <ScheduleStatus />
+            </div>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "technical" && (
+          <section className="dashboard" id="technical" aria-labelledby="ta-page-title">
+            <TechnicalAnalysisPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "reports" && (
+          <section className="dashboard" id="reports" aria-labelledby="reports-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">REPORTS</p>
+                <h1 id="reports-page-title">Morning &amp; evening reports</h1>
+                <p className="intro">
+                  Frozen predictions, deterministic resolution, accuracy and an
+                  append-only report archive.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Reports scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Frozen predictions, no hindsight</strong>
+                <p>
+                  Reports never place orders. Morning predictions are frozen before
+                  the session; the evening run resolves every due prediction and
+                  scores it. Reports are append-only and downloadable from the archive.
+                </p>
+              </div>
+            </section>
+
+            <ReportsPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "agents" && (
+          <section className="dashboard" id="agents" aria-labelledby="agents-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">AGENT LAB</p>
+                <h1 id="agents-page-title">Agent Lab</h1>
+                <p className="intro">
+                  Run the decision agent and refine the prompts used by every
+                  analysis agent. Every prompt save is versioned.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Agent Lab scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Test and refine, never trade</strong>
+                <p>
+                  The decision preview uses live cached data and the configured
+                  model ladder. Jev is optional: without it the deterministic
+                  heuristic answers. Prompt edits change instructions only; the
+                  JSON contracts, thresholds and risk gates stay in code.
+                </p>
+              </div>
+            </section>
+
+            <AgentLabPanel csrfToken={session.csrfToken} />
+            <SemanticMemoryPanel csrfToken={session.csrfToken} />
+            <MemoryCalibrationPanel csrfToken={session.csrfToken} />
+            <PlaybookPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "evals" && (
+          <section className="dashboard" id="evals" aria-labelledby="evals-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">MODEL EVALS</p>
+                <h1 id="evals-page-title">Model Evals</h1>
+                <p className="intro">
+                  Benchmark local Apple Silicon models on the trading golden set.
+                  Scores are computed in code; a promoted model only changes which
+                  endpoint an agent role calls.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">LOCAL ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Model evals scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>One model at a time, 24 GB safe</strong>
+                <p>
+                  Each benchmark loads a single local model into unified memory, so
+                  only one run may be active and Promptfoo runs with
+                  max-concurrency: 1. This page never trades and never calls a
+                  cloud provider.
+                </p>
+              </div>
+            </section>
+
+            <ModelEvalsPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "lab" && (
+          <section className="dashboard" id="lab" aria-labelledby="lab-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">RESEARCH LAB</p>
+                <h1 id="lab-page-title">Research Lab</h1>
+                <p className="intro">
+                  Plan, run and verify research on frozen inputs. Every figure in a
+                  report must trace to the run that produced it, and nothing is
+                  published that the evidence gate could not confirm.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <ResearchLabPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "hedgefund" && (
+          <section className="dashboard" id="hedgefund" aria-labelledby="hedgefund-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">AI HEDGE FUND</p>
+                <h1 id="hedgefund-page-title">AI Hedge Fund</h1>
+                <p className="intro">
+                  Mandates, point-in-time backtests and a paper trading desk, run by
+                  {" "}
+                  <code>aihf</code> — virattt&apos;s multi-agent fund engine — from its own
+                  isolated install. LLM personas generate views; deterministic code sizes,
+                  clamps and settles every order.
+                </p>
+              </div>
+              <span className="status-badge status-badge--warn">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="AI Hedge Fund scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Keys come from Settings, never from aihf&apos;s .env</strong>
+                <p>
+                  Each run gets a scoped environment built from this application&apos;s
+                  Settings and a private HOME, so nothing outside this install is read
+                  or written. A paper session is computed against a copy and only
+                  committed once you approve it.
+                </p>
+              </div>
+            </section>
+
+            <AiHedgeFundPanel
+              csrfToken={session.csrfToken}
+              onOpenSettings={() => setView("settings")}
+            />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "strategy" && (
+          <section className="dashboard" id="strategy" aria-labelledby="strategy-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">STRATEGY</p>
+                <h1 id="strategy-page-title">Strategy desk</h1>
+                <p className="intro">
+                  Give the Super Agent a brief. It runs the specialist agents on
+                  each symbol, ranks the results, and gates the portfolio.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Strategy scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>The Super Agent ranks; the code gates</strong>
+                <p>
+                  The Super Agent cannot create a BUY the deterministic plan did
+                  not produce. Position count and cash are enforced in code. Stage
+                  an accepted plan in Trade to run the separate execution gate.
+                </p>
+              </div>
+            </section>
+
+            <StrategyPanel
+              csrfToken={session.csrfToken}
+              onStagePlan={(plan) => {
+                setStagedPlan(plan);
+                setView("trade");
+              }}
+            />
+            <BacktestsPanel csrfToken={session.csrfToken} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "trade" && (
+          <section className="dashboard" id="trade" aria-labelledby="trade-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">TRADE</p>
+                <h1 id="trade-page-title">Paper execution</h1>
+                <p className="intro">
+                  Run a validated plan through the deterministic risk gate and, only
+                  on ALLOW, place a paper order.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Trade scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>The code gates; the owner approves</strong>
+                <p>
+                  Risk limits are explicit on every request. Nothing reaches a
+                  broker: Kite sandbox and live modes fail closed, and a blocked gate
+                  cannot place an order.
+                </p>
+              </div>
+            </section>
+
+            <TradePanel csrfToken={session.csrfToken} stagedPlan={stagedPlan} />
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "research" && (
+          <section className="dashboard" id="research" aria-labelledby="research-page-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">RESEARCH</p>
+                <h1 id="research-page-title">Research</h1>
+                <p className="intro">
+                  An LLM research agent that calls tools — news, live quotes, the
+                  web — and shows every step it takes.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">PAPER ONLY</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Research scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Model-driven, tool-bounded</strong>
+                <p>
+                  The agent can read news, quote and download market data, and fetch
+                  pages. It cannot trade. Quotes are unassessed and nothing here is
+                  investment advice.
+                </p>
+              </div>
+            </section>
+
+            <div className="dashboard-grid dashboard-grid--research">
+              <AgentConsole csrfToken={session.csrfToken} />
+            </div>
+
+            <ResearchDossierPanel csrfToken={session.csrfToken} />
+
+            <div className="dashboard-grid dashboard-grid--research">
+              <AnalysisPanel csrfToken={session.csrfToken} />
+            </div>
+
+            <div className="dashboard-grid dashboard-grid--research">
+              <ResearchPanel csrfToken={session.csrfToken} />
+            </div>
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "settings" && (
+          <section className="dashboard" id="settings" aria-labelledby="settings-title">
+            <header className="page-header">
+              <div>
+                <p className="eyebrow">SETTINGS</p>
+                <h1 id="settings-title">Settings</h1>
+                <p className="intro">
+                  Models and keys, risk limits, operational logs, runtime health
+                  and network access. Data and Schedules have their own tabs.
+                </p>
+              </div>
+              <span className="status-badge status-badge--provisional">OWNER</span>
+            </header>
+
+            <section className="mode-banner" aria-label="Settings scope">
+              <span aria-hidden="true">i</span>
+              <div>
+                <strong>Configuration, not execution</strong>
+                <p>
+                  Nothing on this page places an order or runs an agent. Provider
+                  keys are write-only: the browser only ever sees a masked hint.
+                  Data imports, diagnostics and job schedules live in their own tabs.
+                </p>
+              </div>
+            </section>
+
+            <div className="tab-bar" role="tablist" aria-label="Settings sections">
+              {(
+                [
+                  ["overview", "Overview"],
+                  ["models", "Models & keys"],
+                  ["risk", "Risk & execution"],
+                  ["runtime", "Runtime & network"],
+                  ["logging", "Logging"],
+                ] as [SettingsTab, string][]
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === key}
+                  className={`tab-button${settingsTab === key ? " tab-button--active" : ""}`}
+                  onClick={() => setSettingsTab(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {settingsTab === "overview" && <SettingsOverviewPanel />}
+
+            {settingsTab === "models" && (
+              <>
+                <SettingsConfigPanel csrfToken={session.csrfToken} />
+                <ModelsConfigPanel csrfToken={session.csrfToken} />
+                <ResearchLabAgentsPanel csrfToken={session.csrfToken} />
+                <UsageStatus />
+              </>
+            )}
+
+            {settingsTab === "risk" && <RiskLimitsPanel csrfToken={session.csrfToken} />}
+
+            {settingsTab === "runtime" && (
+              <>
+                <RuntimePanel />
+                <CloudflareTunnelPanel csrfToken={session.csrfToken} />
+              </>
+            )}
+
+            {settingsTab === "logging" && (
+              <LoggingPanel csrfToken={session.csrfToken} />
+            )}
+          </section>
+        )}
+
+        {serviceState === "online" && session.state === "signed_in" && view === "guide" && (
+          <section className="dashboard" id="guide" aria-labelledby="guide-page-title">
+            <HowToUsePanel />
           </section>
         )}
 

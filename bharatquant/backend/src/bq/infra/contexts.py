@@ -7,7 +7,13 @@ from hashlib import sha256
 from pathlib import Path
 
 from bq.context import BuiltContext, ContextError
-from bq.core import Clock, SystemClock
+from bq.core import (
+    Clock,
+    SystemClock,
+)
+from bq.core import (
+    open_connection as core_open_connection,
+)
 
 HASH = re.compile(r"[0-9a-f]{64}")
 
@@ -69,9 +75,7 @@ class ContextManifestStore:
         self.clock = clock or SystemClock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(
-            f"{self.path.resolve().as_uri()}?mode=rw", uri=True, timeout=5
-        )
+        return core_open_connection(self.path, foreign_keys=False)
 
     def save(self, context: BuiltContext) -> None:
         as_of = _validate(context)
